@@ -1,0 +1,32 @@
+# 고의로 망친 config ③: 오타와 허용값 위반
+#   - 'vehicles' 를 'vehicle' 로 오타      → 필수 섹션 없음 + 알 수 없는 키
+#   - policy.stage = 'S9'                  → 허용값 위반
+#   - day_type = 'NEW_YEAR'                → 허용값 위반
+# 기대: 오타가 조용히 무시되지 않고 이름이 찍힌다.
+
+scenario_id: broken_typo
+label: "오타"
+corridor_id: gyeongbu_down
+direction: DOWN
+day_type: NEW_YEAR
+
+time:
+  start_min: 0
+  end_min: 1440
+  dt_min: 5
+
+demand:
+  volume_profile: data/processed/x.csv
+  demand_multiplier: 1.0
+  ev_share: 0.08
+
+vehicle:
+  seed: 1
+  soc_beta: {a: 2.0, b: 5.0, lo: 0.1, hi: 0.95}
+
+environment:
+  temp_c: -5.0
+
+policy:
+  stage: S9
+  participation: 0.6

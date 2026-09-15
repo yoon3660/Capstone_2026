@@ -1,0 +1,52 @@
+# ===========================================================================
+#  설 연휴 귀경 피크 · 경부선 상행  —  UE 베이스라인
+#
+#  하행과의 차이는 corridor / direction / 교통량 프로파일뿐이다.
+#  "상행 출발 SoC 가 하행보다 낮을 수 있다" 는 고정 가정이 아니라
+#  민감도 파라미터다 (§2.3). 기본값은 하행과 동일하게 두고,
+#  민감도 실험에서 soc_beta.lo / hi 를 흔든다.
+# ===========================================================================
+
+scenario_id: seollal_2026_up_base
+label: "설 연휴 귀경 피크 (경부선 상행) — UE 베이스라인"
+corridor_id: gyeongbu_up
+direction: UP
+day_type: SEOLLAL_PEAK
+
+time:
+  start_min: 0
+  end_min: 1440
+  dt_min: 5
+
+demand:
+  volume_profile: data/processed/volume_gyeongbu_up_seollal.csv
+  demand_multiplier: 1.0
+  ev_share: 0.08
+  charge_prob: 0.95
+  safety_buffer_km: 30.0
+  low_soc_threshold: 0.2
+
+vehicles:
+  seed: 7
+  soc_beta:
+    a: 2.0
+    b: 5.0
+    lo: 0.10
+    hi: 0.95
+  target_soc_cap: 0.8
+
+environment:
+  temp_c: -5.0
+
+policy:
+  stage: UE
+  participation: 1.0
+  params: {}
+
+queue:
+  discipline: FIFO
+  charger_select: MAX_POWER_IDLE
+
+output:
+  write_snapshots: true
+  snapshot_every_min: 5

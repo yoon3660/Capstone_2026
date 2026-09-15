@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evdt"
+version = "0.1.0"
+description = "Holiday highway EV charging surge mitigation - digital twin and assignment engine"
+requires-python = ">=3.12"
+readme = "README.md"
+
+# Single source of truth for runtime deps is requirements.txt.
+# Duplicating them here makes the two files drift apart.
+# (ASCII only in this file too - build tools on cp949 Windows are safer this way.)
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+evdt = ["sql/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

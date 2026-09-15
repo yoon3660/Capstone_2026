@@ -1,0 +1,5 @@
+# ASCII ONLY - see the note at the top of requirements.txt.
+-r requirements.txt
+
+pytest>=8.0
+ruff>=0.5

@@ -1,0 +1,18 @@
+# 줄바꿈은 저장소·작업트리 모두 LF 로 통일한다.
+# OS가 섞인 팀에서 "파일 전체가 바뀐 것처럼 보이는" 가짜 diff를 막는다.
+* text=auto eol=lf
+
+# Windows 전용 스크립트만 CRLF 유지 (CRLF가 아니면 실행이 깨진다)
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# 바이너리 — git이 내용을 건드리지 않게
+*.parquet binary
+*.db      binary
+*.png     binary
+*.jpg     binary
+*.pdf     binary
+*.xlsx    binary
+*.pptx    binary
+*.zip     binary

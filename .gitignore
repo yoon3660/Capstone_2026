@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# 원칙: "재현 가능한 것은 커밋하지 않는다. 재현의 근거만 커밋한다."
+#   - data/raw/  : API 원본 응답. 용량이 크고 개인 API 키로 받은 것이라 커밋 금지.
+#                  대신 scripts/fetch_*.py 와 data/raw/README.md 로 재수집 가능하게 유지.
+#   - runs/      : 실험 산출물. run 테이블 + git SHA 로 언제든 재생성된다.
+#   - *.db       : SQLite. schema.sql 로 재생성된다.
+# ---------------------------------------------------------------------------
+
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/README.md
+
+data/processed/*
+!data/processed/.gitkeep
+!data/processed/README.md
+
+runs/*
+!runs/.gitkeep
+
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 비밀값 (환경부 API 키 등). 절대 커밋하지 말 것.
+.env
+.env.*
+!.env.example
+secrets.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 노트북
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

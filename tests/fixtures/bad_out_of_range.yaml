@@ -1,0 +1,33 @@
+# 고의로 망친 config ②: 범위 위반
+#   - demand.ev_share = 1.5           (0~1 위반)
+#   - policy.participation = 1.3      (0~1 위반)
+#   - time.end_min < time.start_min   (구간 역전)
+#   - vehicles.soc_beta.hi < lo       (분포 구간 역전)
+# 기대: 네 문제가 각각 어느 키인지 이름으로 보고된다.
+
+scenario_id: broken_range
+label: "범위 위반"
+corridor_id: gyeongbu_down
+direction: DOWN
+day_type: SEOLLAL_PEAK
+
+time:
+  start_min: 600
+  end_min: 120
+  dt_min: 5
+
+demand:
+  volume_profile: data/processed/x.csv
+  demand_multiplier: 1.0
+  ev_share: 1.5
+
+vehicles:
+  seed: 1
+  soc_beta: {a: 2.0, b: 5.0, lo: 0.9, hi: 0.2}
+
+environment:
+  temp_c: -5.0
+
+policy:
+  stage: S3
+  participation: 1.3

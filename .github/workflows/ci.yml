@@ -1,0 +1,35 @@
+name: CI
+
+# main 이 항상 "테스트가 통과하는 상태" 로 유지되게 한다.
+# PR 을 올리면 자동으로 돌고, 빨간불이면 병합하지 않는다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Lint
+        run: ruff check src tests scripts
+
+      - name: 테스트
+        run: python -m pytest -q
+
+      - name: 환경 셀프 체크 (T-01~T-04 완료 조건)
+        run: python scripts/verify_setup.py

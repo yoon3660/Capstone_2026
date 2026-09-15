@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Runtime dependencies (see docs/DESIGN.md 9.2)
+#
+# ASCII ONLY. pip decodes this file with the system locale encoding when there
+# is no BOM, so non-ASCII comments crash on cp949 (Korean Windows). Keep every
+# line in this file plain ASCII.
+#
+# Upper bounds are pinned on purpose: four people install at different times
+# and must end up with the same behaviour.
+# ---------------------------------------------------------------------------
+
+# numeric / data
+numpy>=1.26,<3.0
+pandas>=2.2,<3.0
+scipy>=1.13,<2.0
+
+# scenario config
+PyYAML>=6.0,<7.0
+
+# discrete-event simulation (charging queue)
+simpy==4.1.2
+
+# optimisation: modelling + solver
+#   PuLP 3.x -> pulp.HiGHS(msg=False, timeLimit=60)
+#   highspy is required to call HiGHS in-process
+PuLP>=3.3,<4.0
+highspy>=1.7
+
+# storage / query
+pyarrow>=16.0
+duckdb>=1.1
+
+# plots
+matplotlib>=3.8,<4.0
+plotly>=5.20

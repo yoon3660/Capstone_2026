@@ -1,0 +1,50 @@
+# ===========================================================================
+#  대조군 — 평상시 주말 하루 (경부선 하행)
+#
+#  이 시나리오가 있어야 "명절이 질적으로 다르다" 를 숫자로 말할 수 있다 (§2.1).
+#  온도도 같이 올린다. 명절 시나리오가 단순 교통량 배수로 축소되면 안 된다.
+# ===========================================================================
+
+scenario_id: weekend_2026_down_base
+label: "평상시 주말 (경부선 하행) — 대조군"
+corridor_id: gyeongbu_down
+direction: DOWN
+day_type: WEEKEND_BASE
+
+time:
+  start_min: 0
+  end_min: 1440
+  dt_min: 5
+
+demand:
+  volume_profile: data/processed/volume_gyeongbu_down_weekend.csv
+  demand_multiplier: 1.0
+  ev_share: 0.08
+  charge_prob: 0.95
+  safety_buffer_km: 30.0
+  low_soc_threshold: 0.2
+
+vehicles:
+  seed: 7
+  soc_beta:
+    a: 2.0
+    b: 5.0
+    lo: 0.10
+    hi: 0.95
+  target_soc_cap: 0.8
+
+environment:
+  temp_c: 15.0          # 저온 감쇠가 거의 없는 조건
+
+policy:
+  stage: UE
+  participation: 1.0
+  params: {}
+
+queue:
+  discipline: FIFO
+  charger_select: MAX_POWER_IDLE
+
+output:
+  write_snapshots: true
+  snapshot_every_min: 5

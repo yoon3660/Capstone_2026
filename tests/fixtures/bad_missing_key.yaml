@@ -1,0 +1,24 @@
+# 고의로 망친 config ①: 필수 키 누락
+#   - demand.ev_share 없음
+#   - time 섹션 통째로 없음
+# 기대: 두 문제가 한 번에 보고된다.
+
+scenario_id: broken_missing
+label: "필수 키 누락"
+corridor_id: gyeongbu_down
+direction: DOWN
+day_type: SEOLLAL_PEAK
+
+demand:
+  volume_profile: data/processed/x.csv
+  demand_multiplier: 1.0
+
+vehicles:
+  seed: 1
+  soc_beta: {a: 2.0, b: 5.0, lo: 0.1, hi: 0.95}
+
+environment:
+  temp_c: -5.0
+
+policy:
+  stage: UE
