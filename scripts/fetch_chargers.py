@@ -2,17 +2,16 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlencode
-from urllib.request import urlopen
 from urllib.error import HTTPError, URLError
-
+from urllib.parse import quote, urlencode
+from urllib.request import urlopen
 
 API_URL = "https://apis.data.go.kr/B552584/EvCharger/getChargerInfo"
 
 
 def load_api_key():
     """프로젝트 루트의 .env에서 인증키를 읽는다."""
-    env_path = Path(".env")
+    env_path = Path(__file__).resolve().parents[1] / ".env"
 
     if not env_path.exists():
         raise RuntimeError(".env 파일이 없습니다.")
@@ -20,26 +19,33 @@ def load_api_key():
     for line in env_path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
 
-        if line.startswith("EV_CHARGER_API_KEY="):
+        if line.startswith("EVDT_MOE_API_KEY="):
             key = line.split("=", 1)[1].strip().strip('"').strip("'")
 
             if key:
                 return key
 
-    raise RuntimeError(".env에 EV_CHARGER_API_KEY를 설정해주세요.")
+    raise RuntimeError(".env에 EVDT_MOE_API_KEY를 설정해주세요.")
 
 
 def fetch_page(api_key, page, rows):
     """API에서 한 페이지의 원본 데이터와 JSON을 반환한다."""
     params = {
-        "serviceKey": api_key,
         "pageNo": page,
         "numOfRows": rows,
         "kindDetail": "C001",
         "dataType": "JSON",
     }
 
-    url = API_URL + "?" + urlencode(params)
+    query = urlencode(params)
+
+    # 공공데이터포털은 인증키를 Encoding / Decoding 두 형태로 준다.
+    # Encoding 키(% 포함)를 urlencode 로 다시 인코딩하면 %2B -> %252B 가 되어
+    # resultCode=30 '등록되지 않은 서비스키' 가 난다.
+    if "%" in api_key:
+        url = f"{API_URL}?serviceKey={api_key}&{query}"
+    else:
+        url = f"{API_URL}?serviceKey={quote(api_key, safe='')}&{query}"
 
     try:
         with urlopen(url, timeout=30) as response:
@@ -91,7 +97,8 @@ def main():
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     mode = "all" if all_pages else "sample"
 
-    output_dir = Path("data/raw") / f"highway_chargers_{timestamp}_{mode}"
+    raw_root = Path(__file__).resolve().parents[1] / "data" / "raw"
+    output_dir = raw_root / f"highway_chargers_{timestamp}_{mode}"
     output_dir.mkdir(parents=True, exist_ok=False)
 
     page = 1

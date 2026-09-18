@@ -1,21 +1,24 @@
+import sys
 from collections import defaultdict
 from pathlib import Path
 
+import _bootstrap  # noqa: F401  (src 경로와 콘솔 인코딩을 먼저 준비한다)
+
 from evdt.io.charger_ingest import (
+    latest_raw_dir,
     load_raw_chargers,
+    resolve_charger_key,
     station_match_key,
 )
 from evdt.io.db import get_conn
 from evdt.paths import default_db_path
 
 
-RAW_DIR = Path(
-    "data/raw/highway_chargers_20260917_081326_all"
-)
-
-
 def main() -> None:
-    raw = load_raw_chargers(RAW_DIR)
+    # 수집본 폴더를 인자로 줄 수 있다. 없으면 가장 최근 전체 수집본.
+    raw_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else latest_raw_dir()
+    print("raw:", raw_dir)
+    raw = load_raw_chargers(raw_dir)
 
     # 우리가 실제 시뮬레이션에 사용하는 33개 휴게소
     with get_conn(default_db_path()) as conn:
@@ -39,7 +42,9 @@ def main() -> None:
 
     stations = [dict(row) for row in rows]
 
-    # 방향별로 33개 휴게소를 나눠둔다.
+    db_keys = {(s["name"], s["direction"]) for s in stations}
+
+    # 방향별로 휴게소를 나눠둔다.
     stations_by_direction = {
         "DOWN": [],
         "UP": [],
@@ -58,12 +63,13 @@ def main() -> None:
     suffix_matches = defaultdict(set)
 
     for charger in raw:
-        # 삭제된 충전기는 제외
-        if charger.get("delYn") == "Y":
-            continue
-
         raw_name = charger.get("statNm", "")
         normalized_name, direction = station_match_key(raw_name)
+
+        if direction is None:
+            # 이름에 방향이 없으면 적재와 같은 규칙으로 붙인다.
+            key = resolve_charger_key(raw_name, db_keys)
+            direction = key[1] if key else None
 
         if direction not in stations_by_direction:
             continue
