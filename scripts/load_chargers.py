@@ -1,36 +1,46 @@
+import sys
 from pathlib import Path
 
+import _bootstrap  # noqa: F401  (src 경로와 콘솔 인코딩을 먼저 준비한다)
 import pandas as pd
 
 from evdt.io.charger_ingest import (
     add_offset_km,
+    apply_official_directions,
     build_charger_candidates,
     build_charger_rows,
     build_station_candidates,
     build_station_rows,
     fetch_gyeongbu_interchanges,
     fetch_gyeongbu_rest_areas,
+    fetch_gyeongbu_rest_directions,
     filter_gyeongbu_chargers,
     get_offset_origins,
+    latest_raw_dir,
     load_ex_api_key,
     load_raw_chargers,
+    route_mileposts,
 )
 from evdt.io.db import get_conn, upsert_df
 from evdt.paths import default_db_path
 
 
-RAW_DIR = Path(
-    "data/raw/highway_chargers_20260917_081326_all"
-)
-
-
 def main() -> None:
     # 1. 환경부 raw 충전기 데이터
-    raw_chargers = load_raw_chargers(RAW_DIR)
+    # 수집본 폴더를 인자로 줄 수 있다. 없으면 가장 최근 전체 수집본.
+    raw_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else latest_raw_dir()
+    print("raw:", raw_dir)
+    raw_chargers = load_raw_chargers(raw_dir)
 
     # 2. 도로공사 경부선 휴게소
     api_key = load_ex_api_key()
     rest_areas = fetch_gyeongbu_rest_areas(api_key)
+
+    # 이름에 방향이 없는 시설은 도로공사 공식 상·하행 구분으로 방향을 정한다.
+    rest_areas = apply_official_directions(
+        rest_areas,
+        fetch_gyeongbu_rest_directions(api_key),
+    )
 
     # 3. 경부선 충전기만 필터링
     matched_chargers, unmatched, unknown_direction = (
@@ -53,6 +63,14 @@ def main() -> None:
     stations = add_offset_km(
         stations,
         origins,
+        waypoints=interchanges,
+    )
+
+    # offset_km 좌표계의 총연장 (구서IC ~ 양재IC). corridor.length_km 와 맞아야 한다.
+    _, route_length_km = route_mileposts(
+        origins,
+        {(s["lat"], s["lon"]) for s in stations},
+        interchanges,
     )
 
     # 6. DB station 행 생성
@@ -71,9 +89,10 @@ def main() -> None:
     )
 
     # 적재 전 검증
-    if len(station_rows) != 33:
+    # 33곳 + 이름에 방향이 없던 옥천만남·서울하이패스센터쉼터 (2026-09-18)
+    if len(station_rows) != 35:
         raise RuntimeError(
-            f"예상 station 수는 33인데 {len(station_rows)}개입니다."
+            f"예상 station 수는 35인데 {len(station_rows)}개입니다."
         )
 
     n_units = sum(
@@ -179,6 +198,7 @@ def main() -> None:
     print("station:", station_count)
     print("charger groups:", charger_count)
     print("physical chargers:", db_n_units)
+    print(f"route length (구서IC~양재IC): {route_length_km:.1f} km")
 
     print()
     print("매칭 제외 directional 휴게소:")
