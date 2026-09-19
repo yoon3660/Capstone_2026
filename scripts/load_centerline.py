@@ -1,7 +1,10 @@
-from pathlib import Path
 import argparse
+from pathlib import Path
 
-import pandas as pd
+import _bootstrap  # noqa: F401
+import pandas as pd  # noqa: E402
+
+from evdt.world.geometry import haversine_km  # noqa: E402
 
 
 def main():
@@ -89,7 +92,58 @@ def main():
     if not corrected_gaps.round(3).eq(0.1).all():
         raise ValueError("보정 후에도 이정 간격이 일정하지 않습니다.")
 
-    # 8. 처리된 파일 저장
+
+    # 8. 인접 이정 좌표의 거리 품질 검사
+    segment_rows = []
+
+    for i in range(1, len(gyeongbu)):
+        a = gyeongbu.iloc[i - 1]
+        b = gyeongbu.iloc[i]
+
+        distance_m = haversine_km(
+            a["lat"], a["lon"],
+            b["lat"], b["lon"],
+        ) * 1000
+
+        expected_m = (
+            b["offset_km"] - a["offset_km"]
+        ) * 1000
+
+        segment_rows.append({
+            "start_km": a["offset_km"],
+            "end_km": b["offset_km"],
+            "distance_m": distance_m,
+            "deviation_m": distance_m - expected_m,
+        })
+
+    segments = pd.DataFrame(segment_rows)
+
+    # 기준: 100m 대비 편차가 ±50m를 초과
+    outliers = segments[
+        segments["deviation_m"].abs() > 50
+    ]
+
+    print("\n=== 중심선 좌표 품질 검사 ===")
+    print("전체 인접 구간:", len(segments))
+    print("±50m 초과 구간:", len(outliers))
+
+    if not outliers.empty:
+        print(outliers.to_string(index=False))
+
+    # 추가 점검용 임시 기준: 직선거리가 120m를 넘는 구간
+    long_segments = segments[
+        segments["distance_m"] > 120
+    ]
+
+    print("\n직선거리 120m 초과 구간:", len(long_segments))
+
+    if not long_segments.empty:
+        print(long_segments.to_string(index=False))
+
+    # 이상 구간을 발견해도 좌표는 임의로 변경하지 않는다.
+
+
+    # 9. 처리된 파일 저장
     result = gyeongbu[
         ["offset_km", "lat", "lon", "official_offset_km"]
     ]
