@@ -25,6 +25,7 @@ FORBIDDEN = [
     ("viz", "evdt.world"),   # 렌더러의 입력은 스냅샷 스트림뿐이다 (설계 규칙 4)
     ("io", "evdt.world"),
     ("io", "evdt.engine"),
+    ("eval", "evdt.engine"),  # 검증 지표는 DataFrame 만 받는다
 ]
 
 

@@ -6,11 +6,10 @@
     python scripts/seed_corridor.py
 
 기점은 T-06 의 offset_km 와 같다. 하행 = 양재IC, 상행 = 구서IC.
-길이 391.0 km 는 구서IC ~ 양재IC 를 도로공사 IC/JCT + 휴게소 좌표로 이은
-누적거리다 (charger_ingest.route_mileposts, 2026-09 도로공사 목록 기준).
-선분 근사라 실제 도로보다 몇 % 짧다. load_chargers.py 가 매번 이 값을
-다시 계산해 출력하므로, 크게 달라지면 여기를 갱신할 것.
-갱신하면 station.offset_km 의 상한 검사(validate_master)도 같이 맞아야 한다.
+길이는 scripts/build_route.py 가 만든 노선 총연장(구서IC ~ 양재IC, 약 393 km)이다.
+여기 값은 초기값이고, load_chargers.py 가 적재할 때 노선 파일의 총연장으로
+corridor.length_km 를 덮어쓴다. station.offset_km 상한 검사(validate_master)가
+이 값을 기준으로 한다.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ import pandas as pd  # noqa: E402
 from evdt.io.db import get_conn, init_db, upsert_df  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
 
-GYEONGBU_LENGTH_KM = 391.0
+GYEONGBU_LENGTH_KM = 393.0
 
 CORRIDORS = [
     {
