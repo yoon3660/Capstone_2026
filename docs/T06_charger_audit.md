@@ -63,7 +63,10 @@ STATION_NAME_ALIASES = {
 
 - DOWN 기점: 양재IC (`0010I00045`)
 - UP 기점: 구서IC (`0010I00001`)
-- 총연장 L (구서IC ~ 양재IC): 약 391 km → `corridor.length_km`
+- 총연장 L (구서IC ~ 양재IC): 약 393 km → `corridor.length_km`
+- 노선은 `scripts/build_route.py` 가 한 번 만들어 `data/processed/gyeongbu_route.json`
+  에 저장하고, 휴게소(`load_chargers.py`)와 VDS 구간(`build_traffic.py`)이 같이 쓴다.
+  폴리라인은 넣는 점 집합에 따라 총연장이 1~2 km 달라지므로 각자 만들면 좌표계가 어긋난다.
 
 도로공사 휴게소·IC API에는 이정(기점거리) 필드가 없다 (좌표·코드·이름만 제공).
 그래서 두 기점 + 경부선 IC/JCT + 휴게소를 노선 순서로 잇고 인접 점 사이
@@ -91,6 +94,7 @@ UP offset = m, DOWN offset = L − m 이다.
 DB 적재 스크립트:
 
 ```bash
+python scripts/build_route.py
 python scripts/load_chargers.py
 ```
 

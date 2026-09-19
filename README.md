@@ -178,8 +178,28 @@ python scripts/db_peek.py --schema cell     # 컬럼 정의와 CHECK 제약
 python scripts/smoke_run.py                 # 가짜 데이터로 파이프라인 한 바퀴
 python scripts/smoke_clean.py               # smoke_run 흔적 삭제
 python scripts/verify_setup.py              # 환경 셀프 체크 14건
-python -m pytest -q                         # 테스트 49건
+python -m pytest -q                         # 테스트
 python -m ruff check src tests scripts      # 린트
+```
+
+### 실데이터 파이프라인 (T-05 ~ T-08)
+
+```bash
+# 공통: 경부선 노선 좌표계 (휴게소·VDS 구간이 같이 쓴다. .env 의 EVDT_EX_API_KEY 필요)
+python scripts/build_route.py
+
+# 충전 인프라 (T-05/T-06, .env 의 EVDT_MOE_API_KEY 필요)
+python scripts/fetch_chargers.py --all
+python scripts/load_chargers.py
+python scripts/audit_charger_counts.py
+
+# 구간 교통량·속도 (T-07/T-08, 인증키 불필요)
+python scripts/fetch_traffic.py --start 2026-02-13 --end 2026-02-22 --label seollal2026
+python scripts/fetch_traffic.py --start 2026-03-06 --end 2026-03-15 --label base202603
+python scripts/build_traffic.py
+python scripts/check_traffic.py --holiday seollal2026 --base base202603 \
+    --outbound 2026-02-14 2026-02-16 --return 2026-02-17 2026-02-18
+python scripts/estimate_flow_params.py
 ```
 
 ---

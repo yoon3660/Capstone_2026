@@ -5,23 +5,20 @@ import _bootstrap  # noqa: F401  (src 경로와 콘솔 인코딩을 먼저 준�
 import pandas as pd
 
 from evdt.io.charger_ingest import (
-    add_offset_km,
     apply_official_directions,
     build_charger_candidates,
     build_charger_rows,
     build_station_candidates,
     build_station_rows,
-    fetch_gyeongbu_interchanges,
     fetch_gyeongbu_rest_areas,
     fetch_gyeongbu_rest_directions,
     filter_gyeongbu_chargers,
-    get_offset_origins,
     latest_raw_dir,
     load_ex_api_key,
     load_raw_chargers,
-    route_mileposts,
 )
 from evdt.io.db import get_conn, upsert_df
+from evdt.io.route import GyeongbuRoute
 from evdt.paths import default_db_path
 
 
@@ -56,22 +53,18 @@ def main() -> None:
         rest_areas,
     )
 
-    # 5. 방향별 기점 조회 후 offset_km 계산
-    interchanges = fetch_gyeongbu_interchanges(api_key)
-    origins = get_offset_origins(interchanges)
+    # 5. offset_km — scripts/build_route.py 가 만든 노선 좌표계를 쓴다.
+    #    VDS 구간(build_traffic.py)도 같은 노선을 쓰므로 둘이 같은 좌표에 놓인다.
+    route = GyeongbuRoute.load()
+    route_length_km = route.length_km
 
-    stations = add_offset_km(
-        stations,
-        origins,
-        waypoints=interchanges,
-    )
-
-    # offset_km 좌표계의 총연장 (구서IC ~ 양재IC). corridor.length_km 와 맞아야 한다.
-    _, route_length_km = route_mileposts(
-        origins,
-        {(s["lat"], s["lon"]) for s in stations},
-        interchanges,
-    )
+    stations = [
+        {
+            **s,
+            "offset_km": round(route.offset_of(s["lat"], s["lon"], s["direction"]), 3),
+        }
+        for s in stations
+    ]
 
     # 6. DB station 행 생성
     station_rows = build_station_rows(stations)
@@ -139,6 +132,13 @@ def main() -> None:
             raise RuntimeError(
                 f"DB에 corridor가 없습니다: {sorted(missing)}"
             )
+
+        # corridor 길이 = 노선 총연장 (offset_km 상한 검사의 기준)
+        conn.execute(
+            "UPDATE corridor SET length_km = ? "
+            "WHERE corridor_id IN ('gyeongbu_down', 'gyeongbu_up')",
+            (round(route_length_km, 3),),
+        )
 
         # FK 때문에 station 먼저
         upsert_df(

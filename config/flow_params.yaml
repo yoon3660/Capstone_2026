@@ -1,0 +1,84 @@
+# ===========================================================================
+#  CTM 교통류 파라미터 (T-08)
+#
+#  scripts/estimate_flow_params.py 가 VDS 실측으로 쓴다. 손으로 고치지 말 것.
+#  생성: 2026-09-19 14:09  /  기간: base202603, seollal2026
+#
+#  각 값의 source:
+#    measured  VDS 실측 (포털 구간속도·구간교통량)
+#    derived   삼각형 기본도 q = v·w·k/(v+w) 에서 역산 (§9.5)
+#    assumed   가정값. 실측으로 대체되지 않은 값
+#  assumed_was: 실측 전 가정값. 얼마나 틀렸는지가 기록으로 남는다.
+# ===========================================================================
+
+# 콘존별 추정값: data/processed/flow_params_by_conzone.parquet
+#   v_free_kmh, q_p95_veh_h (용량 하한), q_breakdown_veh_h (병목 용량), 사례 수
+
+DOWN:
+  v_free_kmh:
+    value: 96.4
+    source: measured
+    method: 새벽 3~5시 관측속도의 85퍼센타일, 콘존별 추정의 중앙값
+    iqr: [94.1, 99.6]
+    n_conzones: 57
+    assumed_was: 100.0
+  q_max_veh_h_section:
+    value: null   # 차로 수가 구간마다 달라 대푯값 하나로 쓰면 안 된다. 콘존별 표를 쓸 것
+    source: measured (per conzone)
+    breakdown_flow:   # 정체 직전 1시간 교통량. 막힌 병목에서만 나온다 → 용량 추정
+      median: 4000.2
+      iqr: [2893.6, 5070.4]
+      n_conzones: 16
+    p95_hourly_volume:   # 모든 콘존. 최댓값 대신 분위수. 수요라서 용량의 하한
+      median: 3333.7
+      iqr: [2736.1, 4736.5]
+      n_conzones: 57
+    assumed_was: 2200.0   # 대/h/차로
+  k_jam_veh_km_lane:
+    value: 144.0
+    source: assumed
+    note: 점검지기로는 밀도가 관측되지 않아 이 데이터로도 안 나온다. 민감도 [132.0, 144.0, 169.0] (후속 이슈)
+  w_back_kmh:
+    value: 20.0
+    source: assumed
+    note: >-
+      p95 교통량을 4차로로 나눠 역산하면 6.2 km/h 가 나온다. 문헌 범위(15~25)와
+      동떨어진 것은 p95 가 용량이 아니라 수요이기 때문이다. 셀 차로 수(T-09)가
+      정해지면 병목 구간 breakdown_flow 로 다시 역산한다: w = q·v / (k·v − q)
+    assumed_was: 20.0
+
+UP:
+  v_free_kmh:
+    value: 98.1
+    source: measured
+    method: 새벽 3~5시 관측속도의 85퍼센타일, 콘존별 추정의 중앙값
+    iqr: [94.2, 101.3]
+    n_conzones: 57
+    assumed_was: 100.0
+  q_max_veh_h_section:
+    value: null   # 차로 수가 구간마다 달라 대푯값 하나로 쓰면 안 된다. 콘존별 표를 쓸 것
+    source: measured (per conzone)
+    breakdown_flow:   # 정체 직전 1시간 교통량. 막힌 병목에서만 나온다 → 용량 추정
+      median: 4249.0
+      iqr: [2865.5, 4948.0]
+      n_conzones: 21
+    p95_hourly_volume:   # 모든 콘존. 최댓값 대신 분위수. 수요라서 용량의 하한
+      median: 3312.7
+      iqr: [2822.5, 4478.4]
+      n_conzones: 58
+    assumed_was: 2200.0   # 대/h/차로
+  k_jam_veh_km_lane:
+    value: 144.0
+    source: assumed
+    note: 점검지기로는 밀도가 관측되지 않아 이 데이터로도 안 나온다. 민감도 [132.0, 144.0, 169.0] (후속 이슈)
+  w_back_kmh:
+    value: 20.0
+    source: assumed
+    note: >-
+      p95 교통량을 4차로로 나눠 역산하면 6.1 km/h 가 나온다. 문헌 범위(15~25)와
+      동떨어진 것은 p95 가 용량이 아니라 수요이기 때문이다. 셀 차로 수(T-09)가
+      정해지면 병목 구간 breakdown_flow 로 다시 역산한다: w = q·v / (k·v − q)
+    assumed_was: 20.0
+
+validation:
+  congestion_speed_kmh: 50.0   # 이 속도 미만인 시간을 '정체' 로 본다 (혼동행렬 기준)
