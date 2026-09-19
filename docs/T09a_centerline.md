@@ -69,3 +69,28 @@
 주의: 415.058km는 보정 이정과 IC 스냅을 통해 산출한
 프로젝트의 거리 좌표계 길이이다.
 모든 원본 좌표의 실제 도로상 위치가 정확하다는 의미는 아니다.
+
+## 5. 재현 및 실행 순서
+
+필요한 원본:
+- 도로공사 `도로중심선_이정_좌표` CSV
+- 도로공사 OpenAPI 인증키 (`.env`의 `EVDT_EX_API_KEY`)
+
+원본 CSV는 `data/raw/`에 준비한다.
+원본 CSV와 생성된 Parquet는 Git에 포함하지 않는다.
+
+```powershell
+# 1. 원본 CSV에서 보정 중심선 생성
+python scripts/load_centerline.py data/raw/ETC_S0_07_04_345774.csv
+
+# 2. 중심선 기준 공통 노선 JSON 생성
+python scripts/build_route.py
+
+# 3. 노선 길이를 DB corridor에 반영
+python scripts/seed_corridor.py
+
+# 4. 휴게소·충전기 데이터 재적재
+python scripts/load_chargers.py
+
+# 5. 전체 테스트
+python -m pytest -q
