@@ -43,6 +43,14 @@ python scripts/build_lane_profile.py    # -> data/processed/lanes_gyeongbu.parqu
 
 좌표계는 EPSG:5186(Korea 2000 중부원점)이고 스크립트가 WGS84 로 변환한다.
 읽기는 `pyshp` + `pyproj` 로 한다 (geopandas 는 GDAL 의존성 때문에 쓰지 않는다).
+
+`build_lane_profile.py` 가 "본선일 수 없는 차로수" 를 보고하면, 그 링크의 원본
+속성을 캐시에서 그대로 확인할 수 있다 (SHP 매핑을 다시 돌리지 않는다).
+
+```bash
+python scripts/inspect_links.py 3520811800 3520811801
+python scripts/inspect_links.py --km 78.2 81.9 --direction UP
+```
 배포본이 갱신되면 링크 좌표와 차로수가 바뀔 수 있으니, 받은 날짜를 같은 폴더의
 `.md` 노트에 적어둔다.
 

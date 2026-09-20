@@ -14,11 +14,14 @@
 5. 복수 경로만 중심선 snap/길이 오차/속도/CONNECT를 보조 기준으로 선택한다.
 6. 선택된 링크가 하나의 비분기 본선인지 검증한다.
 7. 링크의 LANES를 연속 프로파일로 변환하고 같은 차로수 구간을 병합한다.
-8. 최종 parquet을 저장하고 차로수 변경 지점을 출력한다.
+8. 본선일 수 없는 차로수(편도 1차로 등)를 이웃 구간 값으로 메운다.
+9. 실측 교통량으로 차로수를 검산하고 최종 parquet을 저장한다.
 
 주의:
 - LANES는 본선 선택 기준으로 사용하지 않는다.
 - CONNECT=1 링크를 일괄 제거하지 않는다.
+- 링크 선택(연결성)과 속성 신뢰도(LANES)는 분리한다. 범위 밖 LANES는 링크 선택을
+  무효화하지 않고, 이웃 값으로 메운 뒤 실측 교통량으로 검산한다.
 - 비싼 SHP -> 중심선 매핑은 다시 수행하지 않고 audit 캐시만 사용한다.
 """
 
@@ -33,6 +36,7 @@ import yaml
 
 from evdt.io import flow_params as fp
 from evdt.io.lane_profile import (
+    LANES_UNKNOWN,
     MAX_MAINLINE_LANES,
     MIN_MAINLINE_LANES,
     PROFILE_COLUMNS,
@@ -42,9 +46,11 @@ from evdt.io.lane_profile import (
     merge_adjacent_lane_segments,
     merge_short_segments,
     normalize_intervals,
+    repair_implausible_lanes,
     select_mainline_candidates,
     validate_lane_profile,
 )
+from evdt.io.route import GyeongbuRoute
 from evdt.paths import CONFIG_DIR, DATA_PROCESSED_DIR
 
 PROCESSED_DIR = DATA_PROCESSED_DIR
@@ -866,7 +872,13 @@ def validate_selected_links(
     selected: pd.DataFrame,
     direction: str,
 ) -> None:
-    """선택된 링크가 하나의 비분기 본선이고 LANES가 1~6인지 검증한다."""
+    """선택된 링크가 하나의 비분기 본선인지 검증한다.
+
+    LANES 범위는 여기서 멈추지 않는다. 링크를 제대로 골랐는지(연결성)와 원본 속성이
+    쓸 만한지(차로수)는 별개의 문제라서, 속성 하나 때문에 멀쩡한 링크 선택까지
+    버릴 이유가 없다. 범위 밖 LANES 는 목록으로 출력만 하고,
+    repair_implausible_lanes 가 이웃 차로수로 메운 뒤 실측 교통량으로 검산한다.
+    """
     if selected.empty:
         raise RuntimeError(f"{direction}: 선택된 본선 링크가 없습니다.")
 
@@ -898,6 +910,15 @@ def validate_selected_links(
     print(f"이정 범위: {m_min:.3f} ~ {m_max:.3f} km")
     print(f"{MIN_MAINLINE_LANES}~{MAX_MAINLINE_LANES} 범위 밖 LANES: {int(invalid_lanes.sum())}")
 
+    if invalid_lanes.any():
+        detail_columns = [
+            c
+            for c in ("link_id", "m_start", "m_end", "lanes", "connect", "max_spd", "road_type")
+            if c in selected.columns
+        ]
+        print("  본선일 수 없는 차로수 (원본 속성 그대로, 아래에서 이웃값으로 대체됨):")
+        print(selected.loc[invalid_lanes, detail_columns].to_string(index=False))
+
     errors = []
     if len(components) != 1:
         errors.append(f"component={len(components)}")
@@ -907,15 +928,13 @@ def validate_selected_links(
         errors.append(f"sink={len(stats['sinks'])}")
     if stats["branch_nodes"]:
         errors.append(f"branch={len(stats['branch_nodes'])}")
-    if invalid_lanes.any():
-        errors.append(f"invalid_lanes={int(invalid_lanes.sum())}")
 
     if errors:
         raise RuntimeError(
             f"{direction}: 최종 본선 검증 실패 ({', '.join(errors)})"
         )
 
-    print("본선 연결성/LANES 검증 통과")
+    print("본선 연결성 검증 통과")
 
 
 def order_selected_links(
@@ -1021,10 +1040,21 @@ def _shared_boundaries(
 def build_lane_profile(
     selected: pd.DataFrame,
     direction: str,
+    route: GyeongbuRoute | None = None,
 ) -> pd.DataFrame:
-    """주행 순서의 본선 링크를 최종 lane profile로 변환한다."""
+    """주행 순서의 본선 링크를 최종 lane profile로 변환한다.
+
+    이정은 방향별 offset_km 로 바꿔서 내보낸다. 링크의 m 은 구서IC 기점 누적거리라
+    DOWN 에서도 부산 쪽이 0 이지만, 콘존·충전소 등 나머지 데이터의 DOWN offset_km 은
+    서울 쪽이 0 이다. 프레임을 맞추지 않으면 실측 교통량 교차검증이 코리도의
+    반대쪽 끝과 비교하게 된다.
+    """
     ordered = order_selected_links(selected, direction)
     boundaries = _shared_boundaries(ordered, direction)
+
+    route = route if route is not None else GyeongbuRoute.load()
+    # 반올림하지 않으면 코리도 끝에서 -4e-7 같은 음수 offset 이 남는다.
+    boundaries = [round(route.to_direction(float(m), direction), 6) for m in boundaries]
 
     rows: list[dict] = []
 
@@ -1037,11 +1067,14 @@ def build_lane_profile(
         if end - start <= EPS:
             continue
 
+        lanes = pd.to_numeric(link["lanes"], errors="coerce")
+
         rows.append(
             {
                 "offset_km_start": start,
                 "offset_km_end": end,
-                "lanes": int(link["lanes"]),
+                # 값을 못 읽으면 LANES_UNKNOWN(범위 밖) 으로 두고 복구 단계에 넘긴다
+                "lanes": int(lanes) if pd.notna(lanes) else LANES_UNKNOWN,
                 "direction": direction,
                 "lanes_source": str(link.get("lanes_source", "measured")),
             }
@@ -1123,6 +1156,7 @@ def save_lane_profile(
 def process_direction(
     moving: pd.DataFrame,
     direction: str,
+    route: GyeongbuRoute | None = None,
 ) -> pd.DataFrame:
     """한 방향의 후보 -> 본선 -> lane profile 전체 파이프라인."""
     part = moving[moving["direction"] == direction].copy()
@@ -1171,7 +1205,19 @@ def process_direction(
     selected = select_rows_by_ids(main_component, selected_ids)
 
     validate_selected_links(selected, direction)
-    return build_lane_profile(selected, direction)
+
+    profile = build_lane_profile(selected, direction, route=route)
+
+    # 본선일 수 없는 차로수는 이웃 구간 값으로 메운다. 메운 구간은 아래 교차검증에서
+    # 실측 교통량으로 다시 검산된다.
+    profile, repaired = repair_implausible_lanes(profile)
+
+    if not repaired.empty:
+        print()
+        print(f"=== {direction} 차로수 복구 ({float(repaired['length_km'].sum()):.3f} km) ===")
+        print(repaired.to_string(index=False))
+
+    return profile
 
 
 def main() -> int:
@@ -1190,8 +1236,10 @@ def main() -> int:
         .to_string()
     )
 
+    route = GyeongbuRoute.load()
+
     profiles = [
-        process_direction(moving, direction)
+        process_direction(moving, direction, route=route)
         for direction in DIRECTIONS
     ]
 

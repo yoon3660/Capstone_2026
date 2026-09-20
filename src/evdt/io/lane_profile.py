@@ -9,6 +9,7 @@ scripts/build_lane_profile.py 의 그래프 탐색(본선 링크 선택)은 표�
     1. 연결로(램프) 제외      select_mainline_candidates
     2. 관측 교통량 교차검증    check_lanes_against_observed
     3. 최소 셀 길이 병합       merge_short_segments / max_dt_min
+    4. 본선일 수 없는 차로수 복구  repair_implausible_lanes
     그리고 프로파일 정리·검증  merge_adjacent_lane_segments / validate_lane_profile
 """
 
@@ -35,6 +36,13 @@ PROFILE_COLUMNS = [
 #: 차로수 허용 범위. 경부 본선은 편도 2차로 아래로 내려가지 않는다.
 MIN_MAINLINE_LANES = 2
 MAX_MAINLINE_LANES = 6
+
+#: 원본 LANES 를 못 믿어서 이웃값으로 메울 수 있는 총 길이(방향당, km).
+#: 이보다 길면 속성 하나가 튄 게 아니라 본선 링크 선택 자체가 틀린 것이다.
+MAX_REPAIRED_LANE_KM = 10.0
+
+#: build_lane_profile 이 LANES 를 읽지 못했을 때 넣는 값. 범위 밖이라 곧바로 복구 대상이 된다.
+LANES_UNKNOWN = 0
 
 
 def normalize_intervals(df: pd.DataFrame) -> pd.DataFrame:
@@ -257,6 +265,122 @@ def merge_short_segments(profile: pd.DataFrame, min_length_km: float) -> pd.Data
     return merge_adjacent_lane_segments(pd.concat(out, ignore_index=True))
 
 
+def repair_implausible_lanes(
+    profile: pd.DataFrame,
+    *,
+    min_lanes: int = MIN_MAINLINE_LANES,
+    max_lanes: int = MAX_MAINLINE_LANES,
+    max_repaired_km: float = MAX_REPAIRED_LANE_KM,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """원본 LANES 가 본선일 수 없는 값이면 이웃 구간의 차로수로 메운다.
+
+    왜 필요한가
+        램프는 CONNECT 로 걸러낼 수 있지만, **CONNECT='0'(본선)으로 코딩된 링크가
+        LANES=1 을 달고 있는 경우**가 실제로 있다. 편도 1차로 고속국도 본선은
+        존재하지 않으므로 이건 링크 선택이 아니라 속성값의 문제다. 그런데 링크
+        선택은 멀쩡한데(연결 컴포넌트 1개, 분기 없음) 속성 하나 때문에 파이프라인
+        전체가 멈추면, 쓸 수 있는 결과가 하나도 안 나온다.
+
+    어떻게 메우는가
+        연속된 문제 구간의 앞뒤에서 가장 가까운 **정상 구간**을 찾아 둘 중
+        **차로수가 적은 쪽**을 쓰고 lanes_source='assumed' 로 내린다.
+        적게 잡는 쪽으로 틀리는 이유: 차로수를 적게 잡은 오류는
+        check_lanes_against_observed 가 실측 교통량으로 잡아낼 수 있지만,
+        많게 잡은 오류는 아무것도 잡아내지 못하기 때문이다.
+
+    왜 무제한이 아닌가
+        메운 길이가 max_repaired_km 를 넘으면 속성 오류가 아니라 본선 링크 선택이
+        틀렸다고 봐야 한다. 그때는 조용히 메우지 않고 멈춘다.
+
+    반환: (복구된 profile, 복구 내역 DataFrame)
+    """
+
+    report_columns = [
+        "direction",
+        "offset_km_start",
+        "offset_km_end",
+        "length_km",
+        "lanes_before",
+        "lanes_after",
+    ]
+
+    if profile.empty:
+        return profile.copy(), pd.DataFrame(columns=report_columns)
+
+    out: list[pd.DataFrame] = []
+    report: list[dict] = []
+
+    for direction, part in profile.groupby("direction", sort=True):
+        rows = part.sort_values("offset_km_start").reset_index(drop=True).to_dict("records")
+
+        def is_ok(row: dict) -> bool:
+            lanes = row["lanes"]
+            return pd.notna(lanes) and min_lanes <= int(lanes) <= max_lanes
+
+        good = [i for i, row in enumerate(rows) if is_ok(row)]
+
+        if not good:
+            raise RuntimeError(
+                f"{direction}: 차로수가 {min_lanes}~{max_lanes} 범위 안인 구간이 하나도 없습니다. "
+                "본선 링크 선택부터 다시 확인할 것."
+            )
+
+        i = 0
+        while i < len(rows):
+            if is_ok(rows[i]):
+                i += 1
+                continue
+
+            run_end = i
+            while run_end + 1 < len(rows) and not is_ok(rows[run_end + 1]):
+                run_end += 1
+
+            before = [j for j in good if j < i]
+            after = [j for j in good if j > run_end]
+
+            neighbours = []
+            if before:
+                neighbours.append(int(rows[before[-1]]["lanes"]))
+            if after:
+                neighbours.append(int(rows[after[0]]["lanes"]))
+
+            lanes_after = min(neighbours)
+
+            for j in range(i, run_end + 1):
+                lanes_before = rows[j]["lanes"]
+                report.append(
+                    {
+                        "direction": direction,
+                        "offset_km_start": float(rows[j]["offset_km_start"]),
+                        "offset_km_end": float(rows[j]["offset_km_end"]),
+                        "length_km": float(rows[j]["offset_km_end"])
+                        - float(rows[j]["offset_km_start"]),
+                        "lanes_before": int(lanes_before) if pd.notna(lanes_before) else LANES_UNKNOWN,
+                        "lanes_after": lanes_after,
+                    }
+                )
+                rows[j]["lanes"] = lanes_after
+                rows[j]["lanes_source"] = "assumed"
+
+            i = run_end + 1
+
+        out.append(pd.DataFrame(rows).assign(direction=direction))
+
+    repaired = pd.DataFrame(report, columns=report_columns)
+
+    for direction, part in repaired.groupby("direction", sort=True):
+        total = float(part["length_km"].sum())
+        if total > max_repaired_km:
+            raise RuntimeError(
+                f"{direction}: 본선일 수 없는 차로수 구간이 {total:.3f} km 로 "
+                f"허용치 {max_repaired_km:.1f} km 를 넘습니다. 속성 오류가 아니라 "
+                "본선 링크 선택이 틀렸을 가능성이 큽니다.\n"
+                + part.to_string(index=False)
+            )
+
+    return merge_adjacent_lane_segments(pd.concat(out, ignore_index=True)), repaired
+
+
 def max_dt_min(v_free_kmh: float, cell_length_km: float) -> float:
     """CFL 조건이 허용하는 최대 시간간격(분).
 
@@ -308,21 +432,38 @@ def check_lanes_against_observed(
         필요 차로수 = ceil(Q / q_max)
     이보다 적게 잡혀 있으면 차로수(또는 링크 선택)가 틀린 것이다.
 
-    traffic: build_traffic 정리본 (direction, offset_km, volume_veh)
+    왜 점이 아니라 구간으로 맞추는가
+        콘존은 IC~IC 라 보통 10 km 가 넘는데 차로 구간은 그보다 짧을 수 있다.
+        콘존의 대표점 하나만 보고 포함 여부를 따지면, 대표점이 밖에 있는 짧은
+        구간은 **검증을 아예 안 거치고 통과**한다. 실제로 경주IC~건천JC(11.2 km)
+        안의 3.7 km 구간이 그렇게 빠져나갔다. 콘존 구간과 겹치기만 하면 그
+        콘존의 관측 교통량을 적용한다 — 콘존 안에는 진출입이 없어서 통과 교통량이
+        보존되므로, 콘존의 피크는 그 안의 모든 지점이 실제로 흘려보낸 양이다.
+
+    traffic: build_traffic 정리본. offset_km_start/offset_km_end 가 있으면 구간으로
+        맞추고, 없으면 offset_km 점 포함으로 되돌아간다.
     """
 
     if q_max_veh_h_lane <= 0:
         raise ValueError("q_max_veh_h_lane 는 0보다 커야 합니다")
 
     observed = traffic.dropna(subset=["volume_veh"])
+    has_span = {"offset_km_start", "offset_km_end"} <= set(observed.columns)
     rows: list[dict] = []
 
     for _, segment in profile.iterrows():
-        inside = observed[
-            (observed["direction"] == segment["direction"])
-            & (observed["offset_km"] >= segment["offset_km_start"])
-            & (observed["offset_km"] < segment["offset_km_end"])
-        ]
+        same_direction = observed["direction"] == segment["direction"]
+
+        if has_span:
+            overlaps = (observed["offset_km_start"] < segment["offset_km_end"]) & (
+                observed["offset_km_end"] > segment["offset_km_start"]
+            )
+        else:
+            overlaps = (observed["offset_km"] >= segment["offset_km_start"]) & (
+                observed["offset_km"] < segment["offset_km_end"]
+            )
+
+        inside = observed[same_direction & overlaps]
 
         if inside.empty:
             continue

@@ -18,6 +18,7 @@ from evdt.io.lane_profile import (
     max_dt_min,
     merge_adjacent_lane_segments,
     merge_short_segments,
+    repair_implausible_lanes,
     select_mainline_candidates,
     uncovered_ranges,
     validate_lane_profile,
@@ -155,6 +156,49 @@ def test_observed_flow_ignores_other_direction_and_missing_values():
     assert check_lanes_against_observed(profile, traffic, 2200.0).empty
 
 
+def test_observed_flow_uses_conzone_span_not_just_its_midpoint():
+    """콘존(IC~IC)보다 짧은 구간도 검증을 거쳐야 한다.
+
+    실제로 놓친 사례: 경주IC~건천JC 콘존은 76.7~87.9 km 인데 대표점이 82.3 km 라,
+    78.2~81.9 km 구간이 점 포함 검사에서 빠져나가 1차로로 통과했다.
+    """
+
+    profile = _profile([(78.202, 81.930, 1, "measured")])
+    traffic = pd.DataFrame(
+        [
+            {
+                "direction": "UP",
+                "offset_km_start": 76.716,
+                "offset_km": 82.318,      # 구간 밖에 있는 대표점
+                "offset_km_end": 87.920,
+                "volume_veh": 4244.0,
+            }
+        ]
+    )
+
+    violations = check_lanes_against_observed(profile, traffic, 2200.0)
+
+    assert len(violations) == 1
+    assert violations.iloc[0]["lanes_required"] == 2
+
+
+def test_observed_flow_ignores_conzone_that_only_touches_the_segment():
+    profile = _profile([(10.0, 20.0, 2, "measured")])
+    traffic = pd.DataFrame(
+        [
+            {
+                "direction": "UP",
+                "offset_km_start": 20.0,   # 맞닿기만 하고 겹치지 않는다
+                "offset_km": 25.0,
+                "offset_km_end": 30.0,
+                "volume_veh": 9000.0,
+            }
+        ]
+    )
+
+    assert check_lanes_against_observed(profile, traffic, 2200.0).empty
+
+
 # ---------------------------------------------------------------------------
 # 3. 최소 셀 길이와 CFL
 # ---------------------------------------------------------------------------
@@ -240,6 +284,87 @@ def test_config_q_max_matches_anchor():
     )
 
     assert q == pytest.approx(float(defaults["q_max_anchor_veh_h_lane"]), rel=0.05)
+
+
+# ---------------------------------------------------------------------------
+# 4. 본선일 수 없는 차로수 복구
+# ---------------------------------------------------------------------------
+
+
+def test_one_lane_mainline_is_filled_from_neighbours():
+    """CONNECT='0' 인데 LANES=1 인 링크. 램프 필터로는 못 걸러서 여기서 메운다."""
+
+    profile = _profile(
+        [
+            (70.0, 78.202, 4, "measured"),
+            (78.202, 81.930, 1, "measured"),
+            (81.930, 90.0, 3, "measured"),
+        ]
+    )
+
+    repaired, report = repair_implausible_lanes(profile)
+
+    assert list(repaired["lanes"]) == [4, 3, 3]
+    # 이웃 중 적은 쪽(3차로). 적게 잡은 오류는 실측 교통량이 잡아낼 수 있다.
+    assert repaired.iloc[1]["lanes_source"] == "assumed"
+    assert repaired.iloc[1]["offset_km_start"] == 78.202
+
+    assert len(report) == 1
+    assert report.iloc[0]["lanes_before"] == 1
+    assert report.iloc[0]["lanes_after"] == 3
+    assert report.iloc[0]["length_km"] == pytest.approx(3.728)
+
+
+def test_consecutive_bad_segments_are_filled_as_one_run():
+    profile = _profile(
+        [
+            (0.0, 5.0, 4, "measured"),
+            (5.0, 6.0, 1, "measured"),
+            (6.0, 7.0, 1, "measured"),
+            (7.0, 12.0, 4, "measured"),
+        ]
+    )
+
+    repaired, report = repair_implausible_lanes(profile)
+
+    assert list(repaired["lanes"]) == [4, 4, 4]      # 복구 후 이웃과 값이 같아도
+    assert list(repaired["lanes_source"]) == ["measured", "assumed", "measured"]
+    assert len(report) == 2
+
+
+def test_bad_segment_at_the_end_uses_the_only_neighbour():
+    profile = _profile([(0.0, 5.0, 4, "measured"), (5.0, 6.0, 9, "measured")])
+
+    repaired, _ = repair_implausible_lanes(profile)
+
+    assert list(repaired["lanes"]) == [4, 4]
+
+
+def test_repair_leaves_a_clean_profile_untouched():
+    profile = _profile([(0.0, 5.0, 4, "measured"), (5.0, 9.0, 3, "measured")])
+
+    repaired, report = repair_implausible_lanes(profile)
+
+    assert report.empty
+    pd.testing.assert_frame_equal(
+        repaired.reset_index(drop=True), profile.reset_index(drop=True), check_dtype=False
+    )
+
+
+def test_repair_refuses_when_too_much_of_the_corridor_is_implausible():
+    """속성 하나가 튄 게 아니라 링크 선택이 틀린 경우는 조용히 메우면 안 된다."""
+
+    profile = _profile([(0.0, 5.0, 4, "measured"), (5.0, 25.0, 1, "measured")])
+
+    with pytest.raises(RuntimeError, match="본선 링크 선택"):
+        repair_implausible_lanes(profile, max_repaired_km=10.0)
+
+
+def test_repair_refuses_when_nothing_is_plausible():
+    profile = _profile([(0.0, 5.0, 1, "measured"), (5.0, 9.0, 1, "measured")])
+
+    with pytest.raises(RuntimeError, match="범위 안인 구간이 하나도"):
+        repair_implausible_lanes(profile)
 
 
 # ---------------------------------------------------------------------------
