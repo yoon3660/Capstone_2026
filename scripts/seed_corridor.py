@@ -26,8 +26,6 @@ from evdt.io.db import get_conn, init_db, upsert_df  # noqa: E402
 from evdt.io.route import GyeongbuRoute  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
 
-
-
 CORRIDORS = [
     {
         "corridor_id": "gyeongbu_down",

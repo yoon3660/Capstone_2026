@@ -152,7 +152,7 @@ def test_build_centerline_route(tmp_path, monkeypatch):
     assert len(route.points) == 5
     assert all(
         a < b
-        for a, b in zip(route.mileposts, route.mileposts[1:])
+        for a, b in zip(route.mileposts, route.mileposts[1:], strict=False)
     )
 
     # 각 방향의 출발점은 0km다.
