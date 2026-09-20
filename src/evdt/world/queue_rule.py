@@ -21,6 +21,8 @@
     2. 배정: 도착 시점에 비어 있는 충전기 중 **최고출력**.
     3. 전부 사용 중이면: **가장 빨리 비는** 충전기를 기다린다. 동률이면 고출력.
     4. 대기시간 = 시작 시각 − 도착 시각.
+       정책이 보는 '지금 도착하면 얼마나 기다리나' 도 같은 규칙에서 나온다
+       (wait_if_arriving_now). 큐 질문은 전부 이 모듈에서 답한다.
 
     규칙 3 은 "가장 빨리 비는" 쪽이지 "가장 빨리 끝나는" 쪽이 아니다. 고출력
     충전기가 조금 늦게 비어도 충전이 빨라 총 소요가 짧을 수 있지만, 그건 다른
@@ -228,6 +230,37 @@ def assign(
         )
 
     return tuple(assignments)
+
+
+def wait_if_arriving_now(
+    chargers: Sequence[Charger],
+    queued: Sequence[Arrival],
+    now_min: float,
+) -> float:
+    """지금 이 순간 도착한 차가 **충전을 시작하기까지** 기다릴 시간(분).
+
+    S0(UE) 정책이 보는 "앱에 뜬 현재 대기" 가 이 값이다. 충전소 화면에 보이는
+    숫자이므로 시뮬레이터가 스냅샷 스트림과 정책 관측에 같이 실어 보낸다
+    (설계문서 §7.2 규칙 2, §4.1 규칙 4).
+
+    왜 여기에 두는가
+        "얼마나 기다리는가" 는 큐 질문이다. 이걸 sim.py 안에서 따로 계산하면
+        큐 논리가 두 곳에 생긴다 — 이 모듈을 만든 이유가 없어진다.
+
+    왜 도착하는 차의 충전 요구가 필요 없는가
+        대기시간은 **충전기가 언제 비는가**로만 정해진다. 그 차가 얼마나 오래
+        충전할지는 자기 대기시간에 영향을 주지 않는다 (뒷차에는 준다).
+
+    queued: 아직 충전을 시작하지 않고 줄 서 있는 차들.
+    """
+
+    if _check_finite(now_min, "현재 시각") < 0:
+        raise ValueError(f"현재 시각이 음수입니다: {now_min} 분")
+
+    fleet = chargers_after(chargers, assign(queued, chargers))
+    earliest_free_min = min(c.available_from_min for c in fleet)
+
+    return max(0.0, earliest_free_min - float(now_min))
 
 
 def chargers_after(

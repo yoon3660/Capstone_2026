@@ -20,6 +20,7 @@ from evdt.world.queue_rule import (
     assign,
     chargers_after,
     choose_charger,
+    wait_if_arriving_now,
 )
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "evdt"
@@ -294,6 +295,65 @@ def test_chargers_after_rejects_unknown_charger():
 
     with pytest.raises(ValueError, match="모르는 충전기"):
         chargers_after([Charger("C1", 100.0)], [bogus])
+
+
+# ---------------------------------------------------------------------------
+# S0(UE) 가 보는 "지금 도착하면 얼마나 기다리나"
+# ---------------------------------------------------------------------------
+
+
+def test_empty_station_shows_no_wait():
+    assert wait_if_arriving_now([Charger("C1", 100.0)], [], now_min=0.0) == 0.0
+
+
+def test_wait_is_time_until_the_earliest_charger_frees():
+    chargers = [Charger("C1", 100.0, available_from_min=30.0), Charger("C2", 50.0, 18.0)]
+
+    assert wait_if_arriving_now(chargers, [], now_min=10.0) == pytest.approx(8.0)
+
+
+def test_wait_counts_the_cars_already_in_line():
+    """줄 서 있는 차가 먼저다. 그들이 끝나야 내 차례가 온다."""
+
+    chargers = [Charger("C1", 100.0)]
+    queued = [_arrival("a", 0.0, 30.0), _arrival("b", 0.0, 20.0)]
+
+    # a 가 0~30, b 가 30~50 을 쓰므로 지금(0분) 도착하면 50분 기다린다
+    assert wait_if_arriving_now(chargers, queued, now_min=0.0) == pytest.approx(50.0)
+
+
+def test_wait_does_not_depend_on_the_arriving_car():
+    """대기시간은 충전기가 언제 비는가로만 정해진다. 내 충전시간과 무관하다."""
+
+    chargers = [Charger("C1", 100.0, available_from_min=25.0)]
+
+    assert wait_if_arriving_now(chargers, [], now_min=5.0) == pytest.approx(20.0)
+
+
+def test_wait_is_never_negative():
+    """이미 비어 있는 충전기를 과거 시각으로 세지 않는다."""
+
+    chargers = [Charger("C1", 100.0, available_from_min=3.0)]
+
+    assert wait_if_arriving_now(chargers, [], now_min=90.0) == 0.0
+
+
+def test_wait_matches_what_assign_would_give_the_next_car():
+    """관측값과 실제 배정이 어긋나면 안 된다. 같은 규칙에서 나와야 한다."""
+
+    chargers = [Charger("C1", 200.0), Charger("C2", 100.0)]
+    queued = [_arrival("a", 0.0, 40.0), _arrival("b", 0.0, 35.0)]
+    now = 5.0
+
+    observed = wait_if_arriving_now(chargers, queued, now_min=now)
+    actual = assign([*queued, _arrival("z", now, 10.0)], chargers)
+
+    assert observed == pytest.approx(next(x.wait_min for x in actual if x.ev_id == "z"))
+
+
+def test_wait_needs_chargers():
+    with pytest.raises(ValueError, match="충전기가 0대"):
+        wait_if_arriving_now([], [], now_min=0.0)
 
 
 # ---------------------------------------------------------------------------
