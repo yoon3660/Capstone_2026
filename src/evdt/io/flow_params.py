@@ -117,6 +117,46 @@ def breakdown_flow(
     return b
 
 
+def q_per_lane(
+    v_free_kmh: float,
+    w_back_kmh: float,
+    k_jam_veh_km_lane: float,
+) -> float:
+    """삼각형 기본도에서 차로당 q_max를 계산한다."""
+    if v_free_kmh <= 0:
+        raise ValueError("v_free_kmh는 0보다 커야 합니다.")
+    if w_back_kmh <= 0:
+        raise ValueError("w_back_kmh는 0보다 커야 합니다.")
+    if k_jam_veh_km_lane <= 0:
+        raise ValueError("k_jam_veh_km_lane는 0보다 커야 합니다.")
+
+    return (
+        v_free_kmh
+        * w_back_kmh
+        * k_jam_veh_km_lane
+        / (v_free_kmh + w_back_kmh)
+    )
+
+
+def k_from_q(
+    v_free_kmh: float,
+    w_back_kmh: float,
+    q_max_veh_h_lane: float,
+) -> float:
+    """삼각형 기본도에서 q_max로 k_jam을 역산한다."""
+    if v_free_kmh <= 0:
+        raise ValueError("v_free_kmh는 0보다 커야 합니다.")
+    if w_back_kmh <= 0:
+        raise ValueError("w_back_kmh는 0보다 커야 합니다.")
+    if q_max_veh_h_lane <= 0:
+        raise ValueError("q_max_veh_h_lane는 0보다 커야 합니다.")
+
+    return (
+        q_max_veh_h_lane
+        * (v_free_kmh + w_back_kmh)
+        / (v_free_kmh * w_back_kmh)
+    )
+
 def derived_w_back(v_free_kmh: float, q_max_veh_h_lane: float, k_jam: float) -> float:
     """삼각형 기본도에서 v, q, k 로 w 를 역산한다. 성립하지 않으면 예외."""
 

@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS cell (
     offset_km_end      REAL    NOT NULL,
     length_km          REAL    NOT NULL CHECK (length_km > 0),
     lanes              INTEGER NOT NULL CHECK (lanes >= 1),
+    lanes_source       TEXT    NOT NULL
+        CHECK (lanes_source IN ('measured', 'assumed')),
 
     v_free_kmh         REAL    NOT NULL CHECK (v_free_kmh > 0),
     w_back_kmh         REAL    NOT NULL CHECK (w_back_kmh > 0),

@@ -24,11 +24,27 @@ from evdt.io.db import (
     validate_master,
 )
 
-CELL_SQL = (
-    "INSERT INTO cell (cell_id, corridor_id, seq, offset_km_start, offset_km_end, "
-    "length_km, lanes, v_free_kmh, w_back_kmh, k_jam_veh_km_lane, q_max_veh_h, "
-    "lat_start, lon_start, lat_end, lon_end) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+CELL_SQL = """
+INSERT INTO cell (
+    cell_id,
+    corridor_id,
+    seq,
+    offset_km_start,
+    offset_km_end,
+    length_km,
+    lanes,
+    lanes_source,
+    v_free_kmh,
+    w_back_kmh,
+    k_jam_veh_km_lane,
+    q_max_veh_h,
+    lat_start,
+    lon_start,
+    lat_end,
+    lon_end
 )
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
 
 
 def test_schema_creates_expected_tables(db_path) -> None:
@@ -90,8 +106,24 @@ def test_unknown_column_fails_loudly(seeded_db) -> None:
 )
 def test_ctm_fundamental_diagram_consistency(seeded_db, q_max, should_pass) -> None:
     """q_max = lanes * v*w*k/(v+w). 어기면 정체가 아예 생기지 않는다 (§9.5)."""
-    row = ("c1", "gyeongbu_down", 0, 0.0, 0.5, 0.5, 4, 100.0, 20.0, 180.0, q_max,
-           37.0, 127.0, 37.01, 127.01)
+    row = (
+        "c1",
+        "gyeongbu_down",
+        0,
+        0.0,
+        0.5,
+        0.5,
+        4,
+        "measured",
+        100.0,
+        20.0,
+        180.0,
+        q_max,
+        37.0,
+        127.0,
+        37.01,
+        127.01,
+    )
     if should_pass:
         with get_conn(seeded_db) as conn:
             conn.execute(CELL_SQL, row)
