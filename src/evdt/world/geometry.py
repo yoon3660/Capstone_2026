@@ -1,7 +1,6 @@
 from bisect import bisect_right
 from math import asin, cos, hypot, isfinite, radians, sin, sqrt
 
-
 EARTH_RADIUS_KM = 6371.0088
 
 

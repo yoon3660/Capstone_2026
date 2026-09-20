@@ -15,11 +15,9 @@ import json
 from datetime import datetime
 from urllib.parse import urlencode
 from urllib.request import urlopen
-import pandas as pd
-
-from evdt.world.geometry import Polyline
 
 import _bootstrap  # noqa: F401  (src 경로와 콘솔 인코딩을 먼저 준비한다)
+import pandas as pd
 
 from evdt.io.charger_ingest import (
     fetch_gyeongbu_interchanges,
@@ -28,7 +26,8 @@ from evdt.io.charger_ingest import (
     load_ex_api_key,
 )
 from evdt.io.route import GyeongbuRoute
-from evdt.paths import DATA_RAW_DIR, DATA_PROCESSED_DIR
+from evdt.paths import DATA_PROCESSED_DIR, DATA_RAW_DIR
+from evdt.world.geometry import Polyline
 
 EX_IC_API_URL = "https://data.ex.co.kr/openapi/locationinfo/locationinfoIc"
 

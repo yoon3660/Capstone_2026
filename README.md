@@ -202,6 +202,11 @@ python scripts/check_traffic.py --holiday seollal2026 --base base202603 \
 python scripts/estimate_flow_params.py
 ```
 
+```bash
+# 차종·온도·충전곡선 (T-10/T-11/T-14, 외부 API 불필요)
+python scripts/seed_vehicles.py
+```
+
 ---
 
 ## 폴더 구조
