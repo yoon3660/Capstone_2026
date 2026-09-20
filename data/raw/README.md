@@ -37,9 +37,25 @@ data/raw/nodelink/
 3. 실행 순서
 
 ```bash
+python scripts/build_route.py           # -> data/processed/gyeongbu_route.json (이정축)
 python scripts/audit_lane_mapping.py    # SHP -> data/processed/lane_mapping_audit.parquet
 python scripts/build_lane_profile.py    # -> data/processed/lanes_gyeongbu.parquet
 ```
+
+`build_lane_profile.py` 의 마지막 단계는 실측 교통량으로 차로수를 검산한다
+(`traffic_gyeongbu.parquet`). 이 파일이 없으면 검산을 건너뛰고 그대로 저장하는데,
+**차로수를 반증할 수 있는 유일한 장치라서 건너뛰면 안 된다.** 먼저 T-07 정리본을
+만든다 (인증키 불필요, 각 수집 몇 분).
+
+```bash
+python scripts/fetch_traffic.py --start 2026-02-13 --end 2026-02-22 --label seollal2026
+python scripts/fetch_traffic.py --start 2026-03-06 --end 2026-03-15 --label base202603
+python scripts/build_traffic.py         # -> data/processed/traffic_gyeongbu.parquet
+```
+
+정리본을 남의 것으로 복사해 쓰지 않는다. 교통량의 `offset_km` 은 각자의
+`gyeongbu_route.json` 기준이라, 차로 프로파일과 이정축이 어긋나면 검산이 엉뚱한
+구간끼리 비교한다.
 
 좌표계는 EPSG:5186(Korea 2000 중부원점)이고 스크립트가 WGS84 로 변환한다.
 읽기는 `pyshp` + `pyproj` 로 한다 (geopandas 는 GDAL 의존성 때문에 쓰지 않는다).
