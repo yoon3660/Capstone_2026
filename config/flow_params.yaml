@@ -3,7 +3,7 @@
 #
 #  defaults / sensitivity는 모델 설정값.
 #  DOWN / UP의 measured 값은 scripts/estimate_flow_params.py가 갱신한다.
-#  생성: 2026-09-20 08:41  /  기간: base202603, seollal2026
+#  생성: 2026-09-20 11:52  /  기간: base202603, seollal2026
 #
 #  source:
 #    measured  VDS 또는 표준노드링크 실측
@@ -14,7 +14,10 @@
 #    q_max_per_lane = v_free * w_back * k_jam / (v_free + w_back)
 # ===========================================================================
 
-dt_min: 1.0
+# CFL 조건: 한 스텝에 차가 셀 하나를 넘어가면 CTM 이 성립하지 않는다.
+#   v_free * dt <= min_cell_length_km
+#   100 km/h, 0.5 km 셀 -> dt <= 0.30분
+dt_min: 0.2
 
 defaults:
   v_free_kmh: 100.0
@@ -22,6 +25,8 @@ defaults:
   k_jam_veh_km_lane: 144.0
   lanes: 4
   q_max_anchor_veh_h_lane: 2200.0
+  # 차로수 변경점이 셀 경계가 된다. 이보다 짧은 구간은 이웃에 병합한다.
+  min_cell_length_km: 0.5
 
 sensitivity:
   k_jam_veh_km_lane: [132.0, 144.0, 169.0]

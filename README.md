@@ -203,6 +203,12 @@ python scripts/estimate_flow_params.py
 ```
 
 ```bash
+# 차로수 (T-24, data/raw/nodelink/MOCT_LINK.shp 필요 — data/raw/README.md 참고)
+python scripts/audit_lane_mapping.py
+python scripts/build_lane_profile.py
+```
+
+```bash
 # 차종·온도·충전곡선 (T-10/T-11/T-14, 외부 API 불필요)
 python scripts/seed_vehicles.py
 ```
@@ -227,6 +233,7 @@ runs/<run_id>/     실험 산출물 Parquet + meta.json. git 제외
 scripts/           DB 생성 · 확인 · 셀프 체크
 tests/             pytest. GitHub Actions에서 자동 실행
 docs/DESIGN.md     설계 결정 전문
+docs/debug_lanes_log.md  차로 프로파일: 넘어간 것과 확인 순서
 ```
 
 **저장소 경계** — 재현 가능한 것(이벤트 로그 수십만 행)은 Parquet,

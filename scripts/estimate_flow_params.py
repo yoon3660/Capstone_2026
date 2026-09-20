@@ -35,6 +35,7 @@ import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
 
 from evdt.io import flow_params as fp  # noqa: E402
+from evdt.io.lane_profile import max_dt_min  # noqa: E402
 from evdt.paths import CONFIG_DIR, DATA_PROCESSED_DIR  # noqa: E402
 
 
@@ -57,6 +58,17 @@ def main() -> int:
     q_anchor = float(
         defaults["q_max_anchor_veh_h_lane"]
     )
+    min_cell_km = float(defaults["min_cell_length_km"])
+
+    # CFL: v_free * dt <= 셀 길이. 어기면 한 스텝에 셀을 건너뛴다.
+    dt_limit_min = max_dt_min(default_v_free, min_cell_km)
+
+    if dt_min > dt_limit_min + 1e-9:
+        raise SystemExit(
+            f"dt_min={dt_min}분 은 CFL 조건을 어깁니다. "
+            f"v_free {default_v_free} km/h, 셀 {min_cell_km} km 면 "
+            f"dt <= {dt_limit_min:.2f}분 이어야 합니다."
+        )
 
     k_jam_candidates = [
         float(x)
@@ -103,6 +115,9 @@ def main() -> int:
         "#    q_max_per_lane = v_free * w_back * k_jam / (v_free + w_back)",
         "# ===========================================================================",
         "",
+        "# CFL 조건: 한 스텝에 차가 셀 하나를 넘어가면 CTM 이 성립하지 않는다.",
+        "#   v_free * dt <= min_cell_length_km",
+        f"#   {default_v_free:g} km/h, {min_cell_km:g} km 셀 -> dt <= {dt_limit_min:.2f}분",
         f"dt_min: {dt_min}",
         "",
         "defaults:",
@@ -111,6 +126,8 @@ def main() -> int:
         f"  k_jam_veh_km_lane: {k_jam}",
         f"  lanes: {default_lanes}",
         f"  q_max_anchor_veh_h_lane: {q_anchor}",
+        "  # 차로수 변경점이 셀 경계가 된다. 이보다 짧은 구간은 이웃에 병합한다.",
+        f"  min_cell_length_km: {min_cell_km}",
         "",
         "sensitivity:",
         f"  k_jam_veh_km_lane: {k_jam_candidates}",

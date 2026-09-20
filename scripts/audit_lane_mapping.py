@@ -12,15 +12,13 @@ from __future__ import annotations
 
 from collections import Counter
 
+import _bootstrap  # noqa: F401
+import pandas as pd
 import shapefile
 from pyproj import Transformer
-import pandas as pd
-
-import _bootstrap  # noqa: F401
 
 from evdt.io.route import GyeongbuRoute
 from evdt.paths import DATA_RAW_DIR
-
 
 SHP_PATH = DATA_RAW_DIR / "nodelink" / "MOCT_LINK.shp"
 CACHE_PATH = DATA_RAW_DIR.parent / "processed" / "lane_mapping_audit.parquet"

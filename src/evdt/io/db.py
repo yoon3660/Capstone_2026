@@ -97,6 +97,46 @@ def get_conn(
 # ---------------------------------------------------------------------------
 # 스키마
 # ---------------------------------------------------------------------------
+
+#: 스키마에 컬럼이 추가될 때마다 여기에 한 줄 적는다. (테이블, 컬럼, 컬럼 정의)
+#:
+#: schema.sql 은 CREATE TABLE **IF NOT EXISTS** 라서, 이미 DB 를 가진 사람에게는
+#: 새 컬럼이 생기지 않는다. 그런데 init_db 는 테이블 존재만 보고 성공이라고 말한다.
+#: 그러면 팀원마다 스키마가 조용히 갈라지고, 적재 스크립트가 "no such column" 으로
+#: 엉뚱한 데서 터진다. 그래서 여기서 빠진 컬럼을 채운다.
+#:
+#: NOT NULL 컬럼은 SQLite 규칙상 DEFAULT 가 있어야 추가할 수 있다. 기존 행에는
+#: 그 기본값이 들어가므로, "모르는 값" 으로 읽히는 기본값을 골라야 한다.
+MIGRATIONS: list[tuple[str, str, str]] = [
+    (
+        "cell",
+        "lanes_source",
+        "TEXT NOT NULL DEFAULT 'assumed' "
+        "CHECK (lanes_source IN ('measured', 'assumed'))",
+    ),
+]
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+
+
+def apply_migrations(conn: sqlite3.Connection) -> list[str]:
+    """스키마 적용 뒤, 기존 DB 에 빠진 컬럼을 채운다. 추가한 컬럼 목록을 돌려준다."""
+
+    added: list[str] = []
+    tables = set(table_names(conn))
+
+    for table, column, definition in MIGRATIONS:
+        if table not in tables or column in _column_names(conn, table):
+            continue
+
+        conn.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {definition}')
+        added.append(f"{table}.{column}")
+
+    return added
+
+
 def init_db(db_path: str | Path | None = None, *, schema_path: Path | None = None) -> Path:
     """schema.sql 을 적용하고, 기대한 테이블이 다 생겼는지 확인한다.
 
@@ -111,13 +151,26 @@ def init_db(db_path: str | Path | None = None, *, schema_path: Path | None = Non
     sql = sql_file.read_text(encoding="utf-8")
     with get_conn(path) as conn:
         conn.executescript(sql)
+        added = apply_migrations(conn)
         found = set(table_names(conn))
+
+    for column in added:
+        print(f"[스키마 변경] 컬럼 추가: {column}")
 
     missing = [t for t in EXPECTED_TABLES if t not in found]
     if missing:
         raise SchemaError(
             "스키마 적용 후에도 없는 테이블: " + ", ".join(missing) + f"  (db={path})"
         )
+
+    # 마이그레이션까지 돌고도 컬럼이 없으면 스키마가 갈라진 것이다. 조용히 넘기지 않는다.
+    with get_conn(path, readonly=True) as conn:
+        for table, column, _ in MIGRATIONS:
+            if column not in _column_names(conn, table):
+                raise SchemaError(
+                    f"{table}.{column} 컬럼이 없다. DB 스키마가 코드와 어긋났다 (db={path})"
+                )
+
     return path
 
 

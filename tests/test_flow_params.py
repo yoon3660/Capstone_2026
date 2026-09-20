@@ -7,7 +7,6 @@ import pytest
 
 from evdt.io.flow_params import k_from_q, q_per_lane
 
-
 W_BACK_KMH = 18.0
 K_JAM_VEH_KM_LANE = 144.0
 

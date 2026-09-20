@@ -228,14 +228,15 @@ def t_qmax_check() -> str:
     from evdt.io.db import get_conn
 
     # v=100, w=20, k_jam=180/lane, lanes=4  →  q_max = 4*100*20*180/120 = 12000
-    good = ("c_ok", "gyeongbu_down", 0, 0.0, 0.5, 0.5, 4, 100.0, 20.0, 180.0, 12000.0,
-            37.0, 127.0, 37.01, 127.01)
-    bad = ("c_bad", "gyeongbu_down", 1, 0.5, 1.0, 0.5, 4, 100.0, 20.0, 180.0, 9999.0,
-           37.0, 127.0, 37.01, 127.01)
+    good = ("c_ok", "gyeongbu_down", 0, 0.0, 0.5, 0.5, 4, "measured",
+            100.0, 20.0, 180.0, 12000.0, 37.0, 127.0, 37.01, 127.01)
+    bad = ("c_bad", "gyeongbu_down", 1, 0.5, 1.0, 0.5, 4, "measured",
+           100.0, 20.0, 180.0, 9999.0, 37.0, 127.0, 37.01, 127.01)
     sql = (
         "INSERT INTO cell (cell_id, corridor_id, seq, offset_km_start, offset_km_end, "
-        "length_km, lanes, v_free_kmh, w_back_kmh, k_jam_veh_km_lane, q_max_veh_h, "
-        "lat_start, lon_start, lat_end, lon_end) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        "length_km, lanes, lanes_source, v_free_kmh, w_back_kmh, k_jam_veh_km_lane, "
+        "q_max_veh_h, lat_start, lon_start, lat_end, lon_end) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     )
     with get_conn(DB) as conn:
         conn.execute(sql, good)

@@ -149,3 +149,79 @@ def test_validate_master_flags_bad_share(seeded_db) -> None:
 def test_validate_master_passes_on_empty_db(db_path) -> None:
     with get_conn(db_path, readonly=True) as conn:
         assert validate_master(conn) == []
+
+
+def test_existing_db_gets_new_columns(tmp_path) -> None:
+    """이미 만들어진 DB 에도 새 컬럼이 들어간다 (#24 lanes_source).
+
+    schema.sql 은 CREATE TABLE IF NOT EXISTS 라서, 컬럼만 추가된 경우 기존 DB 는
+    그대로 남는다. 그런데 init_db 는 테이블 존재만 보고 성공이라고 말한다.
+    그러면 사람마다 스키마가 갈라지고 적재가 엉뚱한 데서 터진다.
+    """
+    from evdt.io.db import MIGRATIONS, column_names, init_db
+    from evdt.paths import SCHEMA_PATH
+
+    # lanes_source 가 없던 시절의 스키마를 만든다
+    old_schema = "\n".join(
+        line
+        for line in SCHEMA_PATH.read_text(encoding="utf-8").splitlines()
+        if "lanes_source" not in line
+    )
+    old_schema_path = tmp_path / "old_schema.sql"
+    old_schema_path.write_text(old_schema, encoding="utf-8")
+
+    db = tmp_path / "old.db"
+    with get_conn(db) as conn:
+        conn.executescript(old_schema)
+
+    with get_conn(db) as conn:
+        assert "lanes_source" not in column_names(conn, "cell")
+
+    # init_db 가 빠진 컬럼을 채운다
+    init_db(db)
+
+    with get_conn(db) as conn:
+        for table, column, _ in MIGRATIONS:
+            assert column in column_names(conn, table)
+
+        conn.execute(
+            "INSERT INTO corridor (corridor_id, name, direction, origin_name, dest_name, "
+            "length_km) VALUES ('c', '경부', 'DOWN', 'S', 'B', 400.0)"
+        )
+        conn.execute(
+            CELL_SQL,
+            ("c1", "c", 0, 0.0, 0.5, 0.5, 4, "measured",
+             100.0, 20.0, 180.0, 4 * 100.0 * 20.0 * 180.0 / 120.0,
+             37.0, 127.0, 37.01, 127.01),
+        )
+
+        # 새 컬럼은 measured/assumed 만 받는다
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                CELL_SQL,
+                ("c2", "c", 1, 0.5, 1.0, 0.5, 4, "guessed",
+                 100.0, 20.0, 180.0, 4 * 100.0 * 20.0 * 180.0 / 120.0,
+                 37.0, 127.0, 37.01, 127.01),
+            )
+
+
+def test_cell_lanes_source_defaults_to_assumed(seeded_db) -> None:
+    """lanes_source 를 빼고 넣어도 막히지 않는다. 대신 기본값은 'assumed' 다.
+
+    NOT NULL 인데 기본값이 없으면 이 컬럼을 모르는 기존 INSERT 가 전부 깨진다
+    (#24 머지 직후 verify_setup 이 그렇게 실패했다). 기본값은 "모르는 값" 쪽이어야
+    한다 — 실측하지 않은 차로수를 measured 로 기록하면 안 된다.
+    """
+    with get_conn(seeded_db) as conn:
+        conn.execute(
+            "INSERT INTO cell (cell_id, corridor_id, seq, offset_km_start, offset_km_end, "
+            "length_km, lanes, v_free_kmh, w_back_kmh, k_jam_veh_km_lane, q_max_veh_h, "
+            "lat_start, lon_start, lat_end, lon_end) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("c_default", "gyeongbu_down", 0, 0.0, 0.5, 0.5, 4,
+             100.0, 20.0, 180.0, 12000.0, 37.0, 127.0, 37.01, 127.01),
+        )
+        source = conn.execute(
+            "SELECT lanes_source FROM cell WHERE cell_id = 'c_default'"
+        ).fetchone()[0]
+
+    assert source == "assumed"
