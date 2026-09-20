@@ -19,6 +19,33 @@ ex_vds_speed_gyeongbu_20260918.csv  도로공사 VDS 구간 속도 (T-08)
 수집일을 파일명에 넣는 이유: 충전 인프라는 계속 늘어난다. 어느 시점 스냅샷인지가
 결과 해석에 영향을 준다.
 
+## 표준노드링크 (차로수, T-24)
+
+경부선 본선 차로수는 국토교통부 **표준노드링크** SHP 에서 뽑는다.
+
+1. ITS 국가교통정보센터 자료실에서 "전국표준노드링크" 를 받는다.
+   <https://www.its.go.kr/nodelink/nodelinkRef>  (공공데이터포털에도 같은 자료가 있다)
+2. 압축을 풀어 `MOCT_LINK.shp` / `.shx` / `.dbf` 세 파일을 아래 경로에 둔다.
+
+```
+data/raw/nodelink/
+    MOCT_LINK.shp
+    MOCT_LINK.shx
+    MOCT_LINK.dbf
+```
+
+3. 실행 순서
+
+```bash
+python scripts/audit_lane_mapping.py    # SHP -> data/processed/lane_mapping_audit.parquet
+python scripts/build_lane_profile.py    # -> data/processed/lanes_gyeongbu.parquet
+```
+
+좌표계는 EPSG:5186(Korea 2000 중부원점)이고 스크립트가 WGS84 로 변환한다.
+읽기는 `pyshp` + `pyproj` 로 한다 (geopandas 는 GDAL 의존성 때문에 쓰지 않는다).
+배포본이 갱신되면 링크 좌표와 차로수가 바뀔 수 있으니, 받은 날짜를 같은 폴더의
+`.md` 노트에 적어둔다.
+
 ## 파일마다 같이 남길 것
 
 같은 이름의 `.md` 노트에 이걸 적는다.

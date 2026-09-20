@@ -351,3 +351,95 @@ DB 테스트 12 passed
 후속 작업
 
 k_jam = 132 / 144 / 169 veh/km/lane 민감도 분석을 별도 Issue에서 진행
+
+---
+
+## #24 후속 수정 (debug/lanes)
+
+머지 후 리뷰에서 나온 문제를 정리한 기록이다.
+
+### 1. 연결로(램프)가 본선 후보에 섞여 있었다
+
+`audit_lane_mapping.py` 의 필터는 `ROAD_NAME` · `ROAD_RANK` · `ROAD_NO` · `ROAD_USE`
+네 개뿐이라 `CONNECT`(연결로 구분)를 보지 않았다. 표준노드링크에서 램프도
+ROAD_NAME='경부고속도로' 를 달고 있고 보통 1~2차로다. 그래서 3.7km 1차로,
+24.7m 1차로, `3 → 4 → 3` 진동 같은 구간이 나왔다.
+
+원본 LANES 값과 결과가 일치한다는 확인은 **매핑 단계**만 검증한다. 문제는 그 앞의
+**링크 선택**이다. 잘못 고른 링크의 값을 정확히 옮겨도 결과는 틀린다.
+
+고친 방법 (`evdt.io.lane_profile.select_mainline_candidates`)
+- `CONNECT='0'`(본선)만 후보로 쓴다.
+- 본선만으로 덮이지 않는 이정 구간에 걸치는 램프만 되살린다 (연결이 끊기지 않게).
+- 되살린 링크에서 나온 차로수는 `lanes_source='assumed'` 로 내려 적는다.
+- 되살린 링크 목록을 실행할 때 출력한다.
+
+### 2. 실측 교통량으로 차로수를 반증한다
+
+한 차로는 1시간에 q_max 대를 넘길 수 없다. 그러면 그 구간의 관측 최대 교통량 Q 에서
+필요한 차로수가 나온다.
+
+```
+필요 차로수 = ceil(Q / q_max_per_lane)
+```
+
+VDS 정리본(`traffic_gyeongbu.parquet`)으로 확인한 결과, 콘존 115곳 중
+**113곳의 관측 최대 교통량이 1차로 용량(2,196 veh/h)을 넘는다.** 53곳은 2차로
+용량도 넘는다. 즉 본선에 1차로 구간은 있을 수 없다.
+
+`build_lane_profile.py` 가 저장 직전에 이 검사를 돌리고, 모순이 있으면 멈춘다
+(`check_lanes_against_observed`). 검증 범위도 `1~6` 에서 **`2~6`** 으로 좁혔다.
+
+### 3. 셀 길이와 dt_min (CFL 조건)
+
+차로수 변경점은 CTM 셀 경계가 된다. 24.7m 구간이 남으면 그 길이의 셀이 생기고,
+CFL 조건 때문에 Δt 가 1초 미만이어야 한다.
+
+```
+v_free * dt <= 셀 길이
+100 km/h, 0.5 km 셀 -> dt <= 0.30분 (18초)
+```
+
+- `config/flow_params.yaml`: `dt_min` 1.0 → **0.2분**, `defaults.min_cell_length_km: 0.5` 추가.
+- `min_cell_length_km` 보다 짧은 구간은 **차로수가 적은 이웃**에 병합한다
+  (`merge_short_segments`). 용량을 크게 잡는 쪽으로 틀리면 있어야 할 병목이 사라진다.
+  병합된 구간은 `lanes_source='assumed'`.
+- `estimate_flow_params.py` 가 config 를 쓸 때 CFL 조건을 검사하고, 어기면 멈춘다.
+- `tests/test_lane_profile.py::test_config_dt_satisfies_cfl` 이 config 값을 직접 읽어 검사한다.
+
+### 4. 스키마 마이그레이션
+
+`schema.sql` 은 `CREATE TABLE IF NOT EXISTS` 라서 이미 DB 를 가진 사람에게는
+`cell.lanes_source` 가 생기지 않는데, `init_db` 는 테이블 존재만 보고 성공이라고 했다.
+
+- `io/db.py` 에 `MIGRATIONS` 를 두고 빠진 컬럼을 `ALTER TABLE` 로 채운다.
+- 채운 뒤에도 컬럼이 없으면 `SchemaError` 로 멈춘다.
+- `lanes_source` 에 `DEFAULT 'assumed'` 를 줬다. NOT NULL 인데 기본값이 없으면
+  이 컬럼을 모르는 기존 INSERT 가 전부 깨진다 (머지 직후 `verify_setup` 이 그렇게
+  실패했다). 기본값은 "모르는 값" 쪽이어야 한다.
+
+### 5. 재현 경로
+
+- `requirements.txt` 에 `pyshp` · `pyproj` 추가 (없어서 다른 사람은 실행 자체가 불가능했다).
+- `data/raw/README.md` 에 표준노드링크 다운로드 위치와 파일 배치 경로를 적었다.
+
+### 6. 판단 규칙을 테스트 가능한 모듈로
+
+1,291줄 스크립트 안에 있던 판단 규칙을 `src/evdt/io/lane_profile.py` 로 옮겼다.
+그래프 탐색(본선 링크 선택)은 표준노드링크 원본이 있어야 돌지만, 아래 규칙은
+DataFrame 만 있으면 검사할 수 있다 — `tests/test_lane_profile.py` 21건.
+
+| 함수 | 규칙 |
+|---|---|
+| `select_mainline_candidates` | 램프 제외, 끊긴 구간만 보충 |
+| `check_lanes_against_observed` | 관측 교통량으로 차로수 반증 |
+| `merge_short_segments` / `max_dt_min` | 최소 셀 길이와 CFL |
+| `merge_adjacent_lane_segments` / `lane_change_points` | 프로파일 정리, 셀 앵커 |
+| `validate_lane_profile` | 스키마·차로수 범위(2~6)·gap/overlap |
+
+### 남은 것
+
+- 위 필터로 차로 프로파일을 **다시 생성**해야 한다 (표준노드링크 SHP 필요).
+  생성 후 1차로 구간이 사라졌는지, 되살린 램프 목록이 타당한지 확인할 것.
+- k_jam 132 / 144 / 169 민감도 분석은 여전히 후속 이슈다.
+

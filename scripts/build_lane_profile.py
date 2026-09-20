@@ -27,13 +27,29 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from pathlib import Path
 
-import pandas as pd
-
 import _bootstrap  # noqa: F401
-from evdt.paths import DATA_RAW_DIR
+import pandas as pd
+import yaml
 
+from evdt.io import flow_params as fp
+from evdt.io.lane_profile import (
+    MAX_MAINLINE_LANES,
+    MIN_MAINLINE_LANES,
+    PROFILE_COLUMNS,
+    check_lanes_against_observed,
+    lane_change_points,
+    max_dt_min,
+    merge_adjacent_lane_segments,
+    merge_short_segments,
+    normalize_intervals,
+    select_mainline_candidates,
+    validate_lane_profile,
+)
+from evdt.paths import CONFIG_DIR, DATA_PROCESSED_DIR
 
-PROCESSED_DIR = DATA_RAW_DIR.parent / "processed"
+PROCESSED_DIR = DATA_PROCESSED_DIR
+FLOW_PARAMS_PATH = CONFIG_DIR / "flow_params.yaml"
+TRAFFIC_PATH = PROCESSED_DIR / "traffic_gyeongbu.parquet"
 CACHE_PATH = PROCESSED_DIR / "lane_mapping_audit.parquet"
 OUTPUT_PATH = PROCESSED_DIR / "lanes_gyeongbu.parquet"
 
@@ -146,16 +162,6 @@ def get_main_component(df: pd.DataFrame) -> pd.DataFrame:
 # 이정 coverage / overlap cluster
 # ---------------------------------------------------------------------------
 
-def normalize_intervals(df: pd.DataFrame) -> pd.DataFrame:
-    """링크를 이정축 기준 [작은 값, 큰 값] 구간으로 정규화한다."""
-    result = df.copy()
-    result["offset_km_start"] = result[["m_start", "m_end"]].min(axis=1).astype(float)
-    result["offset_km_end"] = result[["m_start", "m_end"]].max(axis=1).astype(float)
-
-    length = result["offset_km_end"] - result["offset_km_start"]
-    return result[length > 1e-6].copy().reset_index(drop=True)
-
-
 def merge_same_candidate_segments(coverage: pd.DataFrame) -> pd.DataFrame:
     """서로 붙어 있고 후보 링크 집합이 같은 coverage 구간을 병합한다."""
     if coverage.empty:
@@ -209,7 +215,7 @@ def build_interval_coverage(df: pd.DataFrame) -> pd.DataFrame:
     active: set[str] = set()
     rows: list[dict] = []
 
-    for current, next_point in zip(breakpoints, breakpoints[1:]):
+    for current, next_point in zip(breakpoints, breakpoints[1:], strict=False):
         for link_id in end_events.get(current, []):
             active.discard(link_id)
 
@@ -877,7 +883,10 @@ def validate_selected_links(
     )
 
     lanes = pd.to_numeric(selected["lanes"], errors="coerce")
-    invalid_lanes = lanes.isna() | (lanes < 1) | (lanes > 6)
+    # 본선은 편도 2차로 아래로 내려가지 않는다. 1차로면 연결로(램프)가 섞인 것이다.
+    invalid_lanes = (
+        lanes.isna() | (lanes < MIN_MAINLINE_LANES) | (lanes > MAX_MAINLINE_LANES)
+    )
 
     print()
     print(f"=== {direction} 최종 본선 검증 ===")
@@ -887,7 +896,7 @@ def validate_selected_links(
     print(f"sink 노드 수: {len(stats['sinks'])}")
     print(f"분기 노드 수: {len(stats['branch_nodes'])}")
     print(f"이정 범위: {m_min:.3f} ~ {m_max:.3f} km")
-    print(f"1~6 범위 밖 LANES: {int(invalid_lanes.sum())}")
+    print(f"{MIN_MAINLINE_LANES}~{MAX_MAINLINE_LANES} 범위 밖 LANES: {int(invalid_lanes.sum())}")
 
     errors = []
     if len(components) != 1:
@@ -1009,42 +1018,6 @@ def _shared_boundaries(
     return boundaries
 
 
-def merge_adjacent_lane_segments(profile: pd.DataFrame) -> pd.DataFrame:
-    """이정축에서 맞닿고 lanes/direction이 같은 구간을 병합한다."""
-    if profile.empty:
-        return profile.copy()
-
-    ordered = profile.sort_values(
-        ["direction", "offset_km_start", "offset_km_end"]
-    ).reset_index(drop=True)
-
-    merged: list[dict] = []
-
-    for _, row in ordered.iterrows():
-        current = row.to_dict()
-
-        if not merged:
-            merged.append(current)
-            continue
-
-        previous = merged[-1]
-        same_direction = previous["direction"] == current["direction"]
-        same_lanes = int(previous["lanes"]) == int(current["lanes"])
-        touching = abs(
-            float(previous["offset_km_end"])
-            - float(current["offset_km_start"])
-        ) < EPS
-
-        if same_direction and same_lanes and touching:
-            previous["offset_km_end"] = current["offset_km_end"]
-        else:
-            merged.append(current)
-
-    result = pd.DataFrame(merged)
-    result["lanes"] = result["lanes"].astype(int)
-    return result
-
-
 def build_lane_profile(
     selected: pd.DataFrame,
     direction: str,
@@ -1070,6 +1043,7 @@ def build_lane_profile(
                 "offset_km_end": end,
                 "lanes": int(link["lanes"]),
                 "direction": direction,
+                "lanes_source": str(link.get("lanes_source", "measured")),
             }
         )
 
@@ -1077,123 +1051,31 @@ def build_lane_profile(
     return merge_adjacent_lane_segments(profile)
 
 
-def validate_lane_profile(profile: pd.DataFrame) -> None:
-    """최종 parquet 스키마, LANES 범위, gap/overlap을 검증한다."""
-    expected = [
-        "offset_km_start",
-        "offset_km_end",
-        "lanes",
-        "direction",
-    ]
-
-    if list(profile.columns) != expected:
-        raise RuntimeError(
-            f"최종 profile 컬럼이 다릅니다: {list(profile.columns)}"
-        )
-
-    if profile.empty:
-        raise RuntimeError("최종 lane profile이 비어 있습니다.")
-
-    if profile.isna().any().any():
-        raise RuntimeError("최종 lane profile에 NULL이 있습니다.")
-
-    if not profile["lanes"].between(1, 6).all():
-        bad = profile[~profile["lanes"].between(1, 6)]
-        raise RuntimeError(
-            "최종 lane profile에 1~6 범위 밖 LANES가 있습니다.\n"
-            + bad.to_string(index=False)
-        )
-
-    print()
-    print("========== 최종 lane profile 검증 ==========")
-
-    for direction in DIRECTIONS:
-        part = (
-            profile[profile["direction"] == direction]
-            .sort_values("offset_km_start")
-            .reset_index(drop=True)
-        )
-
-        if part.empty:
-            raise RuntimeError(f"{direction}: profile이 비어 있습니다.")
-
-        gaps = 0
-        overlaps = 0
-
-        for i in range(len(part) - 1):
-            diff = (
-                float(part.iloc[i + 1]["offset_km_start"])
-                - float(part.iloc[i]["offset_km_end"])
-            )
-            if diff > EPS:
-                gaps += 1
-            elif diff < -EPS:
-                overlaps += 1
-
-        start = float(part.iloc[0]["offset_km_start"])
-        end = float(part.iloc[-1]["offset_km_end"])
-
-        print()
-        print(f"{direction}: {len(part)}개 구간")
-        print(f"이정 범위: {start:.6f} ~ {end:.6f} km")
-        print(f"gap={gaps}, overlap={overlaps}")
-        print(
-            f"LANES 범위: "
-            f"{int(part['lanes'].min())} ~ "
-            f"{int(part['lanes'].max())}"
-        )
-
-        if gaps or overlaps:
-            raise RuntimeError(
-                f"{direction}: 최종 profile에 gap/overlap이 있습니다."
-            )
-
-    print()
-    print("최종 lane profile 검증 통과")
-
-
-def print_lane_change_points(profile: pd.DataFrame) -> None:
-    """이슈에 붙일 차로수 변경 이정 목록을 출력한다."""
-    print()
-    print("========== 차로수 변경 지점 ==========")
-
-    for direction in DIRECTIONS:
-        part = (
-            profile[profile["direction"] == direction]
-            .sort_values("offset_km_start")
-            .reset_index(drop=True)
-        )
-
-        print()
-        print(f"--- {direction} ---")
-
-        if len(part) <= 1:
-            print("변경 없음")
-            continue
-
-        count = 0
-        for i in range(1, len(part)):
-            before = int(part.iloc[i - 1]["lanes"])
-            after = int(part.iloc[i]["lanes"])
-
-            if before == after:
-                continue
-
-            offset = float(part.iloc[i]["offset_km_start"])
-            print(f"{offset:.3f} km : {before} → {after}")
-            count += 1
-
-        print(f"총 변경 지점: {count}개")
-
-
 def save_lane_profile(
     profiles: list[pd.DataFrame],
     output_path: Path = OUTPUT_PATH,
 ) -> pd.DataFrame:
     """방향별 profile을 합쳐 검증 후 parquet으로 저장한다."""
-    final = pd.concat(profiles, ignore_index=True)[
-        ["offset_km_start", "offset_km_end", "lanes", "direction"]
-    ]
+    config = yaml.safe_load(FLOW_PARAMS_PATH.read_text(encoding="utf-8"))
+    defaults = config["defaults"]
+    min_cell_km = float(defaults["min_cell_length_km"])
+    q_max_lane = fp.q_per_lane(
+        v_free_kmh=float(defaults["v_free_kmh"]),
+        w_back_kmh=float(defaults["w_back_kmh"]),
+        k_jam_veh_km_lane=float(defaults["k_jam_veh_km_lane"]),
+    )
+
+    final = pd.concat(profiles, ignore_index=True)[PROFILE_COLUMNS]
+
+    # 차로수 변경점은 CTM 셀 경계가 된다. 셀이 너무 짧으면 CFL 조건 때문에
+    # Δt 가 1초 미만이어야 해서 하루를 돌릴 수 없다.
+    before = len(final)
+    final = merge_short_segments(final, min_cell_km)
+    print()
+    print(
+        f"최소 셀 길이 {min_cell_km * 1000:.0f}m 병합: {before} -> {len(final)}개 구간 "
+        f"(Δt 상한 {max_dt_min(float(defaults['v_free_kmh']), min_cell_km):.2f}분)"
+    )
 
     direction_rank = {"UP": 0, "DOWN": 1}
     final["_direction_rank"] = final["direction"].map(direction_rank)
@@ -1204,6 +1086,25 @@ def save_lane_profile(
     )
 
     validate_lane_profile(final)
+
+    # 실측 교통량으로 반증: 한 차로가 q_max 를 넘길 수 없다.
+    if TRAFFIC_PATH.exists():
+        violations = check_lanes_against_observed(
+            final,
+            pd.read_parquet(TRAFFIC_PATH),
+            q_max_lane,
+        )
+
+        if not violations.empty:
+            print(violations.to_string(index=False))
+            raise RuntimeError(
+                f"관측 교통량이 차로수와 모순되는 구간 {len(violations)}개. "
+                "연결로(램프)가 본선으로 뽑혔는지 확인할 것."
+            )
+
+        print(f"관측 교통량 교차검증 통과 (차로당 q_max {q_max_lane:,.0f} 대/h)")
+    else:
+        print(f"관측 교통량 파일이 없어 교차검증을 건너뜀: {TRAFFIC_PATH}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     final.to_parquet(output_path, index=False)
@@ -1228,6 +1129,9 @@ def process_direction(
     if part.empty:
         raise RuntimeError(f"{direction}: 후보 링크가 없습니다.")
 
+    # 연결로(램프)를 본선 후보에서 뺀다. 본선이 안 덮는 구간만 램프로 메운다.
+    part, ramp_fallback = select_mainline_candidates(part)
+
     main_component = get_main_component(part)
 
     m_min = min(
@@ -1241,6 +1145,16 @@ def process_direction(
 
     print()
     print("=" * 16 + f" {direction} " + "=" * 16)
+    print(f"본선 후보 링크 수: {len(part)} (램프 보충 {len(ramp_fallback)}개)")
+
+    if not ramp_fallback.empty:
+        print("  본선이 덮지 못해 되살린 연결로 링크:")
+        for row in ramp_fallback.itertuples():
+            print(
+                f"    {row.link_id} {row.offset_km_start:.3f}~{row.offset_km_end:.3f} km "
+                f"lanes={row.lanes} connect={row.connect}"
+            )
+
     print(f"메인 컴포넌트 링크 수: {len(main_component)}")
     print(f"이정 범위: {m_min:.3f} ~ {m_max:.3f} km")
 
@@ -1282,7 +1196,18 @@ def main() -> int:
     ]
 
     final_profile = save_lane_profile(profiles)
-    print_lane_change_points(final_profile)
+
+    changes = lane_change_points(final_profile)
+    print()
+    print("========== 차로수 변경 지점 ==========")
+
+    for direction in DIRECTIONS:
+        part = changes[changes["direction"] == direction]
+        print()
+        print(f"--- {direction} ({len(part)}개) ---")
+
+        for row in part.itertuples():
+            print(f"{row.offset_km:.3f} km : {row.lanes_from} → {row.lanes_to}")
 
     return 0
 

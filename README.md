@@ -203,6 +203,12 @@ python scripts/estimate_flow_params.py
 ```
 
 ```bash
+# 차로수 (T-24, data/raw/nodelink/MOCT_LINK.shp 필요 — data/raw/README.md 참고)
+python scripts/audit_lane_mapping.py
+python scripts/build_lane_profile.py
+```
+
+```bash
 # 차종·온도·충전곡선 (T-10/T-11/T-14, 외부 API 불필요)
 python scripts/seed_vehicles.py
 ```

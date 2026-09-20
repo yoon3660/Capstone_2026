@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS cell (
     offset_km_end      REAL    NOT NULL,
     length_km          REAL    NOT NULL CHECK (length_km > 0),
     lanes              INTEGER NOT NULL CHECK (lanes >= 1),
-    lanes_source       TEXT    NOT NULL
+    -- 차로수의 출처. 기본값은 'assumed' 다 (모르는 값은 실측이라고 하지 않는다).
+    -- DEFAULT 가 있어야 기존 DB 에 ALTER TABLE 로 컬럼을 추가할 수 있고,
+    -- 그래야 새로 만든 DB 와 기존 DB 가 같게 동작한다 (io/db.py MIGRATIONS).
+    lanes_source       TEXT    NOT NULL DEFAULT 'assumed'
         CHECK (lanes_source IN ('measured', 'assumed')),
 
     v_free_kmh         REAL    NOT NULL CHECK (v_free_kmh > 0),
