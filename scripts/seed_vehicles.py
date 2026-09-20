@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import unicodedata
 from pathlib import Path
 
 import _bootstrap  # noqa: F401  (src 경로와 콘솔 인코딩을 먼저 준비한다)
@@ -30,8 +31,33 @@ from evdt.io.vehicles import (  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
 from evdt.world.charging import charge_time_min, temp_factors  # noqa: E402
 
-#: 표에 함께 보여줄 충전기 출력
+#: 표에 함께 보여줄 충전기 출력 (우리 휴게소에 가장 흔한 출력)
 REPORT_CHARGER_KW = 200.0
+
+#: 공개 실측치(10→80%)를 잰 조건. 비교 열은 반드시 이 출력으로 계산해야 한다.
+REFERENCE_CHARGER_KW = 350.0
+
+#: 실측치와 이만큼 넘게 벌어지면 표에 표시한다 (tests/test_charging.py 와 같은 값)
+REFERENCE_TOLERANCE = 0.15
+
+
+def _display_width(text: str) -> int:
+    """터미널에서 차지하는 칸 수. 한글·전각 문자는 두 칸이다.
+
+    파이썬 format 의 폭은 글자 수라서, 한글이 섞이면 표가 어긋난다.
+    """
+
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def _pad(text: str, width: int, align: str = "<") -> str:
+    """표시 폭 기준으로 채운다. 폭을 넘으면 자른다."""
+
+    while _display_width(text) > width:
+        text = text[:-1]
+
+    space = " " * (width - _display_width(text))
+    return text + space if align == "<" else space + text
 
 
 def main() -> int:
@@ -74,26 +100,47 @@ def main() -> int:
         for e in yaml.safe_load(VEHICLES_PATH.read_text(encoding="utf-8"))["vehicle_classes"]
     }
 
-    print(f"\n=== 충전시간 ({args.charger_kw:.0f}kW 충전기) ===")
-    header = (
-        f"{'차종':<34} {'배터리':>6} {'최대':>6} "
-        f"{'10→80':>7} {'공개':>6} {'20→80':>7} {'20→80(-' + f'{abs(args.temp):.0f}' + '°C)':>12}"
-    )
-    print(header)
+    print(f"\n=== 충전시간 ===   (20→80% 는 {args.charger_kw:.0f}kW 충전기 기준)")
+
+    columns = [
+        ("차종", 44, "<"),
+        ("배터리", 9, ">"),
+        ("차량최대", 10, ">"),
+        (f"10→80({REFERENCE_CHARGER_KW:.0f}kW)", 14, ">"),
+        ("공개실측", 10, ">"),
+        ("20→80", 8, ">"),
+        (f"20→80({args.temp:.0f}°C)", 14, ">"),
+    ]
+    print(" ".join(_pad(title, width, align) for title, width, align in columns))
+    print(" ".join("-" * width for _, width, _ in columns))
 
     for row in class_rows:
         curve = curve_segments(curve_rows, row["vclass_id"])
-        args_common = (row["battery_kwh"], row["vmax_kw"], args.charger_kw, curve)
-        t_10_80 = charge_time_min(0.1, 0.8, *args_common)
-        t_20_80 = charge_time_min(0.2, 0.8, *args_common)
-        t_cold = charge_time_min(0.2, 0.8, *args_common, charge_power_factor=cold_power_factor)
-        ref = reference[row["vclass_id"]]
-        mark = "" if abs(t_10_80 - ref) / ref <= 0.15 else "   <-- 실측과 15% 이상 차이"
+        vehicle = (row["battery_kwh"], row["vmax_kw"])
 
-        print(
-            f"{row['name']:<34} {row['battery_kwh']:>5.0f}kWh {row['vmax_kw']:>5.0f}kW "
-            f"{t_10_80:>6.1f}분 {ref:>5.0f}분 {t_20_80:>6.1f}분 {t_cold:>10.1f}분{mark}"
+        # 공개 실측치는 350kW 충전기에서 잰 값이다. 같은 조건으로 계산해야 비교가 된다.
+        t_10_80 = charge_time_min(0.1, 0.8, *vehicle, REFERENCE_CHARGER_KW, curve)
+        t_20_80 = charge_time_min(0.2, 0.8, *vehicle, args.charger_kw, curve)
+        t_cold = charge_time_min(
+            0.2, 0.8, *vehicle, args.charger_kw, curve, charge_power_factor=cold_power_factor
         )
+        ref = reference[row["vclass_id"]]
+        gap = abs(t_10_80 - ref) / ref
+        mark = "" if gap <= REFERENCE_TOLERANCE else f"   <-- 실측과 {gap:.0%} 차이"
+
+        cells = [
+            row["name"],
+            f"{row['battery_kwh']:.0f}kWh",
+            f"{row['vmax_kw']:.0f}kW",
+            f"{t_10_80:.1f}분",
+            f"{ref:.0f}분",
+            f"{t_20_80:.1f}분",
+            f"{t_cold:.1f}분",
+        ]
+        line = " ".join(
+            _pad(cell, width, align) for cell, (_, width, align) in zip(cells, columns, strict=True)
+        )
+        print(line + mark)
 
     print(
         f"\n외기온 {args.temp:.0f}°C 충전출력 계수 {cold_power_factor:.2f} "
