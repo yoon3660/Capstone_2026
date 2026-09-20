@@ -1,84 +1,135 @@
 # ===========================================================================
-#  CTM 교통류 파라미터 (T-08)
+#  CTM 교통류 파라미터 (T-08 / #24)
 #
-#  scripts/estimate_flow_params.py 가 VDS 실측으로 쓴다. 손으로 고치지 말 것.
-#  생성: 2026-09-19 14:09  /  기간: base202603, seollal2026
+#  defaults / sensitivity는 모델 설정값.
+#  DOWN / UP의 measured 값은 scripts/estimate_flow_params.py가 갱신한다.
+#  생성: 2026-09-20 08:41  /  기간: base202603, seollal2026
 #
-#  각 값의 source:
-#    measured  VDS 실측 (포털 구간속도·구간교통량)
-#    derived   삼각형 기본도 q = v·w·k/(v+w) 에서 역산 (§9.5)
-#    assumed   가정값. 실측으로 대체되지 않은 값
-#  assumed_was: 실측 전 가정값. 얼마나 틀렸는지가 기록으로 남는다.
+#  source:
+#    measured  VDS 또는 표준노드링크 실측
+#    derived   triangular FD 관계식으로 계산
+#    assumed   직접 관측하기 어려워 config 기준값 사용
+#
+#  triangular FD:
+#    q_max_per_lane = v_free * w_back * k_jam / (v_free + w_back)
 # ===========================================================================
 
-# 콘존별 추정값: data/processed/flow_params_by_conzone.parquet
-#   v_free_kmh, q_p95_veh_h (용량 하한), q_breakdown_veh_h (병목 용량), 사례 수
+dt_min: 1.0
+
+defaults:
+  v_free_kmh: 100.0
+  w_back_kmh: 18.0
+  k_jam_veh_km_lane: 144.0
+  lanes: 4
+  q_max_anchor_veh_h_lane: 2200.0
+
+sensitivity:
+  k_jam_veh_km_lane: [132.0, 144.0, 169.0]
+
+# 콘존별 VDS 분석:
+#   data/processed/flow_params_by_conzone.parquet
+#
+# 차로수:
+#   data/processed/lanes_gyeongbu.parquet
+#   값이 있으면 measured, 없으면 defaults.lanes 사용
 
 DOWN:
+
   v_free_kmh:
     value: 96.4
     source: measured
-    method: 새벽 3~5시 관측속도의 85퍼센타일, 콘존별 추정의 중앙값
+    method: 새벽 3~5시 관측속도의 85퍼센타일, 콘존별 추정값의 중앙값
     iqr: [94.1, 99.6]
     n_conzones: 57
     assumed_was: 100.0
-  q_max_veh_h_section:
-    value: null   # 차로 수가 구간마다 달라 대푯값 하나로 쓰면 안 된다. 콘존별 표를 쓸 것
-    source: measured (per conzone)
-    breakdown_flow:   # 정체 직전 1시간 교통량. 막힌 병목에서만 나온다 → 용량 추정
+
+  w_back_kmh:
+    value: 18.0
+    source: assumed
+    note: >-
+      정체파 후진 전파속도는 VDS 교통량만으로 안정적으로 직접
+      추정하지 않고 defaults의 기준값을 사용한다.
+
+  k_jam_veh_km_lane:
+    value: 144.0
+    source: assumed
+    implied_vehicle_spacing_m: 6.94
+    sensitivity: [132.0, 144.0, 169.0]
+    note: >-
+      정체밀도는 VDS만으로 직접 관측하기 어렵기 때문에
+      민감도 분석 대상으로 남긴다.
+
+  q_max_veh_h_lane:
+    value: 2184.2
+    source: derived
+    formula: v_free * w_back * k_jam / (v_free + w_back)
+    reference_anchor: 2200.0
+    note: >-
+      q_max는 독립 입력값이 아니라 v_free, w_back, k_jam으로
+      계산한다. reference_anchor는 파라미터 조합의
+      물리적 타당성을 검산하는 기준값이다.
+
+  observed_vds:
+    breakdown_flow_veh_h_section:
       median: 4000.2
       iqr: [2893.6, 5070.4]
       n_conzones: 16
-    p95_hourly_volume:   # 모든 콘존. 최댓값 대신 분위수. 수요라서 용량의 하한
+    p95_hourly_volume_veh_h_section:
       median: 3333.7
       iqr: [2736.1, 4736.5]
       n_conzones: 57
-    assumed_was: 2200.0   # 대/h/차로
-  k_jam_veh_km_lane:
-    value: 144.0
-    source: assumed
-    note: 점검지기로는 밀도가 관측되지 않아 이 데이터로도 안 나온다. 민감도 [132.0, 144.0, 169.0] (후속 이슈)
-  w_back_kmh:
-    value: 20.0
-    source: assumed
     note: >-
-      p95 교통량을 4차로로 나눠 역산하면 6.2 km/h 가 나온다. 문헌 범위(15~25)와
-      동떨어진 것은 p95 가 용량이 아니라 수요이기 때문이다. 셀 차로 수(T-09)가
-      정해지면 병목 구간 breakdown_flow 로 다시 역산한다: w = q·v / (k·v − q)
-    assumed_was: 20.0
+      위 값은 콘존 전체의 관측 교통량이다.
+      차로당 CTM q_max로 직접 사용하지 않는다.
 
 UP:
+
   v_free_kmh:
     value: 98.1
     source: measured
-    method: 새벽 3~5시 관측속도의 85퍼센타일, 콘존별 추정의 중앙값
+    method: 새벽 3~5시 관측속도의 85퍼센타일, 콘존별 추정값의 중앙값
     iqr: [94.2, 101.3]
     n_conzones: 57
     assumed_was: 100.0
-  q_max_veh_h_section:
-    value: null   # 차로 수가 구간마다 달라 대푯값 하나로 쓰면 안 된다. 콘존별 표를 쓸 것
-    source: measured (per conzone)
-    breakdown_flow:   # 정체 직전 1시간 교통량. 막힌 병목에서만 나온다 → 용량 추정
-      median: 4249.0
-      iqr: [2865.5, 4948.0]
-      n_conzones: 21
-    p95_hourly_volume:   # 모든 콘존. 최댓값 대신 분위수. 수요라서 용량의 하한
-      median: 3312.7
-      iqr: [2822.5, 4478.4]
-      n_conzones: 58
-    assumed_was: 2200.0   # 대/h/차로
+
+  w_back_kmh:
+    value: 18.0
+    source: assumed
+    note: >-
+      정체파 후진 전파속도는 VDS 교통량만으로 안정적으로 직접
+      추정하지 않고 defaults의 기준값을 사용한다.
+
   k_jam_veh_km_lane:
     value: 144.0
     source: assumed
-    note: 점검지기로는 밀도가 관측되지 않아 이 데이터로도 안 나온다. 민감도 [132.0, 144.0, 169.0] (후속 이슈)
-  w_back_kmh:
-    value: 20.0
-    source: assumed
+    implied_vehicle_spacing_m: 6.94
+    sensitivity: [132.0, 144.0, 169.0]
     note: >-
-      p95 교통량을 4차로로 나눠 역산하면 6.1 km/h 가 나온다. 문헌 범위(15~25)와
-      동떨어진 것은 p95 가 용량이 아니라 수요이기 때문이다. 셀 차로 수(T-09)가
-      정해지면 병목 구간 breakdown_flow 로 다시 역산한다: w = q·v / (k·v − q)
-    assumed_was: 20.0
+      정체밀도는 VDS만으로 직접 관측하기 어렵기 때문에
+      민감도 분석 대상으로 남긴다.
+
+  q_max_veh_h_lane:
+    value: 2190.1
+    source: derived
+    formula: v_free * w_back * k_jam / (v_free + w_back)
+    reference_anchor: 2200.0
+    note: >-
+      q_max는 독립 입력값이 아니라 v_free, w_back, k_jam으로
+      계산한다. reference_anchor는 파라미터 조합의
+      물리적 타당성을 검산하는 기준값이다.
+
+  observed_vds:
+    breakdown_flow_veh_h_section:
+      median: 4249.0
+      iqr: [2865.5, 4948.0]
+      n_conzones: 21
+    p95_hourly_volume_veh_h_section:
+      median: 3312.7
+      iqr: [2822.5, 4478.4]
+      n_conzones: 58
+    note: >-
+      위 값은 콘존 전체의 관측 교통량이다.
+      차로당 CTM q_max로 직접 사용하지 않는다.
 
 validation:
-  congestion_speed_kmh: 50.0   # 이 속도 미만인 시간을 '정체' 로 본다 (혼동행렬 기준)
+  congestion_speed_kmh: 50.0
