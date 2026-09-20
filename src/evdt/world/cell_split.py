@@ -212,6 +212,28 @@ def assign_lanes_to_cells(
     return result
 
 
+def station_cell_index(cells: Sequence[dict], offset_km: float) -> int:
+    """휴게소가 붙는 셀의 순번. **휴게소 지점에서 시작하는 셀**(하류 셀)이다.
+
+    휴게소는 셀 경계에 있으므로 앞뒤 두 셀에 걸친다. 하나를 고르라면 하류 셀이다 —
+    충전을 마친 차가 본선으로 **합류**하는 곳이 여기다. 휴게소로 **빠지는** 차는 그
+    바로 앞 셀의 끝에서 나간다. CTM 을 연결할 때 이 규칙을 따를 것.
+
+    휴게소가 코리도 끝에 있으면 하류 셀이 없으므로 끝나는 셀을 돌려준다.
+    """
+
+    for i, cell in enumerate(cells):
+        if abs(float(cell["offset_km_start"]) - offset_km) < 1e-6:
+            return i
+
+    last = len(cells) - 1
+
+    if last >= 0 and abs(float(cells[last]["offset_km_end"]) - offset_km) < 1e-6:
+        return last
+
+    raise ValueError(f"{offset_km} km 는 어떤 셀의 경계도 아닙니다.")
+
+
 def build_direction_cells(
     length_km: float,
     station_offsets: Sequence[float],

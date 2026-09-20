@@ -8,12 +8,9 @@
 from evdt.io.db import get_conn
 from evdt.paths import default_db_path
 
-#: scripts/smoke_run.py 가 넣는 가짜 데이터의 source. 진짜 코리도에 있으면 안 된다.
+#: 예전 scripts/smoke_run.py 가 넣던 가짜 휴게소의 source. 지금은 더 만들지 않는다
+#: (smoke_run 이 진짜 휴게소를 코드로 골라 쓴다). 예전 DB 에 남아 있을 수 있어 가드만 둔다.
 SMOKE_SOURCE = "smoke"
-
-#: 가짜 휴게소는 이 코리도에만 둔다. 진짜 코리도(gyeongbu_up/down)와 섞이면 셀 분할·
-#: 충전소 탐색·배정이 전부 가짜 휴게소를 진짜로 알고 쓴다.
-SMOKE_CORRIDOR_ID = "smoke_down"
 
 
 def require_no_smoke(conn, corridor_id: str) -> None:
@@ -25,9 +22,6 @@ def require_no_smoke(conn, corridor_id: str) -> None:
         찾는 데 오래 걸렸다. 한 곳에서만 걸러내면 다른 읽는 곳은 여전히 오염된 채로
         돈다. 오염 자체를 드러내고 지우게 하는 것이 맞다.
     """
-
-    if corridor_id == SMOKE_CORRIDOR_ID:
-        return
 
     rows = conn.execute(
         "SELECT station_id, name, offset_km FROM station WHERE corridor_id = ? AND source = ?",

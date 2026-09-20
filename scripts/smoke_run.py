@@ -5,8 +5,13 @@ verify_setup.py 는 임시 폴더에서 돌고 흔적을 지운다. 이 스크�
 
     python scripts/smoke_run.py
 
-휴게소와 도착 수요는 여전히 가짜다. 하지만 **대기시간은 진짜다** — T-16 의 DES 가
-실제로 큐를 돌려서 나온 값이다 (예전에는 rng.gauss 로 지어낸 숫자였다).
+휴게소와 충전기는 **진짜**다 — T-05/T-06 이 적재한 경부선 하행 휴게소를 도로공사
+휴게소 코드(station.source_key)로 골라 쓴다. 도착 수요만 가짜다. 대기시간은 T-16 의
+DES 가 실제로 큐를 돌려서 나온 값이다.
+
+예전에는 가짜 휴게소 3곳을 만들어 **진짜 하행 코리도에 넣었다.** 그 좌표와 거리는
+지어낸 값이었고(가짜 안성 62.0 km ↔ 진짜 53.5 km), 셀 분할이 그걸 진짜로 알고
+앵커로 썼다. 가짜 데이터는 더 만들지 않는다.
 확인하려는 것은 배관이 이어져 있는가다:
     config → run 등록 → DB 에서 충전기 대수 → DES → Parquet → KPI → DuckDB
 
@@ -18,18 +23,13 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
-import pandas as pd  # noqa: E402
 from _bootstrap import ROOT  # noqa: E402  (src 경로와 콘솔 인코딩을 먼저 준비한다)
 
 from evdt.config import ScenarioConfig  # noqa: E402
-from evdt.io.db import get_conn, read_table, upsert_df  # noqa: E402
+from evdt.io.db import get_conn, read_table  # noqa: E402
 from evdt.io.loaders import duck_connect  # noqa: E402
 from evdt.io.run_registry import RunContext  # noqa: E402
-from evdt.io.stations import (  # noqa: E402
-    SMOKE_CORRIDOR_ID,
-    SMOKE_SOURCE,
-    read_station_chargers,
-)
+from evdt.io.stations import SMOKE_SOURCE, read_station_chargers  # noqa: E402
 from evdt.io.vehicles import curve_segments, load_from_db, temp_table  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
 from evdt.world.charging import temp_factors  # noqa: E402
@@ -42,67 +42,62 @@ from evdt.world.sim import (  # noqa: E402
 
 SMOKE_SEED = 9999
 
-#: 가짜 수요 대수. 이 3곳의 하루 처리 가능 대수는 약 600대(충전기 12기 × 24시간,
-#: -5°C 에서 한 대 28분)인데, 60% 를 안성으로 몰고 오전 9시에 집중시키기 때문에
-#: 600을 넣으면 큐가 발산해서 대기가 30시간까지 간다. 예전에는 숫자를 지어냈기
-#: 때문에 이 모순이 드러나지 않았다. 시나리오 종료(24시) 안에 끝나는 값으로 잡는다.
-N_EV = 150
+#: 쓸 휴게소 (경부선 하행, 도로공사 휴게소 코드). 첫 번째로 수요를 몰아서 쏠림을 본다.
+#: 이름·ID 가 아니라 코드로 고르는 이유: 이름은 표기가 바뀌고(서울만남의광장 ↔
+#: 서울만남휴게소), station_id 는 적재 방식에 따라 만들어진 값이다. 코드는 공급처가 준다.
+STATION_KEYS = (
+    "A00005",   # 안성휴게소
+    "A00034",   # 천안호두휴게소
+    "A00103",   # 옥천휴게소
+)
+CORRIDOR_ID = "gyeongbu_down"
+
+#: 가짜 수요 대수. 세 곳 충전기 합계와 −5°C 충전시간으로 정한다 (아래 capacity 경고 참조).
+#: 예전 가짜 휴게소(12기)에 맞춰 둔 150 은 진짜 휴게소(28기)에는 너무 적다.
+N_EV = 300
 
 #: 도착 시각 분포 (분). 오전 9시 전후로 몰리는 가짜 프로파일.
 PEAK_MIN = 540.0
 PEAK_SD_MIN = 150.0
-STATIONS = [
-    # (station_id, 이름, 기점 거리 km, 위도, 경도, 충전기 기수)
-    ("smoke_anseong", "안성휴게소(가짜)", 62.0, 37.0075, 127.2700, 4),
-    ("smoke_cheonan", "천안휴게소(가짜)", 92.0, 36.8200, 127.1400, 2),
-    ("smoke_okcheon", "옥천휴게소(가짜)", 185.0, 36.3100, 127.5700, 6),
-]
 
 
-def ensure_smoke_stations(db: Path) -> None:
-    """가짜 휴게소 3곳을 **가짜 전용 코리도**에 넣는다.
+def remove_legacy_fakes(db: Path) -> None:
+    """예전 smoke_run 이 남긴 가짜 휴게소·충전기를 지운다 (있으면).
 
-    예전에는 gyeongbu_down(진짜 하행)에 바로 넣었다. 그 뒤 셀 분할이 이 3곳을 진짜
-    휴게소로 알고 앵커로 썼고, 천안(가짜) 92.000 km 가 진짜 천안호두휴게소 91.363 km
-    와 637 m 붙어 있어서 원인을 알 수 없는 짧은 셀과 분할 실패가 생겼다. 팀원이 그걸
-    찾느라 오래 헤맸다. 가짜는 진짜와 같은 이름공간에 두지 않는다.
-
-    예전 방식으로 진짜 코리도에 들어가 있던 가짜 휴게소는 여기서 같이 지운다.
+    진짜 코리도를 읽는 코드는 이것들이 섞여 있으면 멈추도록 돼 있다
+    (evdt.io.stations.require_no_smoke). 여기서 한 번 정리해 준다.
     """
-    stations = pd.DataFrame([
-        {
-            "station_id": sid, "corridor_id": SMOKE_CORRIDOR_ID, "name": name,
-            "direction": "DOWN", "offset_km": km, "lat": lat, "lon": lon,
-            "source": SMOKE_SOURCE,
-        }
-        for sid, name, km, lat, lon, _ in STATIONS
-    ])
-    chargers = pd.DataFrame([
-        {
-            "charger_id": f"{sid}_200", "station_id": sid, "power_kw": 200.0,
-            "n_units": units, "source": SMOKE_SOURCE,
-        }
-        for sid, _, _, _, _, units in STATIONS
-    ])
-    corridor = pd.DataFrame([{
-        "corridor_id": SMOKE_CORRIDOR_ID, "name": "스모크 테스트 (가짜)",
-        "direction": "DOWN", "origin_name": "smoke", "dest_name": "smoke",
-        "length_km": max(km for _, _, km, *_ in STATIONS) + 20.0,
-        "note": "scripts/smoke_run.py 전용. 진짜 코리도와 섞지 않는다.",
-    }])
-
     with get_conn(db) as conn:
-        healed = conn.execute(
-            "DELETE FROM station WHERE source = ? AND corridor_id != ?",
-            (SMOKE_SOURCE, SMOKE_CORRIDOR_ID),
+        removed = conn.execute(
+            "DELETE FROM station WHERE source = ?", (SMOKE_SOURCE,)
         ).rowcount
+        conn.execute("DELETE FROM corridor WHERE corridor_id = 'smoke_down'")
 
-        if healed:
-            print(f"진짜 코리도에 섞여 있던 예전 가짜 휴게소 {healed}곳을 지웠다.")
+    if removed:
+        print(f"예전 가짜 휴게소 {removed}곳을 지웠다 (충전기는 CASCADE).")
 
-        upsert_df(conn, "corridor", corridor)
-        upsert_df(conn, "station", stations)
-        upsert_df(conn, "charger", chargers)
+
+def pick_real_stations(conn) -> list[str]:
+    """STATION_KEYS 순서대로 진짜 station_id 를 돌려준다. 하나라도 없으면 멈춘다."""
+
+    placeholders = ",".join("?" * len(STATION_KEYS))
+    found = {
+        row[0]: row[1]
+        for row in conn.execute(
+            f"SELECT source_key, station_id FROM station"
+            f" WHERE corridor_id = ? AND source_key IN ({placeholders})",
+            (CORRIDOR_ID, *STATION_KEYS),
+        )
+    }
+    missing = [k for k in STATION_KEYS if k not in found]
+
+    if missing:
+        raise SystemExit(
+            f"{CORRIDOR_ID} 에 휴게소 {missing} 이 없다. 먼저 실행할 것:\n"
+            "    python scripts/load_chargers.py"
+        )
+
+    return [found[k] for k in STATION_KEYS]
 
 
 def build_arrivals(cfg, rng, stations, vclasses, curves, charge_power_factor):
@@ -157,7 +152,7 @@ def main() -> int:
         print(f"DB 가 없다: {db}\n먼저 실행할 것:  python scripts/init_db.py")
         return 1
 
-    ensure_smoke_stations(db)
+    remove_legacy_fakes(db)
 
     cfg = ScenarioConfig.from_yaml(ROOT / "config" / "scenario_seollal_down.yaml")
     rng = random.Random(SMOKE_SEED)
@@ -167,12 +162,12 @@ def main() -> int:
 
     # 충전기 대수는 DB 에서 읽는다. 코드에 박으면 휴게소마다 다른 값이 뭉개진다.
     with get_conn(db, readonly=True) as conn:
-        station_rows, charger_rows = read_station_chargers(
-            conn, station_ids=[sid for sid, *_ in STATIONS]
-        )
+        station_ids = pick_real_stations(conn)
+        station_rows, charger_rows = read_station_chargers(conn, station_ids=station_ids)
         vclasses, curves, temps = load_from_db(conn)
 
-    stations = station_specs(station_rows, charger_rows)
+    order = {sid: i for i, sid in enumerate(station_ids)}
+    stations = sorted(station_specs(station_rows, charger_rows), key=lambda s: order[s.station_id])
     check_queue_config(cfg.queue.discipline, cfg.queue.charger_select)
 
     _, charge_power_factor = temp_factors(cfg.environment.temp_c, temp_table(temps))

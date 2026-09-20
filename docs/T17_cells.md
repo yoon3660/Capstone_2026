@@ -1,6 +1,6 @@
 # T-17 CTM 셀 분할
 
-`src/evdt/world/cell_split.py` · `scripts/seed_cells.py` · 테스트 `tests/test_cell_split.py` (24건)
+`src/evdt/world/cell_split.py` · `scripts/seed_cells.py` · 테스트 `tests/test_cell_split.py` (28건)
 
 ```bash
 python scripts/seed_cells.py                    # 검증만
@@ -120,11 +120,14 @@ T-09b 차로 프로파일의 변경 지점은 최소 0.501 km 간격이다(상�
 
 | | |
 |---|---|
-| 격리 | 가짜 휴게소는 **전용 코리도 `smoke_down`** 에만 둔다. 진짜와 같은 이름공간에 두지 않는다 |
-| 가드 | 진짜 코리도를 읽는 모든 곳(`read_station_chargers`, `find_stations_on_route`)이 가짜가 섞여 있으면 **멈추고 무엇이 섞였는지와 지우는 명령을 알려준다** |
-| 자동 정리 | `smoke_run.py` 가 실행될 때 진짜 코리도에 남아 있는 예전 가짜 휴게소를 지운다 |
-| 정리 스크립트 | `smoke_clean.py` 가 전용 코리도와 예전 방식의 가짜 휴게소를 모두 지운다 |
-| 테스트 | 진짜 코리도에 가짜가 있으면 멈추는지, 전용 코리도는 정상으로 읽히는지 |
+| 가짜를 안 만든다 | `smoke_run.py` 가 **진짜 하행 휴게소 3곳을 도로공사 휴게소 코드(`source_key`)로 골라** 쓴다 (안성 A00005, 천안호두 A00034, 옥천 A00103). 가짜 휴게소·충전기는 더 만들지 않는다 |
+| 가드 | 진짜 코리도를 읽는 모든 곳(`read_station_chargers`, `find_stations_on_route`, `load_chargers.py`, `audit_charger_counts.py`)이 예전 가짜가 섞여 있으면 **멈추고 무엇이 섞였는지와 지우는 명령을 알려준다** |
+| 자동 정리 | `smoke_run.py` 가 실행될 때 예전 가짜 휴게소를 지운다 |
+| 테스트 | 진짜 코리도에 가짜가 있으면 멈추는지 |
+
+처음에는 가짜 휴게소를 전용 코리도(`smoke_down`)로 격리했다가, 진짜 휴게소를 쓰기로 하면서
+없앴다. 가짜 데이터를 격리하는 것보다 안 만드는 것이 단순하다. 가짜 데이터가 다른 곳에
+준 영향 전체는 `docs/fake_data_audit.md` 에 따로 정리했다.
 
 **조용히 걸러내지 않은 이유:** 한 곳에서만 걸러내면 다른 읽는 곳은 여전히 오염된 채로
 돈다. 셀 분할만 고치고 충전소 탐색(T-21)은 여전히 가짜를 쓰는 식이다. 오염 자체를
@@ -132,11 +135,11 @@ T-09b 차로 프로파일의 변경 지점은 최소 0.501 km 간격이다(상�
 
 ### 이미 오염된 DB
 
-셋 중 하나를 하면 된다.
+둘 중 하나를 하면 된다.
 
 ```bash
 python scripts/smoke_clean.py   # 가짜 데이터를 전부 지운다
-python scripts/smoke_run.py     # 자동 정리 후 전용 코리도에 다시 만든다
+python scripts/smoke_run.py     # 자동으로 지우고 진짜 휴게소로 돈다
 ```
 
 셀을 이미 가짜 앵커로 저장했다면 다시 만든다.
@@ -156,6 +159,11 @@ python scripts/seed_cells.py --write --replace
 - **`cell_length_km` 는 `estimate_flow_params.py` 템플릿에도 넣었다.** 이 스크립트는
   config 파일 전체를 다시 쓰기 때문에 yaml 에만 넣으면 다음 실행 때 사라진다
   (develop/24 리뷰 항목 8 — config 가 손으로 쓰는 설정이자 생성물이다).
+- **`station.cell_id` 를 채운다.** 비워 두면 `validate_master` 가 "모든 휴게소는 셀 하나에
+  매핑된다" 를 검사하다가 35곳 전부 실패한다. `seed_vehicles.py` 가 이 검사를 부르므로
+  **셀을 처음 저장한 순간부터 차종 적재가 깨졌다.** 규칙은 휴게소 지점에서 시작하는 셀
+  (하류 셀, 충전을 마친 차가 합류하는 곳)이고, 빠지는 차는 그 앞 셀 끝에서 나간다.
+  저장 뒤 같은 트랜잭션 안에서 `validate_master` 를 돌려 실패하면 롤백한다.
 - **노선 길이 대조는 원래 구현에 이미 있었다.** DB `corridor.length_km` 와 경로 파일이
   1 m 이상 다르면 멈춘다. `docs/debug_lanes_log.md` §3-① 에서 "후속으로 넣어야 한다" 고
   적었던 이정축 어긋남 감지다.
@@ -165,7 +173,5 @@ python scripts/seed_cells.py --write --replace
 - **dt 를 올릴 여지가 있다.** L = 1.0 km 에 v_free 98 km/h 면 CFL 이 허용하는 dt 는
   약 0.6분이다. 가장 짧은 셀(0.559 km)이 걸리므로 실제 상한은 약 0.34분. 0.2 → 0.3 으로
   올리면 셀 업데이트가 1/3 줄어든다. CTM 을 올린 뒤 계산 시간을 보고 정할 것.
-- **`station.cell_id` 를 채우지 않는다.** 휴게소가 어느 셀 경계에 있는지는 offset 으로
-  찾을 수 있지만, 스키마에 칸이 있으니 CTM 연결 때 채우는 것이 좋다.
 - **IC 를 앵커로.** 팀원 코멘트대로 다음 스프린트에서 고려. 서울 근처 간격 문제는
   §3 의 "짧은 셀 한 칸 허용" 규칙으로 풀 수 있다.

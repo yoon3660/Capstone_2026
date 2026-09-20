@@ -23,11 +23,11 @@ import _bootstrap  # noqa: F401
 import pandas as pd
 import yaml
 
-from evdt.io.db import get_conn, upsert_df
+from evdt.io.db import get_conn, upsert_df, validate_master
 from evdt.io.flow_params import q_per_lane
 from evdt.io.route import GyeongbuRoute
 from evdt.io.stations import read_station_chargers
-from evdt.world.cell_split import build_direction_cells, cfl_min_cell_km
+from evdt.world.cell_split import build_direction_cells, cfl_min_cell_km, station_cell_index
 from evdt.world.geometry import Polyline
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +80,7 @@ def build_cells() -> tuple[pd.DataFrame, dict]:
             )
 
     rows = []
+    station_cells: list[tuple[str, str]] = []
     report: dict = {"length_km": length_km, "cell_length_km": cell_length_km, "dt_min": dt_min}
 
     for direction in DIRECTIONS:
@@ -140,6 +141,12 @@ def build_cells() -> tuple[pd.DataFrame, dict]:
                 }
             )
 
+        # 휴게소 → 셀. 비워 두면 validate_master 가 모든 휴게소를 "매핑 안 됨" 으로
+        # 실패시켜 seed_vehicles.py 가 깨진다 (셀을 처음 저장한 뒤부터).
+        for station in stations[direction]:
+            index = station_cell_index(cells, float(station["offset_km"]))
+            station_cells.append((f"{corridor_id}_{index:04d}", station["station_id"]))
+
         short = [c for c in cells if c["length_km"] < cell_length_km - EPS]
         report[direction] = {
             "cells": len(cells),
@@ -151,6 +158,7 @@ def build_cells() -> tuple[pd.DataFrame, dict]:
 
     df = pd.DataFrame(rows)
     validate_cells(df, stations, length_km, report)
+    report["station_cells"] = station_cells
     return df, report
 
 
@@ -267,6 +275,7 @@ def main() -> None:
             conn.execute("DELETE FROM cell WHERE corridor_id IN ('gyeongbu_up', 'gyeongbu_down')")
 
         upsert_df(conn, "cell", df)
+        conn.executemany("UPDATE station SET cell_id = ? WHERE station_id = ?", report["station_cells"])
 
         saved = conn.execute(
             "SELECT COUNT(*) FROM cell WHERE corridor_id IN ('gyeongbu_up', 'gyeongbu_down')"
@@ -275,8 +284,15 @@ def main() -> None:
         if saved != len(df):
             raise SystemExit(f"DB 저장 건수 불일치: 예상 {len(df)}, 실제 {saved}")
 
+        # 저장한 결과가 마스터 데이터 규칙을 깨지 않는지 같은 트랜잭션 안에서 확인한다.
+        # 깨지면 예외로 롤백된다 — 셀만 들어가고 휴게소 매핑이 빠진 DB 를 남기지 않는다.
+        problems = validate_master(conn)
+
+        if problems:
+            raise SystemExit("validate_master 실패 (롤백함):\n  - " + "\n  - ".join(problems))
+
     action = f"기존 {existing}개를 지우고 " if existing else ""
-    print(f"\nDB 저장 완료: {action}{saved}개 셀")
+    print(f"\nDB 저장 완료: {action}{saved}개 셀, 휴게소 {len(report['station_cells'])}곳 셀 매핑")
 
 
 if __name__ == "__main__":

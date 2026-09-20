@@ -19,6 +19,7 @@ from evdt.world.cell_split import (
     lane_change_offsets,
     place_anchors,
     split_anchor_intervals,
+    station_cell_index,
 )
 
 L = 1.0          # 셀 목표 길이
@@ -330,41 +331,81 @@ def test_smoke_station_in_a_real_corridor_is_refused(seeded_db):
             read_station_chargers(conn, corridor_id="gyeongbu_down")
 
 
-def test_smoke_corridor_itself_is_readable(seeded_db):
-    from evdt.io.db import get_conn, upsert_df
-    from evdt.io.stations import SMOKE_CORRIDOR_ID, SMOKE_SOURCE, read_station_chargers
-
-    with get_conn(seeded_db) as conn:
-        upsert_df(
-            conn,
-            "corridor",
-            pd.DataFrame(
-                [
-                    {
-                        "corridor_id": SMOKE_CORRIDOR_ID, "name": "스모크 테스트 (가짜)",
-                        "direction": "DOWN", "origin_name": "smoke", "dest_name": "smoke",
-                        "length_km": 200.0,
-                    }
-                ]
-            ),
-        )
-        upsert_df(
-            conn,
-            "station",
-            pd.DataFrame(
-                [
-                    {
-                        "station_id": "smoke_a", "corridor_id": SMOKE_CORRIDOR_ID,
-                        "name": "가짜", "direction": "DOWN", "offset_km": 62.0,
-                        "lat": 37.0, "lon": 127.27, "source": SMOKE_SOURCE,
-                    }
-                ]
-            ),
-        )
+def test_clean_real_corridor_reads_normally(seeded_db):
+    from evdt.io.db import get_conn
+    from evdt.io.stations import read_station_chargers
 
     with get_conn(seeded_db, readonly=True) as conn:
-        smoke_stations, _ = read_station_chargers(conn, corridor_id=SMOKE_CORRIDOR_ID)
-        real_stations, _ = read_station_chargers(conn, corridor_id="gyeongbu_down")
+        stations, chargers = read_station_chargers(conn, corridor_id="gyeongbu_down")
 
-    assert [s["station_id"] for s in smoke_stations] == ["smoke_a"]
-    assert [s["station_id"] for s in real_stations] == ["st_anseong"]
+    assert [s["station_id"] for s in stations] == ["st_anseong"]
+    assert [c["n_units"] for c in chargers] == [4]
+
+
+# ---------------------------------------------------------------------------
+# 휴게소 → 셀 매핑 (station.cell_id)
+# ---------------------------------------------------------------------------
+
+
+def test_station_maps_to_the_cell_that_starts_at_it():
+    """경계에 있는 휴게소는 하류 셀(합류하는 곳)에 붙는다."""
+
+    cells, _ = _build(10.0, [4.0], _segments([(0.0, 10.0, 4, "measured")]))
+    index = station_cell_index(cells, 4.0)
+
+    assert cells[index]["offset_km_start"] == 4.0
+
+
+def test_station_at_the_corridor_end_maps_to_the_last_cell():
+    cells, _ = _build(10.0, [10.0], _segments([(0.0, 10.0, 4, "measured")]))
+
+    assert station_cell_index(cells, 10.0) == len(cells) - 1
+
+
+def test_station_off_any_boundary_is_rejected():
+    cells, _ = _build(10.0, [4.0], _segments([(0.0, 10.0, 4, "measured")]))
+
+    with pytest.raises(ValueError, match="경계"):
+        station_cell_index(cells, 4.5)
+
+
+def test_writing_cells_without_station_mapping_breaks_validate_master(seeded_db):
+    """셀만 저장하고 station.cell_id 를 비워 두면 validate_master 가 실패한다.
+
+    seed_vehicles.py 가 validate_master 를 부르므로, 셀을 처음 저장한 뒤부터
+    차종 적재가 깨졌다. seed_cells.py 가 매핑까지 같이 쓰는 이유다.
+    """
+
+    from evdt.io.db import get_conn, upsert_df, validate_master
+    from evdt.io.flow_params import q_per_lane
+
+    length_km = 416.0
+    cells, _ = _build(length_km, [62.0], _segments([(0.0, length_km, 4, "measured")]))
+    q_lane = q_per_lane(100.0, 18.0, 144.0)
+    rows = pd.DataFrame(
+        [
+            {
+                "cell_id": f"gyeongbu_down_{i:04d}", "corridor_id": "gyeongbu_down", "seq": i,
+                "offset_km_start": c["offset_km_start"], "offset_km_end": c["offset_km_end"],
+                "length_km": c["length_km"], "lanes": c["lanes"], "lanes_source": c["lanes_source"],
+                "v_free_kmh": 100.0, "w_back_kmh": 18.0, "k_jam_veh_km_lane": 144.0,
+                "q_max_veh_h": c["lanes"] * q_lane,
+                "lat_start": 36.0, "lon_start": 127.0, "lat_end": 36.0, "lon_end": 127.0,
+            }
+            for i, c in enumerate(cells)
+        ]
+    )
+
+    with get_conn(seeded_db) as conn:
+        upsert_df(conn, "cell", rows)
+        before = validate_master(conn)
+
+        index = station_cell_index(cells, 62.0)
+        conn.execute(
+            "UPDATE station SET cell_id = ? WHERE station_id = ?",
+            (f"gyeongbu_down_{index:04d}", "st_anseong"),
+        )
+        after = validate_master(conn)
+
+    assert any("st_anseong" in p and "매핑" in p for p in before)
+    assert after == []
