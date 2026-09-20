@@ -124,6 +124,7 @@ def test_charging_probability_boundaries():
     assert should_charge(
         charging_needed=True,
         current_soc=0.5,
+        target_soc=0.8,
         random_value=0.0,
         charge_prob=0.0,
         low_soc_threshold=0.2,
@@ -133,6 +134,7 @@ def test_charging_probability_boundaries():
     assert should_charge(
         charging_needed=True,
         current_soc=0.5,
+        target_soc=0.8,
         random_value=0.99,
         charge_prob=1.0,
         low_soc_threshold=0.2,
@@ -148,10 +150,10 @@ def test_charging_need_changes_probability():
     }
 
     # 충전 필요 조건 충족 → 95% 확률 적용
-    assert should_charge(charging_needed=True, **common) is True
+    assert should_charge(charging_needed=True, target_soc=0.8, **common) is True
 
     # 충전 필요 조건 미충족 → 충전하지 않음
-    assert should_charge(charging_needed=False, **common) is False
+    assert should_charge(charging_needed=False, target_soc=0.8, **common) is False
 
 
 def test_low_soc_forces_charging():
@@ -159,6 +161,7 @@ def test_low_soc_forces_charging():
     assert should_charge(
         charging_needed=False,
         current_soc=0.19,
+        target_soc=0.8,
         random_value=0.99,
         charge_prob=0.0,
         low_soc_threshold=0.2,
@@ -168,6 +171,7 @@ def test_low_soc_forces_charging():
     assert should_charge(
         charging_needed=False,
         current_soc=0.2,
+        target_soc=0.8,
         random_value=0.99,
         charge_prob=0.0,
         low_soc_threshold=0.2,
@@ -292,6 +296,7 @@ def test_charging_decision_with_scenario_config():
     assert should_charge(
         charging_needed=charging_needed,
         current_soc=common["soc"],
+        target_soc=0.8,
         random_value=0.5,
         charge_prob=cfg.demand.charge_prob,
         low_soc_threshold=cfg.demand.low_soc_threshold,
@@ -349,6 +354,7 @@ def test_cold_weather_increases_charging_fraction():
                 if should_charge(
                     charging_needed=needed,
                     current_soc=soc,
+                    target_soc=0.8,
                     random_value=0.5,
                     charge_prob=cfg.demand.charge_prob,
                     low_soc_threshold=cfg.demand.low_soc_threshold,
@@ -387,3 +393,32 @@ def test_negative_distance_raises_error():
             distance_to_next_km=50.0,
             distance_to_dest_km=-5.0,
         )
+
+def test_skip_charging_when_target_already_reached():
+    common = {
+        "charging_needed": True,
+        "random_value": 0.0,
+        "charge_prob": 1.0,
+        "low_soc_threshold": 0.2,
+    }
+
+    # 현재 50%, 목표 35% → 이미 목표를 넘었으므로 충전 생략
+    assert should_charge(
+        current_soc=0.5,
+        target_soc=0.35,
+        **common,
+    ) is False
+
+    # 현재 50%, 목표 50% → 추가로 충전할 필요 없음
+    assert should_charge(
+        current_soc=0.5,
+        target_soc=0.5,
+        **common,
+    ) is False
+
+    # 현재 50%, 목표 70% → 충전 필요, 확률 100%이므로 충전
+    assert should_charge(
+        current_soc=0.5,
+        target_soc=0.7,
+        **common,
+    ) is True

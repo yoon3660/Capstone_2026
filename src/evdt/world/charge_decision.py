@@ -111,14 +111,18 @@ def can_reach_destination(
 def should_charge(
     charging_needed: bool,
     current_soc: float,
+    target_soc: float,
     random_value: float,
     charge_prob: float,
     low_soc_threshold: float,
 ) -> bool:
-    """현재 SoC와 충전 필요성에 따라 실제 충전 여부를 결정한다."""
+    """충전 필요성, 목표 SoC, 확률을 바탕으로 실제 충전 여부를 결정한다."""
 
     if not 0.0 <= current_soc <= 1.0:
         raise ValueError("현재 SoC는 0~1이어야 합니다.")
+
+    if not 0.0 <= target_soc <= 1.0:
+        raise ValueError("목표 SoC는 0~1이어야 합니다.")
 
     if not 0.0 <= random_value < 1.0:
         raise ValueError("난수는 0 이상 1 미만이어야 합니다.")
@@ -129,13 +133,15 @@ def should_charge(
     if not 0.0 <= low_soc_threshold <= 1.0:
         raise ValueError("낮은 SoC 기준은 0~1이어야 합니다.")
 
-    # 현재 SoC가 기준 미만이면 확률과 관계없이 충전
+    # 이미 목표 SoC 이상이면 충전할 에너지가 없으므로 건너뛴다.
+    if current_soc >= target_soc:
+        return False
+
+    # 현재 SoC가 기준 미만이면 확률과 관계없이 충전한다.
     if current_soc < low_soc_threshold:
         return True
 
-    # 충전 필요 조건을 만족하지 않으면 충전하지 않음
     if not charging_needed:
         return False
 
-    # 충전 필요 조건을 만족하면 설정된 확률 적용
     return random_value < charge_prob
