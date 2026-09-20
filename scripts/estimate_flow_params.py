@@ -59,6 +59,9 @@ def main() -> int:
         defaults["q_max_anchor_veh_h_lane"]
     )
     min_cell_km = float(defaults["min_cell_length_km"])
+    # CTM 셀 목표 길이. min_cell_length_km(차로 프로파일 병합 임계값)와 다른 값이다.
+    # 둘을 한 키로 읽던 시절 셀이 전부 0.5 km 로 쪼개져 1,555 셀이 나왔다 (debug/cells).
+    cell_length_km = float(defaults.get("cell_length_km", 1.0))
 
     # CFL: v_free * dt <= 셀 길이. 어기면 한 스텝에 셀을 건너뛴다.
     dt_limit_min = max_dt_min(default_v_free, min_cell_km)
@@ -126,8 +129,11 @@ def main() -> int:
         f"  k_jam_veh_km_lane: {k_jam}",
         f"  lanes: {default_lanes}",
         f"  q_max_anchor_veh_h_lane: {q_anchor}",
-        "  # 차로수 변경점이 셀 경계가 된다. 이보다 짧은 구간은 이웃에 병합한다.",
+        "  # 차로 프로파일 병합 임계값. 이보다 짧은 차로 구간은 이웃에 병합한다.",
         f"  min_cell_length_km: {min_cell_km}",
+        "  # CTM 셀 목표 길이. 앵커 사이 간격을 floor(g / 이 값) 등분한다.",
+        "  # 위 값과 다르다 — 같은 키로 읽으면 셀이 전부 0.5 km 가 된다 (docs/T17_cells.md).",
+        f"  cell_length_km: {cell_length_km}",
         "",
         "sensitivity:",
         f"  k_jam_veh_km_lane: {k_jam_candidates}",

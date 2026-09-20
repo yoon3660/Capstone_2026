@@ -175,7 +175,7 @@ python scripts/init_db.py --seed-corridor   # DB 생성 (여러 번 실행해도
 python scripts/db_peek.py                   # 테이블 목록과 행 수
 python scripts/db_peek.py station           # 한 테이블 들여다보기
 python scripts/db_peek.py --schema cell     # 컬럼 정의와 CHECK 제약
-python scripts/smoke_run.py                 # 가짜 데이터로 파이프라인 한 바퀴
+python scripts/smoke_run.py                 # 가짜 데이터로 파이프라인 한 바퀴 (전용 코리도 smoke_down)
 python scripts/smoke_clean.py               # smoke_run 흔적 삭제
 python scripts/verify_setup.py              # 환경 셀프 체크 14건
 python -m pytest -q                         # 테스트
@@ -206,6 +206,7 @@ python scripts/estimate_flow_params.py
 # 차로수 (T-24, data/raw/nodelink/MOCT_LINK.shp 필요 — data/raw/README.md 참고)
 python scripts/audit_lane_mapping.py
 python scripts/build_lane_profile.py
+python scripts/seed_cells.py --write      # CTM 셀 (T-17). 다시 만들 때는 --replace
 ```
 
 ```bash
@@ -236,6 +237,7 @@ docs/DESIGN.md     설계 결정 전문
 docs/debug_lanes_log.md  차로 프로파일: 넘어간 것과 확인 순서
 docs/T15_queue_rule.md   큐 규칙 단일 모듈 (호출자는 둘뿐)
 docs/T16_charging_des.md 충전 큐 DES (SimPy 는 시간만 굴린다)
+docs/T17_cells.md        CTM 셀 분할 (수정된 완료조건, 가짜 휴게소 사고)
 ```
 
 **저장소 경계** — 재현 가능한 것(이벤트 로그 수십만 행)은 Parquet,

@@ -25,7 +25,11 @@ from evdt.config import ScenarioConfig  # noqa: E402
 from evdt.io.db import get_conn, read_table, upsert_df  # noqa: E402
 from evdt.io.loaders import duck_connect  # noqa: E402
 from evdt.io.run_registry import RunContext  # noqa: E402
-from evdt.io.stations import read_station_chargers  # noqa: E402
+from evdt.io.stations import (  # noqa: E402
+    SMOKE_CORRIDOR_ID,
+    SMOKE_SOURCE,
+    read_station_chargers,
+)
 from evdt.io.vehicles import curve_segments, load_from_db, temp_table  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
 from evdt.world.charging import temp_factors  # noqa: E402
@@ -56,28 +60,47 @@ STATIONS = [
 
 
 def ensure_smoke_stations(db: Path) -> None:
-    """가짜 휴게소 3곳을 넣는다. T-06 이 실제 데이터를 넣으면 지우면 된다."""
+    """가짜 휴게소 3곳을 **가짜 전용 코리도**에 넣는다.
+
+    예전에는 gyeongbu_down(진짜 하행)에 바로 넣었다. 그 뒤 셀 분할이 이 3곳을 진짜
+    휴게소로 알고 앵커로 썼고, 천안(가짜) 92.000 km 가 진짜 천안호두휴게소 91.363 km
+    와 637 m 붙어 있어서 원인을 알 수 없는 짧은 셀과 분할 실패가 생겼다. 팀원이 그걸
+    찾느라 오래 헤맸다. 가짜는 진짜와 같은 이름공간에 두지 않는다.
+
+    예전 방식으로 진짜 코리도에 들어가 있던 가짜 휴게소는 여기서 같이 지운다.
+    """
     stations = pd.DataFrame([
         {
-            "station_id": sid, "corridor_id": "gyeongbu_down", "name": name,
+            "station_id": sid, "corridor_id": SMOKE_CORRIDOR_ID, "name": name,
             "direction": "DOWN", "offset_km": km, "lat": lat, "lon": lon,
-            "source": "smoke",
+            "source": SMOKE_SOURCE,
         }
         for sid, name, km, lat, lon, _ in STATIONS
     ])
     chargers = pd.DataFrame([
         {
             "charger_id": f"{sid}_200", "station_id": sid, "power_kw": 200.0,
-            "n_units": units, "source": "smoke",
+            "n_units": units, "source": SMOKE_SOURCE,
         }
         for sid, _, _, _, _, units in STATIONS
     ])
+    corridor = pd.DataFrame([{
+        "corridor_id": SMOKE_CORRIDOR_ID, "name": "스모크 테스트 (가짜)",
+        "direction": "DOWN", "origin_name": "smoke", "dest_name": "smoke",
+        "length_km": max(km for _, _, km, *_ in STATIONS) + 20.0,
+        "note": "scripts/smoke_run.py 전용. 진짜 코리도와 섞지 않는다.",
+    }])
+
     with get_conn(db) as conn:
-        if conn.execute("SELECT 1 FROM corridor WHERE corridor_id='gyeongbu_down'").fetchone() is None:
-            raise SystemExit(
-                "corridor 가 없다. 먼저 실행할 것:\n"
-                "    python scripts/init_db.py --seed-corridor"
-            )
+        healed = conn.execute(
+            "DELETE FROM station WHERE source = ? AND corridor_id != ?",
+            (SMOKE_SOURCE, SMOKE_CORRIDOR_ID),
+        ).rowcount
+
+        if healed:
+            print(f"진짜 코리도에 섞여 있던 예전 가짜 휴게소 {healed}곳을 지웠다.")
+
+        upsert_df(conn, "corridor", corridor)
         upsert_df(conn, "station", stations)
         upsert_df(conn, "charger", chargers)
 
@@ -131,7 +154,7 @@ def build_arrivals(cfg, rng, stations, vclasses, curves, charge_power_factor):
 def main() -> int:
     db = default_db_path()
     if not db.exists():
-        print(f"DB 가 없다: {db}\n먼저 실행할 것:  python scripts/init_db.py --seed-corridor")
+        print(f"DB 가 없다: {db}\n먼저 실행할 것:  python scripts/init_db.py")
         return 1
 
     ensure_smoke_stations(db)
