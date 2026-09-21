@@ -13,7 +13,7 @@ DES 가 실제로 큐를 돌려서 나온 값이다.
 지어낸 값이었고(가짜 안성 62.0 km ↔ 진짜 53.5 km), 셀 분할이 그걸 진짜로 알고
 앵커로 썼다. 가짜 데이터는 더 만들지 않는다.
 확인하려는 것은 배관이 이어져 있는가다:
-    config → run 등록 → DB 에서 충전기 대수 → DES → Parquet → KPI → DuckDB
+    config → run 등록 → DB 에서 충전기 대수 → DES → 로거 검사 → Parquet → KPI → DuckDB
 
 지우려면 폴더 하나와 DB 행 하나만 지우면 된다 (마지막에 명령을 출력한다).
 """
@@ -27,6 +27,7 @@ from _bootstrap import ROOT  # noqa: E402  (src 경로와 콘솔 인코딩을 �
 
 from evdt.config import ScenarioConfig  # noqa: E402
 from evdt.io.db import get_conn, read_table  # noqa: E402
+from evdt.io.event_log import load_sql, log_sim_result  # noqa: E402
 from evdt.io.loaders import duck_connect  # noqa: E402
 from evdt.io.run_registry import RunContext  # noqa: E402
 from evdt.io.stations import SMOKE_SOURCE, read_station_chargers  # noqa: E402
@@ -186,10 +187,11 @@ def main() -> int:
         print(f"run_id   : {run.run_id}")
         print(f"출력 폴더 : {run.output_dir}")
 
-        run.writer.append_many("charge_event", list(result.charge_events))
-
-        if cfg.output.write_snapshots:
-            run.writer.append_many("snapshot", list(result.snapshots))
+        # 쓰기 전에 두 테이블을 모두 검사한다. 틀린 행이 하나라도 있으면 한 줄도 안 쓴다.
+        log_sim_result(
+            run.writer, result.charge_events, result.snapshots,
+            write_snapshots=cfg.output.write_snapshots,
+        )
 
         last_end_min = max(e["t_end_min"] for e in result.charge_events)
 
@@ -216,17 +218,17 @@ def main() -> int:
     for _, k in kpi.iterrows():
         print(f"  {k['metric']:<18} {k['value']:>8.2f} {k['unit']}")
 
+    # 설계문서 T-17 완료 기준: 휴게소별 시간대별 평균 대기를 SQL 한 줄로 (src/evdt/sql/).
+    # 저장된 쿼리를 그대로 감싸서 이름만 붙인다. 집계를 여기서 다시 쓰면 두 벌이 갈라진다.
     print("\n--- DuckDB 로 뽑은 휴게소×시간대 평균 대기 (상위 5) ---")
     con = duck_connect(db_path=db, run_ids=[run_id])
     print(con.sql(
-        """
-        SELECT s.name                               AS 휴게소,
-               CAST(e.t_arrive_min / 60 AS INTEGER) AS 시각,
-               COUNT(*)                             AS 대수,
-               ROUND(AVG(e.wait_min), 1)            AS 평균대기분
-        FROM charge_event e JOIN station s USING (station_id)
-        GROUP BY 1, 2 ORDER BY 평균대기분 DESC LIMIT 5
-        """
+        f"""
+        SELECT s.name AS 휴게소, w.hour AS 시각, w.n_ev AS 대수,
+               ROUND(w.mean_wait_min, 1) AS 평균대기분
+        FROM ({load_sql("station_hourly_wait")}) w JOIN station s USING (station_id)
+        ORDER BY 평균대기분 DESC LIMIT 5
+        """  # noqa: S608
     ).df().to_string(index=False))
 
     print("\n--- 만들어진 파일 ---")

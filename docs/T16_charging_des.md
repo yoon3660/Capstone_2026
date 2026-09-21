@@ -82,8 +82,9 @@ world/sim.py    station_specs           행 -> 시뮬레이터 입력
 | `chargers_busy` | 충전 중인 충전기 수 |
 | `chargers_total` | 총 충전기 수 |
 
-목록은 `world/sim.py` 의 `STATION_SNAPSHOT_STATES` 가 갖고 있고, 테스트가 모든
-스냅샷 행이 그 안에 있는지 검사한다.
+목록의 원본은 `evdt/interfaces.py` 의 `SNAPSHOT_STATES` 다 (`sim.STATION_SNAPSHOT_STATES`
+는 그걸 가리킨다). 로거(`io/event_log.py`)가 쓰기 전에 모든 스냅샷 행이 그 안에 있는지
+검사한다 — `docs/event_log.md`.
 
 `wait_min` 은 `queue_rule.wait_if_arriving_now` 가 계산한다. 정책이 보는 값과 실제
 배정이 같은 규칙에서 나와야 하기 때문이다 (T-15 §6).
