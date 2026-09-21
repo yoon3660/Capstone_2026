@@ -42,9 +42,10 @@ def _schema(*fields: tuple[str, pa.DataType]) -> pa.Schema:
 
 #: 이벤트 로그 테이블 스키마 (설계문서 §9.3)
 SCHEMAS: dict[str, pa.Schema] = {
-    # 차량 한 대의 충전 정차 한 번 = 한 행
+    # 차량 한 대의 충전 정차 한 번 = 한 행 (한 차가 여러 번 서면 stop_seq 로 구분)
     "charge_event": _schema(
         ("ev_id", _STR),
+        ("stop_seq", _I32),          # 이 차의 몇 번째 충전 정차인가 (1부터). 장거리는 2회 이상
         ("vclass_id", _STR),
         ("station_id", _STR),
         ("charger_id", _STR),
@@ -97,6 +98,10 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("solve_time_s", _F64),
         ("time_limit_hit", _BOOL),
         ("fallback_used", _BOOL),
+        # 반복 솔버(UE 균형)의 반복 번호와 상대 gap. UE 는 이 두 칸만 채운다.
+        # mip_gap 과 섞지 않는 이유: 뜻이 다르다 (최적성 하한 대비 vs 균형 조건 위반량).
+        ("iteration", _I32),
+        ("rel_gap", _F64),
     ),
     # ⚠ 설계 규칙 4 — 시뮬레이터와 렌더러 사이의 계약. 함부로 바꾸지 말 것.
     "snapshot": _schema(

@@ -281,6 +281,9 @@ class RunContext:
     def kpi(self, metric: str, value: float, unit: str = "") -> None:
         self.handle.kpi(metric, value, unit)
 
+    def kpis(self, items: dict[str, float | tuple[float, str]]) -> None:
+        self.handle.kpis(items)
+
     def __enter__(self) -> RunContext:
         return self
 

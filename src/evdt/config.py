@@ -141,6 +141,10 @@ class DemandConfig:
     charge_prob: float         # Rupnik 규칙의 충전확률 (0.95)
     safety_buffer_km: float    # Rupnik 규칙의 안전버퍼 (30km)
     low_soc_threshold: float   # 이 SoC 아래면 무조건 충전 (0.2)
+    #: 목적지 분포 CSV (offset_km, share = 그 지점을 지나가는 비율). 없으면 전원 코리도 끝까지 간다.
+    through_profile: str | None = None
+    #: 휴게소 사이 주행 속도 (km/h). Sprint 2 에 CTM 속도로 바뀐다
+    cruise_speed_kmh: float = 80.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,10 +168,21 @@ class EnvironmentConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class UEConfig:
+    """UE 균형 반복 설정 (engine/ue.py). 반복 알고리즘의 손잡이는 전부 여기 있다."""
+
+    max_iter: int = 50          # 반복 1회 = 전원이 도착 순서대로 한 번씩 다시 고름. 넘으면 FAILED
+    gap_tol: float = 0.03       # 상대 gap 이 이 아래면 균형 (3%: 2회 이상 정차 차량 때문에 0 까지 안 간다)
+    min_gain_min: float = 1.0   # 이보다 적게 줄어드는 변경은 하지 않는다 (운전자 무차별 구간)
+    max_stops: int = 3          # 한 차가 계획할 수 있는 최대 충전 정차 수
+
+
+@dataclass(frozen=True, slots=True)
 class PolicyConfig:
     stage: str
     participation: float
     params: dict[str, Any] = field(default_factory=dict)
+    ue: UEConfig = field(default_factory=UEConfig)
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +273,12 @@ class ScenarioConfig:
         low_soc_threshold = e.number(
             d.get("low_soc_threshold", 0.2), "demand.low_soc_threshold", lo=0.0, hi=1.0
         )
+        through_profile = d.get("through_profile")
+        if through_profile is not None:
+            through_profile = e.text(through_profile, "demand.through_profile")
+        cruise_speed_kmh = e.number(
+            d.get("cruise_speed_kmh", 80.0), "demand.cruise_speed_kmh", lo=0.0, lo_exclusive=True
+        )
 
         # vehicles ---------------------------------------------------------
         v = e.section(data, "vehicles")
@@ -292,6 +313,24 @@ class ScenarioConfig:
         if not isinstance(params, dict):
             e.add("policy.params", "매핑이어야 한다")
             params = {}
+        ue_raw = p.get("ue") or {}
+        if not isinstance(ue_raw, dict):
+            e.add("policy.ue", "매핑이어야 한다")
+            ue_raw = {}
+        for key in ue_raw:
+            if key not in UEConfig.__dataclass_fields__:
+                e.add(f"policy.ue.{key}", "알 수 없는 키다 (오타인지 확인)")
+        ue_default = UEConfig()
+        ue = UEConfig(
+            max_iter=e.number(ue_raw.get("max_iter", ue_default.max_iter), "policy.ue.max_iter",
+                              lo=1, integer=True),
+            gap_tol=e.number(ue_raw.get("gap_tol", ue_default.gap_tol), "policy.ue.gap_tol",
+                             lo=0.0, hi=1.0, lo_exclusive=True),
+            min_gain_min=e.number(ue_raw.get("min_gain_min", ue_default.min_gain_min),
+                                  "policy.ue.min_gain_min", lo=0.0),
+            max_stops=e.number(ue_raw.get("max_stops", ue_default.max_stops), "policy.ue.max_stops",
+                               lo=1, integer=True),
+        )  # type: ignore[arg-type]
         if stage in ("UE", "S0") and participation not in (None, 1.0):
             e.add(
                 "policy.participation",
@@ -348,6 +387,8 @@ class ScenarioConfig:
                 charge_prob=charge_prob,                   # type: ignore[arg-type]
                 safety_buffer_km=safety_buffer_km,         # type: ignore[arg-type]
                 low_soc_threshold=low_soc_threshold,       # type: ignore[arg-type]
+                through_profile=through_profile,           # type: ignore[arg-type]
+                cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
             ),
             vehicles=VehiclesConfig(
                 seed=seed,                                 # type: ignore[arg-type]
@@ -355,7 +396,7 @@ class ScenarioConfig:
                 target_soc_cap=target_soc_cap,             # type: ignore[arg-type]
             ),
             environment=EnvironmentConfig(temp_c),         # type: ignore[arg-type]
-            policy=PolicyConfig(stage, participation, dict(params)),  # type: ignore[arg-type]
+            policy=PolicyConfig(stage, participation, dict(params), ue),  # type: ignore[arg-type]
             queue=QueueConfig(discipline, charger_select), # type: ignore[arg-type]
             output=OutputConfig(write_snapshots, snapshot_every_min),  # type: ignore[arg-type]
             source_path=source_path,
@@ -373,6 +414,8 @@ class ScenarioConfig:
         """
         base = root or Path.cwd()
         candidates = [self.demand.volume_profile]
+        if self.demand.through_profile:
+            candidates.append(self.demand.through_profile)
         return [c for c in candidates if not (base / c).is_file() and not Path(c).is_file()]
 
     # -- DB 연동 -------------------------------------------------------------

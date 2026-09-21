@@ -61,7 +61,7 @@ class WorldView:
     """decide() 에 넘어가는 세계의 스냅샷.
 
     forecast 와 ledger 는 **옵셔널**이다 (§10.1):
-        UE, S0  → 둘 다 보지 않는다
+        S0      → 둘 다 보지 않는다 (UE 는 Policy 가 아니라 engine/ue.py 의 반복 균형)
         S1~     → ledger 를 본다
         S2~     → forecast 도 본다
 
@@ -126,7 +126,7 @@ SNAPSHOT_COLUMNS: tuple[str, ...] = (
 #: cell·vehicle 은 Sprint 2 에서 CTM·차량 스냅샷을 붙일 때 state 를 정한다.
 SNAPSHOT_STATES: Mapping[str, tuple[str, ...]] = {
     "station": (
-        "wait_min",         # 지금 도착하면 기다릴 시간(분) — S0(UE) 가 보는 값
+        "wait_min",         # 지금 도착하면 기다릴 시간(분) — S0 가 보는 값
         "queue_len",        # 도착했지만 아직 충전을 시작하지 못한 차 수
         "chargers_busy",    # 충전 중인 충전기 수
         "chargers_total",   # 총 충전기 수

@@ -1,0 +1,167 @@
+"""UE 수요 입력 — 충전 계획 선택지, 목적지 분포, 설정, 그래프."""
+
+from __future__ import annotations
+
+import copy
+
+import numpy as np
+import pandas as pd
+import pytest
+import yaml
+
+from evdt.config import ConfigError, ScenarioConfig
+from evdt.engine.ue_demand import ChargeRule, build_trip_demands, enumerate_plans
+from evdt.io.demand_profile import (
+    entry_hourly_volume,
+    entry_zone,
+    peak_date,
+    sample_dest_offsets,
+    through_share,
+)
+from evdt.viz.plots import plot_ue_gap
+
+RULE = ChargeRule(range_factor=1.0, buffer_km=30.0, reserve_soc=0.2, target_soc_cap=0.8, max_stops=3)
+# 배터리 100 kWh, 전비 0.2 kWh/km → SoC 0.1 = 50 km
+CAR = dict(battery_kwh=100.0, consumption_kwh_km=0.2)
+STATIONS = [{"station_id": s, "offset_km": km} for s, km in
+            [("s50", 50.0), ("s150", 150.0), ("s250", 250.0), ("s350", 350.0)]]
+
+
+def _plans(soc0: float, dest: float, stations=STATIONS, rule=RULE):
+    return enumerate_plans(stations, entry_offset_km=0.0, dest_offset_km=dest, soc0=soc0, rule=rule, **CAR)
+
+
+# ---------------------------------------------------------------------------
+# 충전 계획
+# ---------------------------------------------------------------------------
+
+
+def test_car_that_reaches_destination_does_not_enter_ue():
+    # 100 km + 여유 SoC 0.2 → 필요 SoC 0.4
+    assert _plans(0.45, 100.0) is None
+
+
+def test_plans_have_the_fewest_stops_possible():
+    """두 번이면 되는 차에게 세 번 서는 계획을 주지 않는다.
+
+    SoC 0.3 → s50 까지만 닿는다. s50 에서 0.8 로 채워도 340 km + 여유 0.2 = 0.88 이 필요 → 2회.
+    """
+    plans = _plans(0.3, 390.0)
+
+    assert plans
+    assert {len(p.stops) for p in plans} == {2}
+
+
+def test_every_leg_keeps_the_buffer_and_soc_rises_at_each_stop():
+    for p in _plans(0.3, 390.0):
+        prev_km, soc = 0.0, 0.3
+        for s in p.stops:
+            used = (s.offset_km - prev_km) * 0.2 / 100.0
+            assert s.soc_in == pytest.approx(soc - used)
+            assert soc - (s.offset_km - prev_km + 30.0) * 0.2 / 100.0 >= -1e-9   # 버퍼를 남기고 닿는다
+            assert s.soc_in < s.soc_out <= 0.8
+            prev_km, soc = s.offset_km, s.soc_out
+
+
+def test_low_battery_car_is_captive_to_the_first_station():
+    """SoC 0.25 로는 50 km 휴게소 (+30 km 버퍼 = SoC 0.16) 까지만 닿는다 → 쏠림의 씨앗."""
+    plans = _plans(0.25, 200.0)
+
+    assert [p.station_ids[0] for p in plans] == ["s50"]
+
+
+def test_impossible_trip_returns_empty():
+    assert _plans(0.25, 390.0, rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=1)) == ()
+
+
+def test_build_counts_every_car_once():
+    evs = [
+        {"ev_id": "a", "vclass_id": "v", "entry_time_min": 0.0, "initial_soc": 0.45, "dest_offset_km": 100.0},
+        {"ev_id": "b", "vclass_id": "v", "entry_time_min": 1.0, "initial_soc": 0.5, "dest_offset_km": 390.0},
+        {"ev_id": "c", "vclass_id": "v", "entry_time_min": 2.0, "initial_soc": 0.1, "dest_offset_km": 390.0},
+    ]
+    built = build_trip_demands(
+        evs, STATIONS, {"v": {"battery_kwh": 100.0, "vmax_kw": 150.0, "consumption_kwh_km": 0.2}},
+        {"v": ((0.0, 1.0, 150.0),)}, rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2), charge_power_factor=0.6,
+    )
+
+    assert (built.n_ev, built.n_no_charge, built.n_infeasible) == (3, 1, 1)
+    assert [t.ev_id for t in built.trips] == ["b"]
+    assert built.trips[0].cold_factor == 0.6
+
+
+# ---------------------------------------------------------------------------
+# 수요 프로파일
+# ---------------------------------------------------------------------------
+
+
+def _traffic() -> pd.DataFrame:
+    rows = []
+    zones = [("z0", 3.0, 1000.0), ("z1", 50.0, 600.0), ("z2", 80.0, 700.0), ("z3", 150.0, 300.0), ("zx", 120.0, None)]
+    for day, scale in (("2026-02-13", 1.0), ("2026-02-14", 1.2)):
+        for zid, km, daily in zones:
+            for h in range(24):
+                rows.append({
+                    "period": "p", "direction": "DOWN", "date": pd.Timestamp(day), "hour": h,
+                    "conzone_id": zid, "offset_km": km,
+                    "volume_veh": None if daily is None else daily * scale / 24,
+                })
+    return pd.DataFrame(rows)
+
+
+def test_entry_zone_skips_missing_and_peak_day_is_busiest():
+    t = _traffic()
+    assert entry_zone(t, period="p", direction="DOWN") == "z0"
+    assert peak_date(t, period="p", direction="DOWN") == pd.Timestamp("2026-02-14")
+
+
+def test_entry_volume_has_24_hours():
+    v = entry_hourly_volume(_traffic(), period="p", direction="DOWN")
+    assert v["hour"].tolist() == list(range(24))
+    assert v["volume_veh"].sum() == pytest.approx(1200.0)
+
+
+def test_through_share_never_rises():
+    """도시 근처에서 교통량이 다시 늘어도(z2 700 > z1 600) 지나가는 비율은 늘지 않는다."""
+    s = through_share(_traffic(), period="p", direction="DOWN")
+
+    assert s["share"].tolist() == pytest.approx([1.0, 0.6, 0.6, 0.3])
+    assert 120.0 not in s["offset_km"].tolist()     # 결측 콘존은 뺀다
+
+
+def test_sampled_destinations_follow_the_share():
+    s = through_share(_traffic(), period="p", direction="DOWN")
+    dest = sample_dest_offsets(20_000, s, np.random.default_rng(0), corridor_end_km=400.0)
+
+    assert (dest > 50.0).mean() == pytest.approx(0.6, abs=0.02)
+    assert (dest >= 400.0).mean() == pytest.approx(0.3, abs=0.02)
+    assert dest.min() >= 3.0
+
+
+# ---------------------------------------------------------------------------
+# 설정 · 그래프
+# ---------------------------------------------------------------------------
+
+
+def test_ue_settings_come_from_config(cfg: ScenarioConfig):
+    assert cfg.policy.ue.max_iter == 50
+    assert cfg.policy.ue.gap_tol == 0.03
+    assert cfg.demand.through_profile.endswith("through_gyeongbu_down_seollal.csv")
+
+
+def test_unknown_ue_key_is_rejected(cfg: ScenarioConfig, tmp_path):
+    data = yaml.safe_load(cfg.raw_yaml)
+    bad = copy.deepcopy(data)
+    bad["policy"]["ue"]["gap_tolerance"] = 0.1
+    path = tmp_path / "bad.yaml"
+    path.write_text(yaml.safe_dump(bad, allow_unicode=True), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="policy.ue.gap_tolerance"):
+        ScenarioConfig.from_yaml(path)
+
+
+def test_gap_plot_is_written(tmp_path):
+    log = pd.DataFrame({"iteration": [0, 1, 2], "rel_gap": [0.8, 0.02, 0.0], "mip_gap": [None] * 3})
+    out = plot_ue_gap(log, tmp_path / "gap.png", gap_tol=0.03)
+
+    assert out.is_file() and out.stat().st_size > 1000
