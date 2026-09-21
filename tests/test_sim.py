@@ -478,8 +478,13 @@ def test_sim_does_not_use_simpy_resource():
     assert used <= {"Environment"}, f"sim.py 가 SimPy 의 {sorted(used - {'Environment'})} 를 쓴다"
 
 
-def test_sim_is_the_only_new_caller_of_the_queue_rule():
-    """T-15 의 '호출자는 둘뿐' 제약이 이제 실제로 채워졌는지."""
+def test_sim_actually_calls_the_queue_rule():
+    """시뮬레이터가 큐 규칙을 실제로 부르는지 (설계 규칙 1).
+
+    "호출자가 sim.py 하나뿐" 으로 검사하지 않는다. Sprint 2 에 예약 원장이 두 번째
+    호출자로 들어오면 정상 변경인데도 깨진다. 호출자 상한(sim·ledger 둘)은
+    tests/test_queue_rule.py 가 지킨다.
+    """
 
     callers = set()
 
@@ -490,4 +495,4 @@ def test_sim_is_the_only_new_caller_of_the_queue_rule():
             if isinstance(node, ast.ImportFrom) and node.module == "evdt.world.queue_rule":
                 callers.add(py.relative_to(SRC).as_posix())
 
-    assert callers == {"world/sim.py"}, f"예상 밖의 호출자: {sorted(callers)}"
+    assert "world/sim.py" in callers, f"sim.py 가 큐 규칙을 부르지 않는다. 호출자: {sorted(callers)}"
