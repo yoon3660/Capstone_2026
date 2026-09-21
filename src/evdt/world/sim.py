@@ -21,7 +21,11 @@ SimPy 는 시간만 굴린다. 큐 판단은 전부 world/queue_rule.py 가 한�
 
 IO 를 하지 않는다
     DB 도 파일도 읽지 않고 쓰지 않는다. 호출자가 읽어서 넣어주고, 결과 레코드를
-    받아서 쓴다 (`scripts/run_sim.py`). world 가 io 를 임포트하면 계층이 무너진다.
+    받아서 쓴다 (지금은 `scripts/smoke_run.py`, 이후 T-19 러너). world 가 io 를
+    임포트하면 계층이 무너진다.
+
+    호출자는 `check_queue_config` 도 불러야 한다. 시나리오의 queue 설정이 이 구현과
+    다르면 멈추는 검사인데, 이 함수 안에서는 시나리오를 모르므로 부를 수 없다.
 """
 
 from __future__ import annotations
