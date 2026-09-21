@@ -36,6 +36,7 @@ from itertools import groupby
 
 import simpy
 
+from evdt.interfaces import SNAPSHOT_STATES
 from evdt.world.charging import CurveSegment
 from evdt.world.queue_rule import (
     Arrival,
@@ -51,14 +52,9 @@ from evdt.world.queue_rule import (
 #: '#' 앞을 자르면 DB 행으로 돌아간다 (`db_charger_id`).
 UNIT_SEP = "#"
 
-#: 스냅샷 스트림에서 휴게소가 내보내는 state 값. **여기가 계약이다** (설계 규칙 4).
-#: 컬럼은 늘리지 않는다. 지표가 늘면 state 를 늘린다.
-STATION_SNAPSHOT_STATES: tuple[str, ...] = (
-    "wait_min",         # 지금 도착하면 기다릴 시간(분) — S0(UE) 가 보는 값
-    "queue_len",        # 도착했지만 아직 충전을 시작하지 못한 차 수
-    "chargers_busy",    # 충전 중인 충전기 수
-    "chargers_total",   # 총 충전기 수
-)
+#: 스냅샷 스트림에서 휴게소가 내보내는 state 값. 계약 원본은 evdt.interfaces 에 있다
+#: (설계 규칙 4). io 의 로거와 viz 의 렌더러도 같은 목록을 봐야 해서 중립 모듈로 옮겼다.
+STATION_SNAPSHOT_STATES: tuple[str, ...] = SNAPSHOT_STATES["station"]
 
 DEFAULT_SNAPSHOT_EVERY_MIN = 5.0
 

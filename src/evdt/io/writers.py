@@ -1,4 +1,4 @@
-"""Parquet 이벤트 로그 writer (T-04, T-17 준비).
+"""Parquet 이벤트 로그 writer (T-04).
 
 왜 스키마를 코드에 박아두는가
     pandas.to_parquet 에 맡기면 어떤 실행에서는 컬럼이 float64, 다른 실행에서는
@@ -9,6 +9,8 @@
     (t_min, entity_type, entity_id, lat, lon, state, value)
     시뮬레이터와 뷰어 사이의 유일한 계약이다. 렌더러를 바꿔도 시뮬레이터는
     고치지 않는다. 컬럼을 추가하고 싶으면 value 를 쓰거나 새 entity_type 을 만든다.
+    허용 entity_type·state 는 evdt.interfaces.SNAPSHOT_STATES, 값 검사는
+    evdt.io.event_log 가 한다 (이 writer 는 컬럼 이름과 타입만 본다).
 
 사용법
     with ParquetRunWriter(run_dir, run_id) as w:
@@ -103,7 +105,7 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("entity_id", _STR),
         ("lat", _F64),
         ("lon", _F64),
-        ("state", _STR),             # 휴게소 값은 world/sim.py STATION_SNAPSHOT_STATES 가 정한다
+        ("state", _STR),             # 허용 값은 evdt.interfaces.SNAPSHOT_STATES
         ("value", _F64),
     ),
 }

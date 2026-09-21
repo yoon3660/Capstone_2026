@@ -238,6 +238,7 @@ docs/debug_lanes_log.md  차로 프로파일: 넘어간 것과 확인 순서
 docs/T15_queue_rule.md   큐 규칙 단일 모듈 (호출자는 둘뿐)
 docs/T16_charging_des.md 충전 큐 DES (SimPy 는 시간만 굴린다)
 docs/T17_cells.md        CTM 셀 분할 (수정된 완료조건, 가짜 휴게소 사고)
+docs/event_log.md        이벤트 로거 · 스냅샷 계약 · 휴게소×시간대 대기 SQL 한 줄
 docs/fake_data_audit.md  가짜 휴게소가 어디에 영향을 줬는지 전수 검토
 ```
 

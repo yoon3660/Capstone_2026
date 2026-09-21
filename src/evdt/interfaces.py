@@ -100,3 +100,39 @@ class Policy(Protocol):
         반환에서 빠진 ev_id 는 "이번 Δt 에는 결정하지 않음"을 뜻한다.
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# 스냅샷 스트림 계약 (설계 규칙 4 · 설계문서 T-17)
+# ---------------------------------------------------------------------------
+#
+# 시뮬레이터(world)가 쓰고, 로거(io)가 검사하고, 렌더러(viz)가 읽는다.
+# 세 계층이 같은 목록을 봐야 하는데 io·viz 는 world 를 임포트할 수 없다
+# (tests/test_import_boundaries.py). 그래서 계약은 이 중립 모듈에 둔다.
+
+#: 스냅샷 한 행의 컬럼. writers.SCHEMAS["snapshot"] 이 이 순서를 따른다.
+SNAPSHOT_COLUMNS: tuple[str, ...] = (
+    "t_min",        # 시뮬레이션 기준일 00:00 부터의 분 (시계 분)
+    "entity_type",  # SNAPSHOT_STATES 의 키
+    "entity_id",
+    "lat",          # WGS84. 렌더러가 지도에 바로 찍는다
+    "lon",
+    "state",        # 지표 이름. 지표가 늘면 컬럼이 아니라 이 값이 는다
+    "value",
+)
+
+#: entity_type 별로 내보낼 수 있는 state. **여기에 없는 값은 로거가 거부한다.**
+#: 오타 난 state 는 조용히 저장되고, 렌더러에서 빈 칸으로만 드러난다.
+#: cell·vehicle 은 Sprint 2 에서 CTM·차량 스냅샷을 붙일 때 state 를 정한다.
+SNAPSHOT_STATES: Mapping[str, tuple[str, ...]] = {
+    "station": (
+        "wait_min",         # 지금 도착하면 기다릴 시간(분) — S0(UE) 가 보는 값
+        "queue_len",        # 도착했지만 아직 충전을 시작하지 못한 차 수
+        "chargers_busy",    # 충전 중인 충전기 수
+        "chargers_total",   # 총 충전기 수
+    ),
+}
+
+#: 스냅샷 좌표 범위. schema.sql station.lat/lon CHECK 와 같다 (한반도 남쪽).
+SNAPSHOT_LAT_RANGE: tuple[float, float] = (33.0, 39.0)
+SNAPSHOT_LON_RANGE: tuple[float, float] = (124.0, 132.0)
