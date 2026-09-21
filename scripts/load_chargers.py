@@ -19,6 +19,7 @@ from evdt.io.charger_ingest import (
 )
 from evdt.io.db import get_conn, upsert_df
 from evdt.io.route import GyeongbuRoute
+from evdt.io.stations import require_no_smoke
 from evdt.paths import default_db_path
 
 
@@ -132,6 +133,11 @@ def main() -> None:
             raise RuntimeError(
                 f"DB에 corridor가 없습니다: {sorted(missing)}"
             )
+
+        # 예전 smoke_run 이 넣은 가짜 휴게소가 있으면 아래 적재 결과 집계(휴게소·충전기
+        # 수)에 섞여 부풀려진다. 적재는 upsert 라 가짜 행을 지우지도 않는다.
+        for corridor_id in sorted(required_corridors):
+            require_no_smoke(conn, corridor_id)
 
         # corridor 길이 = 노선 총연장 (offset_km 상한 검사의 기준)
         conn.execute(

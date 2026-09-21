@@ -11,6 +11,7 @@ from evdt.io.charger_ingest import (
     station_match_key,
 )
 from evdt.io.db import get_conn
+from evdt.io.stations import require_no_smoke
 from evdt.paths import default_db_path
 
 
@@ -20,8 +21,13 @@ def main() -> None:
     print("raw:", raw_dir)
     raw = load_raw_chargers(raw_dir)
 
-    # 우리가 실제 시뮬레이션에 사용하는 33개 휴게소
+    # 우리가 실제 시뮬레이션에 사용하는 경부선 휴게소 (현재 35곳)
     with get_conn(default_db_path()) as conn:
+        # 예전 smoke_run 의 가짜 휴게소가 섞여 있으면 "DB n기 / 공개데이터 0기" 불일치로
+        # 나타나고 합계가 부풀려진다. 감사 결과를 믿을 수 없으므로 먼저 멈춘다.
+        for corridor_id in ("gyeongbu_down", "gyeongbu_up"):
+            require_no_smoke(conn, corridor_id)
+
         rows = conn.execute(
             """
             SELECT

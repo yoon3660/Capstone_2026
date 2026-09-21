@@ -8,6 +8,33 @@
 from evdt.io.db import get_conn
 from evdt.paths import default_db_path
 
+#: 예전 scripts/smoke_run.py 가 넣던 가짜 휴게소의 source. 지금은 더 만들지 않는다
+#: (smoke_run 이 진짜 휴게소를 코드로 골라 쓴다). 예전 DB 에 남아 있을 수 있어 가드만 둔다.
+SMOKE_SOURCE = "smoke"
+
+
+def require_no_smoke(conn, corridor_id: str) -> None:
+    """진짜 코리도에 가짜 휴게소가 섞여 있으면 멈춘다.
+
+    왜 조용히 걸러내지 않는가
+        예전 smoke_run.py 는 가짜 휴게소 3곳을 **gyeongbu_down 에 직접** 넣었다.
+        그 뒤 셀 분할이 그걸 앵커로 쓰면서 원인을 알 수 없는 셀 경계가 생겼고,
+        찾는 데 오래 걸렸다. 한 곳에서만 걸러내면 다른 읽는 곳은 여전히 오염된 채로
+        돈다. 오염 자체를 드러내고 지우게 하는 것이 맞다.
+    """
+
+    rows = conn.execute(
+        "SELECT station_id, name, offset_km FROM station WHERE corridor_id = ? AND source = ?",
+        (corridor_id, SMOKE_SOURCE),
+    ).fetchall()
+
+    if rows:
+        listed = ", ".join(f"{r[1]}({r[2]:.3f} km)" for r in rows)
+        raise RuntimeError(
+            f"{corridor_id} 에 smoke_run.py 가 넣은 가짜 휴게소 {len(rows)}곳이 섞여 있습니다: "
+            f"{listed}\n지우려면:  python scripts/smoke_clean.py"
+        )
+
 
 def find_stations_on_route(
     corridor_id: str,
@@ -29,6 +56,7 @@ def find_stations_on_route(
         return []
 
     with get_conn(default_db_path()) as conn:
+        require_no_smoke(conn, corridor_id)
         rows = conn.execute(
             """
             SELECT station_id, corridor_id, offset_km
@@ -74,6 +102,7 @@ def read_station_chargers(
     params: list[str] = []
 
     if corridor_id is not None:
+        require_no_smoke(conn, corridor_id)
         where.append("corridor_id = ?")
         params.append(corridor_id)
 

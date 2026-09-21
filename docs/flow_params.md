@@ -569,3 +569,17 @@ offset 을 비교해, 다르면 멈추게 한다. 지금은 프레임이 어긋�
   정리본의 최대 offset 을 대조해서 다르면 멈추게 한다.
 - k_jam 132 / 144 / 169 민감도 분석은 여전히 후속 이슈다.
 
+
+
+## 셀 목표 길이 (T-17, debug/cells)
+
+`defaults.cell_length_km: 1.0` 을 추가했다. `min_cell_length_km`(0.5)와 **다른 값**이다.
+
+| 키 | 뜻 |
+|---|---|
+| `min_cell_length_km` | 차로 프로파일 병합 임계값. 이보다 짧은 차로 구간은 이웃에 병합한다 |
+| `cell_length_km` | CTM 셀 목표 길이. 앵커 사이를 floor(g / 이 값) 등분한다 |
+
+둘을 한 키로 읽던 첫 구현은 셀을 전부 0.505 km 로 쪼개 양방향 1,555 셀을 만들었다.
+CFL 하한은 `max(v_free, w_back) × dt_min` 으로 따로 계산한다. 자세한 경위는
+`docs/T17_cells.md` §3.
