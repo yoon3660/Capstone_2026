@@ -3,6 +3,12 @@
     python scripts/build_demand_profile.py        # 처음 한 번 (수요 프로파일 CSV)
     python scripts/run_ue.py                      # config 의 시드
     python scripts/run_ue.py --seed 3 --overwrite
+    python scripts/run_ue.py --soc high                   # 출발 SoC 높음 (집에서 충전하고 출발)
+    python scripts/run_ue.py --soc low --demand-multiplier 2
+    python scripts/sweep_ue.py                            # SoC × 수요 배율 격자를 한 번에
+
+    --soc / --demand-multiplier 를 주면 config 를 고치지 않고 그 값만 바꾼 실험이 된다.
+    scenario_id 뒤에 __soc-high, __dm2 처럼 붙어서 서로 덮어쓰지 않는다.
 
     config → 교통량으로 EV 생성 → 충전 계획 선택지 → UE 균형 → DES → Parquet → KPI
 
@@ -81,20 +87,48 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
     return built, range_factor, charge_power_factor
 
 
-def main() -> int:
+def load_config(path: str, *, soc: str | None = None, demand_multiplier: float | None = None) -> ScenarioConfig:
+    """config 를 읽고, 준 값만 바꾼 실험(variant)으로 만든다."""
+
+    cfg = ScenarioConfig.from_yaml(ROOT / path)
+    tags: list[str] = []
+    overrides: dict = {}
+
+    if soc is not None:
+        if not cfg.vehicles.soc_profiles:
+            raise SystemExit(f"{path} 에 vehicles.soc_profiles 가 없어서 --soc 를 쓸 수 없다")
+        tags.append(f"soc-{soc}")
+        overrides["vehicles.departure_soc"] = soc
+
+    if demand_multiplier is not None:
+        tags.append(f"dm{demand_multiplier:g}")
+        overrides["demand.demand_multiplier"] = float(demand_multiplier)
+
+    return cfg.variant("__".join(tags), overrides) if tags else cfg
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_seollal_down.yaml")
     ap.add_argument("--seed", type=int, default=None, help="기본: config 의 vehicles.seed")
+    ap.add_argument("--soc", default=None, help="출발 SoC 프로파일 (config 의 vehicles.soc_profiles 이름: low | high)")
+    ap.add_argument("--demand-multiplier", type=float, default=None, help="수요 배율 (기본: config 값)")
     ap.add_argument("--overwrite", action="store_true", help="같은 run_id 가 있으면 덮어쓴다")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    cfg = ScenarioConfig.from_yaml(ROOT / args.config)
+    run(load_config(args.config, soc=args.soc, demand_multiplier=args.demand_multiplier),
+        seed=args.seed, overwrite=args.overwrite)
+    return 0
+
+
+def run(cfg: ScenarioConfig, *, seed: int | None = None, overwrite: bool = False) -> str:
+    """한 번 돌리고 run_id 를 돌려준다. 수렴 실패면 UENotConverged (run 은 FAILED 로 남는다)."""
 
     if cfg.policy.stage != "UE":
         raise SystemExit(f"UE 시나리오가 아니다: policy.stage={cfg.policy.stage}")
 
-    if args.seed is not None:
-        cfg = dataclasses.replace(cfg, vehicles=dataclasses.replace(cfg.vehicles, seed=args.seed))
+    if seed is not None:
+        cfg = dataclasses.replace(cfg, vehicles=dataclasses.replace(cfg.vehicles, seed=seed))
 
     check_queue_config(cfg.queue.discipline, cfg.queue.charger_select)
     db = default_db_path()
@@ -113,10 +147,15 @@ def main() -> int:
     built, range_factor, cpf = build_demand(cfg, stations, vclasses, curves, temps, corridor_end_km)
     n_stops = pd.Series([len(t.plans[0].stops) for t in built.trips]).value_counts().sort_index()
 
+    beta = cfg.vehicles.soc_beta
+    soc_mean = beta.lo + beta.a / (beta.a + beta.b) * (beta.hi - beta.lo)
+
     print(f"\n{cfg.scenario_id}  seed={cfg.vehicles.seed}  기온 {cfg.environment.temp_c}°C "
           f"(주행 {range_factor:.2f} · 충전출력 {cpf:.2f})")
     print(f"휴게소 {len(stations)}곳 · 충전기 {sum(len(c) for c in chargers.values())}기 · "
           f"코리도 {corridor_end_km:.1f} km")
+    print(f"출발 SoC {cfg.vehicles.departure_soc or '(soc_beta)'}: 평균 {soc_mean:.0%} · "
+          f"수요 배율 ×{cfg.demand.demand_multiplier:g}")
     print(f"진입 EV {built.n_ev:,}대 → 충전 필요 {len(built.trips):,}대 "
           f"(충전 없이 도착 {built.n_no_charge:,} · {cfg.policy.ue.max_stops}회 안에 불가 {built.n_infeasible:,})")
     print("  필요한 정차 수: " + ", ".join(f"{k}회 {v:,}대" for k, v in n_stops.items()))
@@ -127,13 +166,21 @@ def main() -> int:
         speed_kmh=cfg.demand.cruise_speed_kmh,
     )
 
-    with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, overwrite=args.overwrite) as run:
+    params = {
+        "departure_soc": cfg.vehicles.departure_soc,
+        "departure_soc_mean": round(soc_mean, 4),
+        "demand_multiplier": cfg.demand.demand_multiplier,
+    }
+
+    with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, overwrite=overwrite,
+                         params=params) as run:
         print(f"run_id : {run.run_id}")
         run.kpis({
             "n_ev": (built.n_ev, "count"),
             "n_ev_charging": (len(built.trips), "count"),
             "n_ev_no_charge": (built.n_no_charge, "count"),
             "n_ev_infeasible": (built.n_infeasible, "count"),
+            "departure_soc_mean": (soc_mean, "ratio"),
         })
 
         # 수렴 못 하면 gap 이력을 남기고 예외 → RunContext 가 run 을 FAILED 로 기록한다
@@ -169,11 +216,25 @@ def main() -> int:
     con = duck_connect(db_path=db, run_ids=[run_id])
     hourly = f"({load_sql('station_hourly_wait')})"
     n_slots = con.sql(f"SELECT COUNT(*) FROM {hourly} WHERE mean_wait_min >= {BOTTLENECK_WAIT_MIN}").fetchone()[0]
+    ratio_max, worst_station_wait = con.sql(
+        """
+        WITH ch AS (SELECT station_id, SUM(n_units) AS n_ch FROM charger WHERE is_active = 1 GROUP BY 1),
+             ev AS (SELECT station_id, COUNT(*) AS n, AVG(wait_min) AS w FROM charge_event GROUP BY 1),
+             j  AS (SELECT (ev.n / SUM(ev.n) OVER ()) / (ch.n_ch / SUM(ch.n_ch) OVER ()) AS ratio, ev.w
+                    FROM ev JOIN ch USING (station_id))
+        SELECT MAX(ratio), MAX(w) FROM j
+        """
+    ).fetchone()
 
+    # 쏠림 지표 (docs/UE_equilibrium.md §7). 러너 밖에서 DuckDB 로 계산하므로 여기서 따로 넣는다
     with get_conn(db) as conn:
-        conn.execute(
+        conn.executemany(
             "INSERT OR REPLACE INTO run_kpi (run_id, metric, value, unit) VALUES (?, ?, ?, ?)",
-            (run_id, "bottleneck_slots", float(n_slots), "count"),
+            [
+                (run_id, "bottleneck_slots", float(n_slots), "count"),
+                (run_id, "share_ratio_max", float(ratio_max), "ratio"),
+                (run_id, "wait_worst_station_min", float(worst_station_wait), "min"),
+            ],
         )
 
     print("\n--- 휴게소별: 충전기 몫 대비 수요 몫, 대기 (쏠림) ---")
@@ -196,8 +257,9 @@ def main() -> int:
     ).df().to_string(index=False))
 
     print(f"\n병목 슬롯 (휴게소×시간 평균 대기 ≥ {BOTTLENECK_WAIT_MIN:.0f}분): {n_slots}")
+    print(f"수요몫 ÷ 충전기몫 최댓값: {ratio_max:.2f}  (1 이면 충전기만큼만 몰림)")
     print(f"수렴 그래프: {png.relative_to(ROOT)}")
-    return 0
+    return run_id
 
 
 if __name__ == "__main__":

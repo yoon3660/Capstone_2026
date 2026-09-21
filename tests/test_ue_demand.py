@@ -165,3 +165,49 @@ def test_gap_plot_is_written(tmp_path):
     out = plot_ue_gap(log, tmp_path / "gap.png", gap_tol=0.03)
 
     assert out.is_file() and out.stat().st_size > 1000
+
+
+# ---------------------------------------------------------------------------
+# 출발 SoC 실험 스위치 (vehicles.departure_soc / soc_profiles) · variant
+# ---------------------------------------------------------------------------
+
+
+def _mean(beta) -> float:
+    return beta.lo + beta.a / (beta.a + beta.b) * (beta.hi - beta.lo)
+
+
+def test_departure_soc_profiles_are_selectable(cfg: ScenarioConfig):
+    assert cfg.vehicles.departure_soc == "low"
+    assert {p.name for p in cfg.vehicles.soc_profiles} == {"low", "high"}
+    assert _mean(cfg.vehicles.soc_beta) == pytest.approx(0.343, abs=0.001)
+
+    high = cfg.variant("soc-high", {"vehicles.departure_soc": "high"})
+    assert _mean(high.vehicles.soc_beta) == pytest.approx(0.764, abs=0.001)
+
+
+def test_variant_gets_its_own_scenario_and_run_id(cfg: ScenarioConfig):
+    """이름이 같으면 SoC 높음/낮음 실행이 같은 run_id 로 서로를 덮어쓴다."""
+    v = cfg.variant("soc-high__dm2", {"vehicles.departure_soc": "high", "demand.demand_multiplier": 2.0})
+
+    assert v.scenario_id == f"{cfg.scenario_id}__soc-high__dm2"
+    assert v.demand.demand_multiplier == 2.0
+    assert v.config_hash != cfg.config_hash
+    assert "departure_soc: high" in v.raw_yaml        # 실제로 쓴 설정이 기록에 남는다
+    assert cfg.vehicles.departure_soc == "low"         # 원본은 그대로
+
+
+def test_variant_rejects_unknown_key_and_profile(cfg: ScenarioConfig):
+    with pytest.raises(ConfigError, match="바꿀 키가 없다"):
+        cfg.variant("x", {"vehicles.departure_sco": "high"})
+    with pytest.raises(ConfigError, match="vehicles.departure_soc"):
+        cfg.variant("x", {"vehicles.departure_soc": "medium"})
+
+
+def test_soc_beta_and_profiles_cannot_both_be_given(cfg: ScenarioConfig, tmp_path):
+    data = yaml.safe_load(cfg.raw_yaml)
+    data["vehicles"]["soc_beta"] = {"a": 2.0, "b": 5.0, "lo": 0.1, "hi": 0.95}
+    path = tmp_path / "both.yaml"
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="하나만"):
+        ScenarioConfig.from_yaml(path)

@@ -119,6 +119,24 @@ class _Errors:
             raise ConfigError(f"config 검증 실패: {self.source}\n{lines}")
 
 
+def _soc_beta(e: _Errors, raw: Any, path: str) -> SocBeta | None:
+    """{a, b, lo, hi} 하나를 검사한다. 출발 SoC ~ lo + Beta(a, b) × (hi − lo)."""
+
+    if not isinstance(raw, dict):
+        e.add(path, "a / b / lo / hi 를 담은 매핑이어야 한다")
+        return None
+    a = e.number(raw.get("a", 2.0), f"{path}.a", lo=0, lo_exclusive=True)
+    b = e.number(raw.get("b", 5.0), f"{path}.b", lo=0, lo_exclusive=True)
+    lo = e.number(raw.get("lo", 0.10), f"{path}.lo", lo=0.0, hi=1.0)
+    hi = e.number(raw.get("hi", 0.95), f"{path}.hi", lo=0.0, hi=1.0)
+    if lo is not None and hi is not None and hi <= lo:
+        e.add(f"{path}.hi", f"lo({lo}) 보다 커야 한다 (받은 값: {hi})")
+        return None
+    if None in (a, b, lo, hi):
+        return None
+    return SocBeta(a, b, lo, hi)  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # 섹션 dataclass
 # ---------------------------------------------------------------------------
@@ -156,10 +174,20 @@ class SocBeta:
 
 
 @dataclass(frozen=True, slots=True)
+class SocBetaProfile:
+    """출발 SoC 분포 하나에 이름을 붙인 것 (vehicles.soc_profiles)."""
+
+    name: str
+    beta: SocBeta
+
+
+@dataclass(frozen=True, slots=True)
 class VehiclesConfig:
     seed: int
-    soc_beta: SocBeta
+    soc_beta: SocBeta          # 이번 실행이 쓰는 출발 SoC 분포 (프로파일을 골랐으면 그 값)
     target_soc_cap: float      # 목표 SoC 상한 0.8 (§2.3)
+    departure_soc: str | None = None                   # 고른 프로파일 이름 (없으면 soc_beta 직접 지정)
+    soc_profiles: tuple[SocBetaProfile, ...] = ()      # 고를 수 있는 프로파일 전부
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +265,37 @@ class ScenarioConfig:
         text = yaml.safe_dump(data, allow_unicode=True, sort_keys=True)
         return cls._build(data, source_path=source, raw_yaml=text)
 
+    def variant(self, tag: str, overrides: dict[str, Any]) -> ScenarioConfig:
+        """이 시나리오에서 몇 개 값만 바꾼 실험. scenario_id 뒤에 __<tag> 가 붙는다.
+
+            cfg.variant("soc-high", {"vehicles.departure_soc": "high"})
+
+        왜 scenario_id 를 바꾸는가: run_id 는 (scenario, stage, 참여율, seed) 로 정해진다.
+        이름을 안 바꾸면 SoC 높음/낮음 실행이 같은 run_id 로 서로를 덮어쓴다.
+        바뀐 값이 들어간 config 전문이 scenario 테이블과 runs/<run_id>/config.yaml 에
+        그대로 남으므로 "이 결과는 어떤 설정이었나" 에 답할 수 있다. 검증도 다시 한다.
+        """
+
+        if not tag or not all(ch.isalnum() or ch in "-_." for ch in tag):
+            raise ConfigError(f"variant 이름은 영문·숫자·-_. 만 쓴다: {tag!r}")
+
+        data = yaml.safe_load(self.raw_yaml)
+
+        for dotted, value in overrides.items():
+            node = data
+            *parents, leaf = dotted.split(".")
+            for key in parents:
+                if not isinstance(node.get(key), dict):
+                    raise ConfigError(f"바꿀 키가 없다: {dotted}")
+                node = node[key]
+            if leaf not in node:
+                raise ConfigError(f"바꿀 키가 없다: {dotted} (오타인지 확인)")
+            node[leaf] = value
+
+        data["scenario_id"] = f"{self.scenario_id}__{tag}"
+        data["label"] = f"{self.label} [{tag}]"
+        return ScenarioConfig.from_dict(data, source=f"{self.source_path}#{tag}")
+
     @classmethod
     def _build(cls, data: dict[str, Any], *, source_path: str, raw_yaml: str) -> ScenarioConfig:
         e = _Errors(source_path)
@@ -283,16 +342,33 @@ class ScenarioConfig:
         # vehicles ---------------------------------------------------------
         v = e.section(data, "vehicles")
         seed = e.number(e.require(v, "vehicles", "seed"), "vehicles.seed", lo=0, integer=True)
+        # 출발 SoC — 두 가지 쓰는 법 중 하나
+        #   soc_beta: {a, b, lo, hi}                         분포 하나를 바로 적는다
+        #   departure_soc: low + soc_profiles: {low: …, high: …}   이름 붙은 분포 중 고른다 (실험 스위치)
+        # 둘 다 적으면 어느 쪽이 쓰였는지 모호하므로 거부한다.
+        profiles_raw = v.get("soc_profiles")
+        departure_soc = v.get("departure_soc")
+        soc_profiles: list[SocBetaProfile] = []
+        beta_path = "vehicles.soc_beta"
         beta_raw = v.get("soc_beta")
-        if not isinstance(beta_raw, dict):
-            e.add("vehicles.soc_beta", "a / b / lo / hi 를 담은 매핑이어야 한다")
-            beta_raw = {}
-        beta_a = e.number(beta_raw.get("a", 2.0), "vehicles.soc_beta.a", lo=0, lo_exclusive=True)
-        beta_b = e.number(beta_raw.get("b", 5.0), "vehicles.soc_beta.b", lo=0, lo_exclusive=True)
-        beta_lo = e.number(beta_raw.get("lo", 0.10), "vehicles.soc_beta.lo", lo=0.0, hi=1.0)
-        beta_hi = e.number(beta_raw.get("hi", 0.95), "vehicles.soc_beta.hi", lo=0.0, hi=1.0)
-        if beta_lo is not None and beta_hi is not None and beta_hi <= beta_lo:
-            e.add("vehicles.soc_beta.hi", f"lo({beta_lo}) 보다 커야 한다 (받은 값: {beta_hi})")
+
+        if profiles_raw is not None or departure_soc is not None:
+            if beta_raw is not None:
+                e.add("vehicles.soc_beta", "soc_profiles / departure_soc 와 같이 쓸 수 없다 (하나만)")
+            if not isinstance(profiles_raw, dict) or not profiles_raw:
+                e.add("vehicles.soc_profiles", "이름 → {a, b, lo, hi} 매핑이어야 한다")
+                profiles_raw = {}
+            for name, raw in profiles_raw.items():
+                beta = _soc_beta(e, raw, f"vehicles.soc_profiles.{name}")
+                if beta is not None:
+                    soc_profiles.append(SocBetaProfile(str(name), beta))
+            if departure_soc not in profiles_raw:
+                e.add("vehicles.departure_soc",
+                      f"{list(profiles_raw)} 중 하나여야 한다 (받은 값: {departure_soc!r})")
+                departure_soc = None
+            selected = next((p.beta for p in soc_profiles if p.name == departure_soc), None)
+        else:
+            selected = _soc_beta(e, beta_raw, beta_path)
         target_soc_cap = e.number(
             v.get("target_soc_cap", 0.8), "vehicles.target_soc_cap", lo=0.0, hi=1.0, lo_exclusive=True
         )
@@ -392,8 +468,10 @@ class ScenarioConfig:
             ),
             vehicles=VehiclesConfig(
                 seed=seed,                                 # type: ignore[arg-type]
-                soc_beta=SocBeta(beta_a, beta_b, beta_lo, beta_hi),  # type: ignore[arg-type]
+                soc_beta=selected,                         # type: ignore[arg-type]
                 target_soc_cap=target_soc_cap,             # type: ignore[arg-type]
+                departure_soc=departure_soc,
+                soc_profiles=tuple(soc_profiles),
             ),
             environment=EnvironmentConfig(temp_c),         # type: ignore[arg-type]
             policy=PolicyConfig(stage, participation, dict(params), ue),  # type: ignore[arg-type]

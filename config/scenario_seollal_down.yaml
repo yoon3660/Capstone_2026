@@ -30,11 +30,21 @@ demand:
 
 vehicles:
   seed: 7                   # 시드 고정. 같은 시드면 모든 스테이지가 같은 차량 집합을 받는다
-  soc_beta:                 # 도착 SoC ~ Beta(2,5) 를 [lo, hi] 로 스케일링 (Rupnik)
-    a: 2.0
-    b: 5.0
-    lo: 0.10
-    hi: 0.95
+  # 출발 SoC (서울 진입 시점) ~ lo + Beta(a, b) × (hi − lo).  실험 스위치: low | high
+  #   python scripts/run_ue.py --soc high      (config 를 고치지 않고 바꿔 돌린다)
+  # 이 값이 쏠림의 크기를 거의 다 정한다 (docs/UE_equilibrium.md §5).
+  departure_soc: low
+  soc_profiles:
+    low:                    # 평균 34%. 설계문서 §2 의 Rupnik "도착 SoC" Beta(2,5) 를 출발 SoC 로 쓴 것
+      a: 2.0
+      b: 5.0
+      lo: 0.10
+      hi: 0.95
+    high:                   # 평균 76%. "전날 집에서 충전하고 출발" 가정 (근거 없음 — 대조군)
+      a: 5.0
+      b: 2.0
+      lo: 0.30
+      hi: 0.95
   target_soc_cap: 0.8       # 목표 SoC 상한 (§2.3). 결정변수에서 제외
 
 environment:
