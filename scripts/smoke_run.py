@@ -5,16 +5,16 @@ verify_setup.py 는 임시 폴더에서 돌고 흔적을 지운다. 이 스크�
 
     python scripts/smoke_run.py
 
-여기서 만드는 숫자는 전부 가짜다. 시뮬레이터(T-16)가 아직 없기 때문이다.
-확인하려는 것은 "숫자가 맞는가" 가 아니라 **배관이 이어져 있는가** 다:
-    config → run 등록 → Parquet 기록 → KPI 저장 → DuckDB 조회
+휴게소와 도착 수요는 여전히 가짜다. 하지만 **대기시간은 진짜다** — T-16 의 DES 가
+실제로 큐를 돌려서 나온 값이다 (예전에는 rng.gauss 로 지어낸 숫자였다).
+확인하려는 것은 배관이 이어져 있는가다:
+    config → run 등록 → DB 에서 충전기 대수 → DES → Parquet → KPI → DuckDB
 
 지우려면 폴더 하나와 DB 행 하나만 지우면 된다 (마지막에 명령을 출력한다).
 """
 
 from __future__ import annotations
 
-import math
 import random
 from pathlib import Path
 
@@ -25,9 +25,28 @@ from evdt.config import ScenarioConfig  # noqa: E402
 from evdt.io.db import get_conn, read_table, upsert_df  # noqa: E402
 from evdt.io.loaders import duck_connect  # noqa: E402
 from evdt.io.run_registry import RunContext  # noqa: E402
+from evdt.io.stations import read_station_chargers  # noqa: E402
+from evdt.io.vehicles import curve_segments, load_from_db, temp_table  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
+from evdt.world.charging import temp_factors  # noqa: E402
+from evdt.world.sim import (  # noqa: E402
+    EVArrival,
+    check_queue_config,
+    run_charging_des,
+    station_specs,
+)
 
 SMOKE_SEED = 9999
+
+#: 가짜 수요 대수. 이 3곳의 하루 처리 가능 대수는 약 600대(충전기 12기 × 24시간,
+#: -5°C 에서 한 대 28분)인데, 60% 를 안성으로 몰고 오전 9시에 집중시키기 때문에
+#: 600을 넣으면 큐가 발산해서 대기가 30시간까지 간다. 예전에는 숫자를 지어냈기
+#: 때문에 이 모순이 드러나지 않았다. 시나리오 종료(24시) 안에 끝나는 값으로 잡는다.
+N_EV = 150
+
+#: 도착 시각 분포 (분). 오전 9시 전후로 몰리는 가짜 프로파일.
+PEAK_MIN = 540.0
+PEAK_SD_MIN = 150.0
 STATIONS = [
     # (station_id, 이름, 기점 거리 km, 위도, 경도, 충전기 기수)
     ("smoke_anseong", "안성휴게소(가짜)", 62.0, 37.0075, 127.2700, 4),
@@ -63,6 +82,52 @@ def ensure_smoke_stations(db: Path) -> None:
         upsert_df(conn, "charger", chargers)
 
 
+def build_arrivals(cfg, rng, stations, vclasses, curves, charge_power_factor):
+    """가짜 수요를 만든다. 차량 제원과 충전곡선은 DB 의 진짜 값을 쓴다.
+
+    어느 휴게소로 갈지는 여기서 **주사위로 정한다.** 그게 정책(T-18)이 할 일이고
+    아직 없기 때문이다. 안성에 일부러 쏠리게 해서 대기가 생기는 모습을 본다.
+    """
+
+    ids = [v["vclass_id"] for v in vclasses]
+    shares = [v["share"] for v in vclasses]
+    by_id = {v["vclass_id"]: v for v in vclasses}
+    curve_by_id = {vid: tuple(curve_segments(curves, vid)) for vid in ids}
+    beta = cfg.vehicles.soc_beta
+    target = cfg.vehicles.target_soc_cap
+
+    arrivals = []
+
+    for i in range(N_EV):
+        # 60% 는 첫 번째 휴게소로 보낸다 (쏠림을 일부러 만든다)
+        spec = stations[0] if rng.random() < 0.6 else rng.choice(stations[1:])
+        vclass_id = rng.choices(ids, weights=shares, k=1)[0]
+        vclass = by_id[vclass_id]
+
+        soc_in = beta.lo + rng.betavariate(beta.a, beta.b) * (beta.hi - beta.lo)
+
+        # 목표까지 채울 것이 없으면 애초에 충전하러 오지 않는다
+        if soc_in >= target:
+            continue
+
+        arrivals.append(
+            EVArrival(
+                ev_id=f"smoke{i:05d}",
+                vclass_id=vclass_id,
+                station_id=spec.station_id,
+                t_arrive_min=max(0.0, rng.gauss(PEAK_MIN, PEAK_SD_MIN)),
+                soc_in=soc_in,
+                soc_target=target,
+                battery_kwh=float(vclass["battery_kwh"]),
+                vmax_kw=float(vclass["vmax_kw"]),
+                curve=curve_by_id[vclass_id],
+                cold_factor=charge_power_factor,
+            )
+        )
+
+    return arrivals
+
+
 def main() -> int:
     db = default_db_path()
     if not db.exists():
@@ -77,39 +142,50 @@ def main() -> int:
     print(f"\n시나리오 : {cfg.scenario_id}  ({cfg.label})")
     print(f"설정 해시 : {cfg.config_hash}")
 
+    # 충전기 대수는 DB 에서 읽는다. 코드에 박으면 휴게소마다 다른 값이 뭉개진다.
+    with get_conn(db, readonly=True) as conn:
+        station_rows, charger_rows = read_station_chargers(
+            conn, station_ids=[sid for sid, *_ in STATIONS]
+        )
+        vclasses, curves, temps = load_from_db(conn)
+
+    stations = station_specs(station_rows, charger_rows)
+    check_queue_config(cfg.queue.discipline, cfg.queue.charger_select)
+
+    _, charge_power_factor = temp_factors(cfg.environment.temp_c, temp_table(temps))
+    arrivals = build_arrivals(cfg, rng, stations, vclasses, curves, charge_power_factor)
+
+    print(f"휴게소 {len(stations)}곳 / 충전기 {sum(len(s.chargers) for s in stations)}기 "
+          f"(DB charger.n_units)")
+    print(f"도착 {len(arrivals)}대  ·  기온 {cfg.environment.temp_c}°C "
+          f"(충전출력 계수 {charge_power_factor:.2f})")
+
+    result = run_charging_des(
+        stations, arrivals, snapshot_every_min=float(cfg.output.snapshot_every_min)
+    )
+
     with RunContext.open(cfg, seed=SMOKE_SEED, db_path=db, overwrite=True) as run:
         print(f"run_id   : {run.run_id}")
         print(f"출력 폴더 : {run.output_dir}")
 
-        waits: list[float] = []
-        for i in range(600):
-            # 오전 9시(540분) 근처에 도착이 몰리는 가짜 프로파일
-            t_arr = max(0.0, rng.gauss(540, 150))
-            sid, name, _, lat, lon, units = STATIONS[
-                0 if rng.random() < 0.6 else rng.randrange(1, 3)   # 안성에 일부러 쏠리게
-            ]
-            # 도착이 몰릴수록 대기가 길어지는 모양만 흉내낸다
-            peak = math.exp(-((t_arr - 540) ** 2) / (2 * 120**2))
-            wait = max(0.0, rng.gauss(45 * peak / units * 4, 6))
-            charge = rng.uniform(18, 35)
-            waits.append(wait)
+        run.writer.append_many("charge_event", list(result.charge_events))
 
-            run.writer.append("charge_event", {
-                "ev_id": f"smoke{i:05d}", "vclass_id": "smoke_ev",
-                "station_id": sid, "charger_id": f"{sid}_200", "power_kw": 200.0,
-                "t_arrive_min": t_arr, "t_start_min": t_arr + wait,
-                "t_end_min": t_arr + wait + charge,
-                "wait_min": wait, "charge_min": charge, "dwell_min": wait + charge,
-                "soc_in": rng.uniform(0.12, 0.45), "soc_out": 0.8, "soc_target": 0.8,
-                "energy_kwh": rng.uniform(25, 55), "cold_factor": 0.82,
-                "was_reassigned": False,
-            })
-            run.writer.snapshot(round(t_arr / 5) * 5.0, "station", sid, lat, lon,
-                                "queue_len", float(rng.randint(0, 12)))
+        if cfg.output.write_snapshots:
+            run.writer.append_many("snapshot", list(result.snapshots))
 
-        waits.sort()
+        last_end_min = max(e["t_end_min"] for e in result.charge_events)
+
+        if last_end_min > cfg.time.end_min:
+            print(
+                f"\n  ⚠ 마지막 충전이 {last_end_min / 60:.1f}시에 끝난다 "
+                f"(시나리오는 {cfg.time.end_min / 60:.0f}시까지). "
+                "수요가 충전기 용량을 넘었다는 뜻이다 — N_EV 를 줄이거나 충전기를 늘릴 것."
+            )
+
+        waits = sorted(e["wait_min"] for e in result.charge_events)
         run.kpi("wait_p95_min", waits[int(len(waits) * 0.95)], "min")
         run.kpi("wait_mean_min", sum(waits) / len(waits), "min")
+        run.kpi("wait_max_min", waits[-1], "min")
         run.kpi("n_charge_events", float(len(waits)), "count")
         run_id = run.run_id
 

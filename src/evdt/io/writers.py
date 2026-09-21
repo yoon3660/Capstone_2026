@@ -103,7 +103,7 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("entity_id", _STR),
         ("lat", _F64),
         ("lon", _F64),
-        ("state", _STR),             # 'queue_len' | 'occupancy' | 'speed' | ...
+        ("state", _STR),             # 휴게소 값은 world/sim.py STATION_SNAPSHOT_STATES 가 정한다
         ("value", _F64),
     ),
 }
