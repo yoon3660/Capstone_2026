@@ -2,7 +2,7 @@
 
 `src/evdt/engine/ue.py` · `engine/ue_demand.py` · `engine/ledger.py` · `io/demand_profile.py`
 실행: `scripts/build_demand_profile.py` → `scripts/run_ue.py`
-테스트: `tests/test_ue.py` (14), `tests/test_ue_demand.py` (17), `tests/test_ledger.py` (6)
+테스트: `tests/test_ue.py` (14), `tests/test_ue_demand.py` (18), `tests/test_ledger.py` (6)
 
 ```bash
 python scripts/build_demand_profile.py      # 한 번만: 교통량 → 수요 프로파일 CSV 2개
