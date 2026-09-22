@@ -16,6 +16,25 @@ python scripts/sweep_ue.py                  # low·high × 수요 1·2·3 을 �
 scenario_id 뒤에 `__soc-high__dm2` 처럼 붙인다 (`ScenarioConfig.variant`). 그래서 칸끼리
 run_id 가 겹치지 않고, 실제로 쓴 설정 전문이 `runs/<run_id>/config.yaml` 에 남는다.
 
+## 0. 처음부터 히트맵까지 (Windows PowerShell 기준)
+
+| 단계 | 명령 | 필요한 것 · 결과 |
+|---|---|---|
+| 1 가상환경 | `py -3.12 -m venv .venv` → `.\.venv\Scripts\Activate.ps1` | 프롬프트 앞에 `(.venv)` |
+| 2 설치 | `python -m pip install --upgrade pip` → `pip install -r requirements-dev.txt` → `pip install -e .` | |
+| 3 DB | `python scripts/init_db.py --seed-corridor` | `evdt.db`, 코리도 2개 |
+| 4 노선 | `python scripts/build_route.py` | `.env` 의 `EVDT_EX_API_KEY` |
+| 5 충전소 | `python scripts/fetch_chargers.py --all` → `python scripts/load_chargers.py` → `python scripts/audit_charger_counts.py` | `.env` 의 `EVDT_MOE_API_KEY`. 휴게소·충전기 대수 |
+| 6 교통량 | `python scripts/fetch_traffic.py --start 2026-02-13 --end 2026-02-22 --label seollal2026` → (평시) `--start 2026-03-06 --end 2026-03-15 --label base202603` → `python scripts/build_traffic.py` | `data/processed/traffic_gyeongbu.parquet` |
+| 7 차종 | `python scripts/seed_vehicles.py` | 차종·충전곡선·온도표 |
+| 8 확인 | `python scripts/verify_setup.py` → `python -m pytest -q` | 14/14, 전부 통과 |
+| 9 수요 | `python scripts/build_demand_profile.py` | 진입 교통량 · 지나가는 비율 CSV |
+| 10 UE | `python scripts/run_ue.py` (또는 `--soc high`, `--demand-multiplier 2`) | `runs/<run_id>/` 에 Parquet · gap 그래프 |
+| 10' 격자 | `python scripts/sweep_ue.py` | SoC × 수요 비교표 |
+| 11 히트맵 | `python scripts/plot_heatmap.py` (최근 run) 또는 `--run <id> --run <id>` (나란히) | `runs/<첫 run_id>/wait_heatmap.png` |
+
+4~7 은 한 번만 하면 된다. 셀 분할(`seed_cells.py`)은 UE 에 필요 없다.
+
 ## 1. UE 가 뭔가 — 한 문장
 
 > **모든 운전자가 "내가 도착했을 때 얼마나 기다릴지" 를 알고, 각자 가장 빨리 끝나는

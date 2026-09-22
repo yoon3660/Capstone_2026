@@ -211,3 +211,16 @@ def test_soc_beta_and_profiles_cannot_both_be_given(cfg: ScenarioConfig, tmp_pat
 
     with pytest.raises(ConfigError, match="하나만"):
         ScenarioConfig.from_yaml(path)
+
+
+def test_wait_heatmap_is_written(tmp_path):
+    from evdt.viz.plots import plot_wait_heatmap
+
+    stations = pd.DataFrame({"station_id": ["a", "b"], "name": ["가휴게소", "나휴게소"], "offset_km": [10.0, 50.0]})
+    hourly = pd.DataFrame({
+        "run_id": ["r1", "r1", "r2"], "station_id": ["a", "b", "a"], "hour": [8, 9, 8],
+        "n_ev": [3, 2, 1], "mean_wait_min": [45.0, 5.0, 0.0],
+    })
+    out = plot_wait_heatmap(hourly, stations, [("r1", "UE"), ("r2", "엔진")], tmp_path / "h.png")
+
+    assert out.is_file() and out.stat().st_size > 1000

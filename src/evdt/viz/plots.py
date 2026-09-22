@@ -74,3 +74,83 @@ def plot_ue_gap(solver_log: pd.DataFrame, path: str | Path, *, gap_tol: float | 
     fig.savefig(path)
     plt.close(fig)
     return path
+
+
+#: 대기 히트맵 구간 (분). **여러 run 을 나란히 놓을 때 같은 구간을 써야** 색 차이가 곧 대기 차이다.
+WAIT_BINS_MIN: tuple[float, ...] = (0, 1, 10, 30, 60, 120, 240, float("inf"))
+WAIT_BIN_LABELS: tuple[str, ...] = ("0", "1–10", "10–30", "30–60", "1–2시간", "2–4시간", "4시간+")
+#: 한 가지 색(파랑)의 진하기. 옅음 = 대기 없음, 짙음 = 오래
+WAIT_RAMP: tuple[str, ...] = ("#f4f3f0", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#1c5cab", "#0d366b")
+
+
+def plot_wait_heatmap(
+    hourly: pd.DataFrame,
+    stations: pd.DataFrame,
+    panels: list[tuple[str, str]],
+    path: str | Path,
+    *,
+    title: str = "휴게소 × 시간대 평균 대기",
+) -> Path:
+    """휴게소(세로, 위 = 코리도 시작) × 도착 시각(가로) 평균 대기 히트맵. run 마다 한 칸.
+
+    hourly   : src/evdt/sql/station_hourly_wait.sql 결과 (run_id, station_id, hour, n_ev, mean_wait_min)
+    stations : station_id, name, offset_km — 그릴 휴게소와 순서
+    panels   : [(run_id, 제목), ...]  나란히 그릴 run 들. 색 구간은 모두 같다
+
+    차가 한 대도 오지 않은 칸은 대기 0 칸과 같은 회색이다 (둘 다 "기다린 사람 없음").
+    """
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+
+    _korean_font(plt)
+
+    if not panels:
+        raise ValueError("그릴 run 이 없다")
+
+    order = stations.sort_values("offset_km").reset_index(drop=True)
+    row_of = {sid: i for i, sid in enumerate(order["station_id"])}
+    cmap = ListedColormap(list(WAIT_RAMP))
+    norm = BoundaryNorm(list(WAIT_BINS_MIN[:-1]) + [1e9], len(WAIT_RAMP))
+
+    fig, axes = plt.subplots(1, len(panels), figsize=(6.5 * len(panels), 0.33 * len(order) + 2.2),
+                             dpi=150, sharey=True, squeeze=False)
+
+    for ax, (run_id, label) in zip(axes[0], panels, strict=True):
+        grid = np.zeros((len(order), 24))
+        for r in hourly[hourly["run_id"] == run_id].itertuples():
+            if r.station_id in row_of and 0 <= r.hour < 24:
+                grid[row_of[r.station_id], int(r.hour)] = r.mean_wait_min
+
+        ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+        ax.set_xticks(np.arange(-0.5, 24, 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(order), 1), minor=True)
+        ax.grid(which="minor", color="white", linewidth=1.2)
+        ax.tick_params(which="minor", length=0)
+        ax.set_xticks(range(0, 24, 3))
+        ax.set_xticklabels([f"{h}시" for h in range(0, 24, 3)], fontsize=8, color="#6b6a66")
+        ax.set_xlabel("도착 시각", fontsize=9, color="#6b6a66")
+        ax.set_title(label, fontsize=10, loc="left")
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    axes[0][0].set_yticks(range(len(order)))
+    axes[0][0].set_yticklabels(
+        [f"{n.replace('휴게소', '')}  {km:.0f}km" for n, km in zip(order["name"], order["offset_km"], strict=True)],
+        fontsize=8,
+    )
+
+    fig.legend([plt.Rectangle((0, 0), 1, 1, color=c) for c in WAIT_RAMP], list(WAIT_BIN_LABELS),
+               title="평균 대기 (분)", loc="lower center", ncol=len(WAIT_RAMP), frameon=False,
+               fontsize=8, title_fontsize=8)
+    fig.suptitle(title, x=0.02, ha="left", fontsize=12)
+    fig.tight_layout(rect=(0, 0.08, 1, 0.95))
+
+    path = Path(path)
+    fig.savefig(path)
+    plt.close(fig)
+    return path
