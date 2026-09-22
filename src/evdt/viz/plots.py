@@ -79,8 +79,131 @@ def plot_ue_gap(solver_log: pd.DataFrame, path: str | Path, *, gap_tol: float | 
 #: 대기 히트맵 구간 (분). **여러 run 을 나란히 놓을 때 같은 구간을 써야** 색 차이가 곧 대기 차이다.
 WAIT_BINS_MIN: tuple[float, ...] = (0, 1, 10, 30, 60, 120, 240, float("inf"))
 WAIT_BIN_LABELS: tuple[str, ...] = ("0", "1–10", "10–30", "30–60", "1–2시간", "2–4시간", "4시간+")
-#: 한 가지 색(파랑)의 진하기. 옅음 = 대기 없음, 짙음 = 오래
-WAIT_RAMP: tuple[str, ...] = ("#f4f3f0", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#1c5cab", "#0d366b")
+#: 큐 길이 히트맵 구간 (대). 줄 선 차 수 (충전 중인 차는 뺀다)
+QUEUE_BINS: tuple[float, ...] = (0, 0.5, 2, 5, 10, 20, 50, float("inf"))
+QUEUE_BIN_LABELS: tuple[str, ...] = ("0", "1–2", "2–5", "5–10", "10–20", "20–50", "50+")
+#: 한 가지 색(파랑)의 진하기. 옅음 = 없음, 짙음 = 많음
+RAMP: tuple[str, ...] = ("#f4f3f0", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#1c5cab", "#0d366b")
+WAIT_RAMP = RAMP
+
+#: 휴게소 한 곳이 세로축에서 차지하는 두께 (km). 이웃 휴게소가 더 가까우면 그 중간까지만
+STATION_BAND_KM = 6.0
+
+
+def _station_bands(offsets: list[float]) -> list[tuple[float, float]]:
+    """휴게소마다 세로 띠 [아래, 위] (km). 기점거리에 그대로 놓고, 이웃과 겹치지 않게 자른다."""
+
+    half = STATION_BAND_KM / 2
+    bands = []
+    for i, km in enumerate(offsets):
+        lo = km - half if i == 0 else max(km - half, (offsets[i - 1] + km) / 2)
+        hi = km + half if i == len(offsets) - 1 else min(km + half, (km + offsets[i + 1]) / 2)
+        bands.append((lo, hi))
+    return bands
+
+
+def _label_groups(names: list[str], offsets: list[float], min_gap_km: float = STATION_BAND_KM) -> list[tuple[float, str]]:
+    """가까운 휴게소 이름은 한 줄로 묶는다 (옥천만남·옥천 처럼 2.5 km 떨어진 곳이 겹치지 않게)."""
+
+    groups: list[list[int]] = []
+    for i, km in enumerate(offsets):
+        if groups and km - offsets[groups[-1][0]] < min_gap_km:
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    return [
+        (sum(offsets[i] for i in g) / len(g), "·".join(names[i].replace("휴게소", "") for i in g))
+        for g in groups
+    ]
+
+
+def plot_corridor_heatmap(
+    panels: list[tuple[str, pd.DataFrame]],
+    stations: pd.DataFrame,
+    path: str | Path,
+    *,
+    bins: tuple[float, ...] = WAIT_BINS_MIN,
+    bin_labels: tuple[str, ...] = WAIT_BIN_LABELS,
+    value_label: str = "평균 대기 (분)",
+    title: str = "휴게소 × 시간대",
+    subtitle: str | None = None,
+) -> Path:
+    """가로 = 도착 시각(시), 세로 = 기점거리 offset_km (위 = 코리도 시작), 색 = 값.
+
+    panels   : [(제목, DataFrame(station_id, hour, value)), ...] 나란히 그린다. 색 구간은 모두 같다
+    stations : station_id, name, offset_km
+
+    세로축은 **실제 기점거리**다. 휴게소를 같은 간격 줄로 늘어놓으면 40 km 떨어진 곳과
+    2.5 km 떨어진 곳이 똑같아 보이고, 가까이 붙은 휴게소들이 "한 구간이 통째로 막힌"
+    것처럼 과장된다 (이슈 #30: offset_km 왜곡을 안 고쳤다면 쏠림이 가짜로 보였을 것).
+    휴게소는 제 위치에 얇은 띠로 그리고, 사이의 도로는 비워 둔다.
+    값이 없는 칸(그 시각에 온 차가 없음)은 0 과 같은 색이다.
+    """
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.patches import Rectangle
+
+    _korean_font(plt)
+
+    if not panels:
+        raise ValueError("그릴 패널이 없다")
+
+    order = stations.sort_values("offset_km").reset_index(drop=True)
+    offsets = order["offset_km"].astype(float).tolist()
+    bands = _station_bands(offsets)
+    row_of = {sid: i for i, sid in enumerate(order["station_id"])}
+    cmap = ListedColormap(list(RAMP))
+    norm = BoundaryNorm(list(bins[:-1]) + [1e12], len(RAMP))
+    y_top = min(0.0, bands[0][0])
+    y_bottom = bands[-1][1]
+
+    fig, axes = plt.subplots(1, len(panels), figsize=(6.2 * len(panels) + 1.4, 8.2), dpi=150,
+                             sharey=True, squeeze=False)
+
+    for ax, (label, grid) in zip(axes[0], panels, strict=True):
+        values = {(r.station_id, int(r.hour)): float(r.value) for r in grid.itertuples() if r.station_id in row_of}
+        for sid, i in row_of.items():
+            lo, hi = bands[i]
+            for h in range(24):
+                v = values.get((sid, h), 0.0)
+                ax.add_patch(Rectangle((h, lo), 1, hi - lo, facecolor=cmap(norm(v)), edgecolor="white", linewidth=0.6))
+
+        ax.set_xlim(0, 24)
+        ax.set_ylim(y_bottom, y_top)                    # 위 = 기점
+        ax.set_xticks(range(0, 25, 3))
+        ax.set_xticklabels([f"{h}시" for h in range(0, 25, 3)], fontsize=8, color="#6b6a66")
+        ax.set_xlabel("도착 시각", fontsize=9, color="#6b6a66")
+        ax.set_title(label, fontsize=10, loc="left")
+        ax.grid(axis="y", color="#e6e5e1", linewidth=0.6)
+        ax.set_axisbelow(True)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    first = axes[0][0]
+    first.set_ylabel("기점거리 offset_km", fontsize=9, color="#6b6a66")
+    first.set_yticks(range(0, int(y_bottom) + 1, 50))
+    first.tick_params(axis="y", labelsize=8, colors="#6b6a66")
+
+    last = axes[0][-1]
+    names = order["name"].astype(str).tolist()
+    for km, text in _label_groups(names, offsets):
+        last.text(24.3, km, text, va="center", ha="left", fontsize=7.5, color="#1f1f1d", clip_on=False)
+
+    fig.legend([plt.Rectangle((0, 0), 1, 1, color=c) for c in RAMP], list(bin_labels), title=value_label,
+               loc="lower center", ncol=len(RAMP), frameon=False, fontsize=8, title_fontsize=8)
+    fig.suptitle(title, x=0.02, ha="left", fontsize=12)
+    if subtitle:
+        fig.text(0.02, 0.945, subtitle, fontsize=8, color="#6b6a66")
+    fig.tight_layout(rect=(0, 0.07, 0.93, 0.93))
+
+    path = Path(path)
+    fig.savefig(path)
+    plt.close(fig)
+    return path
 
 
 def plot_wait_heatmap(
@@ -91,66 +214,10 @@ def plot_wait_heatmap(
     *,
     title: str = "휴게소 × 시간대 평균 대기",
 ) -> Path:
-    """휴게소(세로, 위 = 코리도 시작) × 도착 시각(가로) 평균 대기 히트맵. run 마다 한 칸.
+    """station_hourly_wait.sql 결과로 run 마다 한 칸씩 (plot_corridor_heatmap 의 대기 버전)."""
 
-    hourly   : src/evdt/sql/station_hourly_wait.sql 결과 (run_id, station_id, hour, n_ev, mean_wait_min)
-    stations : station_id, name, offset_km — 그릴 휴게소와 순서
-    panels   : [(run_id, 제목), ...]  나란히 그릴 run 들. 색 구간은 모두 같다
-
-    차가 한 대도 오지 않은 칸은 대기 0 칸과 같은 회색이다 (둘 다 "기다린 사람 없음").
-    """
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from matplotlib.colors import BoundaryNorm, ListedColormap
-
-    _korean_font(plt)
-
-    if not panels:
-        raise ValueError("그릴 run 이 없다")
-
-    order = stations.sort_values("offset_km").reset_index(drop=True)
-    row_of = {sid: i for i, sid in enumerate(order["station_id"])}
-    cmap = ListedColormap(list(WAIT_RAMP))
-    norm = BoundaryNorm(list(WAIT_BINS_MIN[:-1]) + [1e9], len(WAIT_RAMP))
-
-    fig, axes = plt.subplots(1, len(panels), figsize=(6.5 * len(panels), 0.33 * len(order) + 2.2),
-                             dpi=150, sharey=True, squeeze=False)
-
-    for ax, (run_id, label) in zip(axes[0], panels, strict=True):
-        grid = np.zeros((len(order), 24))
-        for r in hourly[hourly["run_id"] == run_id].itertuples():
-            if r.station_id in row_of and 0 <= r.hour < 24:
-                grid[row_of[r.station_id], int(r.hour)] = r.mean_wait_min
-
-        ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
-        ax.set_xticks(np.arange(-0.5, 24, 1), minor=True)
-        ax.set_yticks(np.arange(-0.5, len(order), 1), minor=True)
-        ax.grid(which="minor", color="white", linewidth=1.2)
-        ax.tick_params(which="minor", length=0)
-        ax.set_xticks(range(0, 24, 3))
-        ax.set_xticklabels([f"{h}시" for h in range(0, 24, 3)], fontsize=8, color="#6b6a66")
-        ax.set_xlabel("도착 시각", fontsize=9, color="#6b6a66")
-        ax.set_title(label, fontsize=10, loc="left")
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-
-    axes[0][0].set_yticks(range(len(order)))
-    axes[0][0].set_yticklabels(
-        [f"{n.replace('휴게소', '')}  {km:.0f}km" for n, km in zip(order["name"], order["offset_km"], strict=True)],
-        fontsize=8,
-    )
-
-    fig.legend([plt.Rectangle((0, 0), 1, 1, color=c) for c in WAIT_RAMP], list(WAIT_BIN_LABELS),
-               title="평균 대기 (분)", loc="lower center", ncol=len(WAIT_RAMP), frameon=False,
-               fontsize=8, title_fontsize=8)
-    fig.suptitle(title, x=0.02, ha="left", fontsize=12)
-    fig.tight_layout(rect=(0, 0.08, 1, 0.95))
-
-    path = Path(path)
-    fig.savefig(path)
-    plt.close(fig)
-    return path
+    grids = [
+        (label, hourly[hourly["run_id"] == run_id].rename(columns={"mean_wait_min": "value"}))
+        for run_id, label in panels
+    ]
+    return plot_corridor_heatmap(grids, stations, path, title=title)

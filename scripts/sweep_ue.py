@@ -22,13 +22,13 @@ from __future__ import annotations
 import argparse
 
 import pandas as pd
-import run_ue  # noqa: E402  (같은 scripts/ 폴더)
 from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.ue import UENotConverged  # noqa: E402
 from evdt.io.db import get_conn  # noqa: E402
 from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
+from evdt.runner import load_config, run_ue_once  # noqa: E402
 
 COLUMNS = {
     "n_ev_charging": "충전필요",
@@ -62,7 +62,7 @@ def main() -> int:
 
     for soc in args.soc:
         for dm in args.dm:
-            cfg = run_ue.load_config(args.config, soc=soc, demand_multiplier=dm)
+            cfg = load_config(args.config, soc=soc, demand_multiplier=dm)
             for seed in args.seeds or [cfg.vehicles.seed]:
                 run_id = make_run_id(cfg.scenario_id, cfg.policy.stage, seed, cfg.policy.participation)
                 cell = {"soc": soc, "dm": dm, "seed": seed, "run_id": run_id}
@@ -73,7 +73,7 @@ def main() -> int:
                     continue
 
                 try:
-                    run_ue.run(cfg, seed=seed, overwrite=True)
+                    run_ue_once(cfg, seed=seed, overwrite=True)
                 except UENotConverged as exc:
                     print(f"\n[수렴 실패 → FAILED] {run_id}\n  {exc}")
 
