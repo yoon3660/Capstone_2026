@@ -2,6 +2,8 @@
 
     python scripts/build_route.py
 
+도로중심선(data/processed/centerline_gyeongbu.parquet, load_centerline.py 가 만든다) 에서
+구서IC~양재IC 구간을 잘라 노선을 만든다. IC 기점 좌표는 도로공사 API 에서 받는다.
 도로공사 API 에서 경부선 IC/JCT, 휴게소, 전국 IC 목록을 받아
     data/raw/ex_route_<시각>/             원본 (ic_gyeongbu.json, rest_gyeongbu.json, ic_all.json)
     data/processed/gyeongbu_route.json    노선 폴리라인 + 누적거리
@@ -25,7 +27,7 @@ from evdt.io.charger_ingest import (
     get_offset_origins,
     load_ex_api_key,
 )
-from evdt.io.route import GyeongbuRoute
+from evdt.io.route import CENTERLINE_SOURCE, ROUTE_PATH, GyeongbuRoute, check_centerline_route
 from evdt.paths import DATA_PROCESSED_DIR, DATA_RAW_DIR
 from evdt.world.geometry import Polyline
 
@@ -123,16 +125,14 @@ def main() -> int:
             json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8"
         )
 
-    # origins = get_offset_origins(ics)
-    # route = GyeongbuRoute.build(
-    #     origins,
-    #     {(float(r["yValue"]), float(r["xValue"])) for r in rest_areas},
-    #     ics,
-    # )
     origins = get_offset_origins(ics)
     route = build_centerline_route(origins)
 
+    # 읽는 쪽(GyeongbuRoute.load)이 출처와 길이를 검사한다 (#51)
+    check_centerline_route(route, {"source": CENTERLINE_SOURCE}, ROUTE_PATH)
+
     path = route.save(
+        source=CENTERLINE_SOURCE,
         raw_dir=raw_dir.name,
         n_interchanges=len(ics),
         n_rest_areas=len(rest_areas),

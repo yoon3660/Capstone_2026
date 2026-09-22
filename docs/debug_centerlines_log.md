@@ -1,0 +1,99 @@
+# 디버그 로그: 중심선 기준 거리 415.058 km 맞추기 (#51, `debug/centerlines`)
+
+> 스프린트 2 시작 전 전수 검사. 한 줄 요약: **노선 파일이 기기마다 달랐고, 읽는 쪽이 검사하지 않아서
+> 아무도 몰랐다.** 옛 노선으로 계산한 휴게소·콘존 위치는 남쪽으로 갈수록 최대 22 km 앞당겨져 있었다.
+
+## 1. 무엇이 틀렸나
+
+| 항목 | 기대 (T09a) | 리뷰어 로컬 (검사 전) |
+|---|---|---|
+| 노선 파일 `gyeongbu_route.json` | 도로중심선 4,153점, 415.058 km | IC·휴게소 91점, **392.978 km** |
+| DB `corridor.length_km` | 415.058 | 392.978 |
+| 하행 휴게소 `offset_km` | 중심선 투영 | 옛 노선 투영 (통도사 363.5 km) |
+| 교통량 콘존 `offset_km` | 중심선 투영 | 옛 노선 투영 (최대 392.3 km) |
+| `flow_params_by_conzone.parquet` | 중심선 콘존 위치 | 옛 콘존 위치 |
+
+`scripts/build_route.py` 는 #23 에서 이미 **중심선으로만** 노선을 만들도록 바뀌어 있었다. 문제는 #23 보다
+**먼저 만들어진 노선 파일이 그대로 남아 있었다**는 것. `GyeongbuRoute.load()` 는 파일을 읽기만 하고
+출처도 길이도 확인하지 않았다. 그래서 `seed_corridor`, `load_chargers`, `build_traffic` 이 모두 조용히
+옛 노선을 썼고, 그 위에서 만든 #29·#30 의 로컬 결과(히트맵 세로축 포함)도 393 km 기준이었다.
+
+중심선 원본 CSV 가 없는 기기는 `build_route.py` 를 다시 돌릴 수도 없어서 옛 파일을 계속 쓰게 된다.
+
+## 2. 얼마나 틀렸나 — 하행 휴게소
+
+| 휴게소 | 옛 노선 | 중심선 | 차이 |
+|---|---:|---:|---:|
+| 서울만남 | 0.559 | 0.649 | +0.09 |
+| 안성 | 53.524 | 53.835 | +0.31 |
+| 천안호두 | 91.363 | 91.936 | +0.57 |
+| 죽암 | 126.697 | 128.332 | +1.64 |
+| 옥천 | 156.316 | 160.433 | +4.12 |
+| 추풍령 | 195.380 | 202.915 | +7.54 |
+| 칠곡 | 244.658 | 257.481 | +12.82 |
+| 평사 | 291.356 | 310.002 | +18.65 |
+| 경주 | 335.713 | 357.053 | +21.34 |
+| 통도사 | 363.529 | 384.897 | +21.37 |
+
+- **차이가 고르지 않다.** 서울 쪽은 0.1 km, 남쪽은 21 km. 옛 노선은 IC 사이를 직선으로 이어서
+  굽은 구간(추풍령·경북 구간)을 짧게 쟀고, 그 오차가 남쪽으로 쌓였다.
+  → 예전 문서의 "415 km 에서는 약 6% 늘어난다" (T17_cells, fake_data_audit) 는 **비례로 늘어나는 것이
+  아니다.** 구간마다 다르다.
+- 콘존도 같다: 하행 평균 +9.2 km, 최대 +22.0 km / 상행 평균 +12.9 km, 최대 +22.0 km.
+- 휴게소 사이 간격이 바뀌므로 도달 가능성(배터리로 어디까지 가나), 도착 시각, 히트맵 세로축이
+  모두 바뀐다. 결과 비교는 §5.
+
+## 3. 어떻게 고쳤나
+
+### 데이터 (리뷰어 로컬)
+
+```
+python scripts/load_centerline.py data/raw/ETC_S0_07_04_345774.csv   # 받은 parquet 와 완전히 같음 확인
+python scripts/build_route.py        # 415.058 km, 4,153점
+python scripts/seed_corridor.py      # 상·하행 415.058
+python scripts/load_chargers.py      # 휴게소 35곳 다시 투영
+python scripts/build_traffic.py      # 콘존 다시 투영
+python scripts/estimate_flow_params.py   # 콘존 위치만 바뀜. config 의 측정값은 그대로 (팀원 값이 이미 415 기준)
+python scripts/build_demand_profile.py   # 하행
+python scripts/build_demand_profile.py --direction UP ...   # 상행 (처음)
+```
+
+셀 · 차로 프로파일은 SHP(`MOCT_LINK.shp`) 가 필요해서 리뷰어 로컬에는 없다. 팀원 DB 의 셀은
+처음부터 415 km 노선으로 만들어졌으므로 다시 만들 필요 없다 (§6 에서 확인할 것).
+
+### 코드 — 같은 일이 다시 일어나지 않게
+
+| 변경 | 이유 |
+|---|---|
+| `GyeongbuRoute.load()` 가 프로젝트 노선의 **출처(`meta.source = "centerline"`)와 길이(415.058 ± 0.01 km)** 를 검사. 틀리면 `RouteOutdatedError` 와 다시 만드는 명령 순서 | 낡은 파일을 조용히 쓰지 않는다. 노선을 읽는 7개 스크립트가 모두 여기를 지난다 |
+| `build_route.py` 가 `source="centerline"` 을 기록하고, 저장 전에 같은 검사 | 만드는 쪽과 읽는 쪽이 같은 기준 |
+| 옛 IC 방식 코드 삭제: `charger_ingest.route_mileposts` · `add_offset_km` · `_order_along_route` · `_insertion_cost`, `GyeongbuRoute.build`, `build_route.py` 의 주석 처리된 옛 호출 | 두 번째 좌표계를 만들 수 있는 코드. 테스트에서만 불리고 있었다 (죽은 코드) |
+| 옛 방식 전용 테스트 2건 삭제 (`test_offset_follows_route_not_chord`, `test_off_route_waypoint_is_ignored`), 노선 검증 테스트 4건 추가 | 곡선을 따라 재는 것은 `Polyline`/`GyeongbuRoute.project` 테스트가 이미 본다 |
+| 임시 노선(테스트·실험)은 검사하지 않음 (`validate=None` → 프로젝트 노선 파일일 때만) | 테스트용 짧은 노선이 415 km 가 아니라고 멈추면 안 된다 |
+
+`EXPECTED_ROUTE_KM = 415.058` 은 T09a 의 기준값이다. 중심선 원본이 바뀌면 이 상수와 T09a 를 같이 고친다.
+
+## 4. 함께 확인한 것 (전수 검사)
+
+| 검사 | 결과 |
+|---|---|
+| 코드·config 의 하드코딩 거리 (391 / 392.978 / 393 / 415 / 416) | 코드에는 없음. 테스트 fixture 의 416.0 은 임시 DB 용 (의도). 문서의 392.978 은 경위 기록 |
+| 노선을 읽는 곳 | `seed_corridor` · `load_chargers` · `build_traffic` · `build_lane_profile` · `audit_lane_mapping` · `seed_cells` · `generate_synthetic_evs` — 모두 `GyeongbuRoute.load()` 하나를 지난다 |
+| 휴게소 기점거리 계산 경로 | `load_chargers` 가 `route.offset_of()` 하나만 쓴다 (옛 `add_offset_km` 는 불리지 않았음) |
+| 가짜·스모크 데이터 | station `source='smoke'` 0건, `smoke_down` 코리도 0건 |
+| 계층 규칙 · 큐 규칙 호출자 · 스냅샷 계약 | 테스트 통과 |
+| 러너 · UE | 코리도 길이를 DB 에서 읽는다 (하드코딩 없음) |
+| `flow_params.yaml` | `estimate_flow_params.py` 가 다시 써도 측정값은 같고 생성 시각만 바뀜 → 되돌림 |
+
+## 5. 전후 비교 — 출발 SoC 높음 · 수요 ×3 · 시드 20개
+
+(실행 결과로 채운다)
+
+## 6. 팀원이 할 일 (#42)
+
+1. `git pull` 후 `python -c "from evdt.io.route import GyeongbuRoute; GyeongbuRoute.load()"`
+   - 멈추면: 메시지의 명령 순서대로 다시 만든다 (중심선 CSV 필요)
+   - 통과하면: 이미 중심선 노선. 단, 이 브랜치 전에 만든 파일에는 `source` 기록이 없으므로
+     **`build_route.py` 를 한 번 더** 돌려야 통과한다
+2. 셀을 쓰는 기기: `seed_cells.py` 로 만든 셀이 415.058 km 를 덮는지 확인 (`cell` 의 마지막 끝 = 415.058)
+3. 휴게소 19곳 하행 기점거리를 서로 비교 (§2 표의 "중심선" 열과 같아야 한다)
