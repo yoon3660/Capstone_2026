@@ -119,6 +119,9 @@ def charge_event_problems(row: Mapping[str, Any]) -> list[str]:
         if not row[key]:
             problems.append(f"{key} 가 비어 있음")
 
+    if not isinstance(row["stop_seq"], int) or isinstance(row["stop_seq"], bool) or row["stop_seq"] < 1:
+        problems.append(f"stop_seq={row['stop_seq']!r} 는 1 이상 정수여야 함")
+
     times = ("t_arrive_min", "t_start_min", "t_end_min", "wait_min", "charge_min", "dwell_min")
     bad = [k for k in times if not _finite(row[k])]
 
@@ -190,12 +193,12 @@ def check_snapshots(rows: Sequence[Mapping[str, Any]]) -> None:
 def check_charge_events(rows: Sequence[Mapping[str, Any]]) -> None:
     _check_all("charge_event", rows, charge_event_problems, "ev_id")
 
-    counts = Counter(r["ev_id"] for r in rows)
-    dup = sorted(ev_id for ev_id, n in counts.items() if n > 1)
+    # 장거리 차는 여러 번 선다. 같은 정차(ev_id, stop_seq)가 두 번 기록되면 대수가 부푼다.
+    counts = Counter((r["ev_id"], r["stop_seq"]) for r in rows)
+    dup = sorted(key for key, n in counts.items() if n > 1)
 
-    # 지금은 차 한 대가 한 번 충전한다. 두 번 충전을 모델링하면 이 검사를 (ev_id, 순번) 으로 바꾼다.
     if dup:
-        raise EventLogError(f"같은 ev_id 가 두 번 충전함: {dup[:MAX_REPORTED]}")
+        raise EventLogError(f"같은 정차 (ev_id, stop_seq) 가 두 번 기록됨: {dup[:MAX_REPORTED]}")
 
 
 # ---------------------------------------------------------------------------

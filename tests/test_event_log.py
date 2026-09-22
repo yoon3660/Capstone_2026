@@ -186,7 +186,7 @@ def test_bad_charge_events_are_named(over, needle):
 
 def test_duplicate_ev_is_rejected():
     rows = [_event(), _event()]
-    with pytest.raises(EventLogError, match="두 번 충전"):
+    with pytest.raises(EventLogError, match="두 번 기록"):
         check_charge_events(rows)
 
 

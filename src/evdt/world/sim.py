@@ -116,6 +116,7 @@ class EVArrival:
     vmax_kw: float
     curve: tuple[CurveSegment, ...]
     cold_factor: float = 1.0
+    stop_seq: int = 1           # 장거리 차는 여러 휴게소에 선다. 몇 번째 정차인가
 
 
 @dataclass(frozen=True)
@@ -236,6 +237,7 @@ def _charge_event(ev: EVArrival, a: Assignment) -> dict:
 
     return {
         "ev_id": ev.ev_id,
+        "stop_seq": ev.stop_seq,
         "vclass_id": ev.vclass_id,
         "station_id": ev.station_id,
         "charger_id": a.charger_id,

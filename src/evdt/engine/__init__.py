@@ -1,7 +1,9 @@
 """배정 엔진 — 본 프로젝트의 기여 부분.
 
 채워질 모듈:
-    policy.py    스테이지별 Policy 구현 (UE, S0~S4, MEC, ORACLE)   (T-18 ~)
+    ue.py        UE 반복 균형 (하루 단위, gap 수렴)               이슈 #29
+    ue_demand.py UE 선택지 = 차마다 가능한 충전 계획               이슈 #29
+    policy.py    스테이지별 Policy 구현 (S0~S4, MEC, ORACLE)       (T-18 ~)
     ledger.py    예약 원장 (§5.4)                                   Sprint 2
     mec.py       한계 외부비용 계산 (§6.1)                           Sprint 3
     forecast.py  미래 도착 예측                                      Sprint 3
