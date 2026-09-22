@@ -121,9 +121,10 @@ python scripts/build_demand_profile.py --direction UP ...   # 상행 (처음)
 
 ## 6. 팀원이 할 일 (#42)
 
-1. `git pull` 후 `python -c "from evdt.io.route import GyeongbuRoute; GyeongbuRoute.load()"`
-   - 멈추면: 메시지의 명령 순서대로 다시 만든다 (중심선 CSV 필요)
-   - 통과하면: 이미 중심선 노선. 단, 이 브랜치 전에 만든 파일에는 `source` 기록이 없으므로
-     **`build_route.py` 를 한 번 더** 돌려야 통과한다
+1. `git pull` 뒤 **모두 한 번은 노선을 다시 만든다.** 이 브랜치 전에 만든 노선 파일에는 출처(`source`)
+   기록이 없어서, 이미 중심선 노선이어도 `GyeongbuRoute.load()` 가 멈춘다.
+   - 중심선 parquet 가 있는 기기: `build_route.py` 한 번이면 된다. 길이가 415.058 km 로 나오는지 확인
+   - 없는 기기: 중심선 CSV 를 받아 메시지의 명령 순서대로 (load_centerline → build_route → … )
+   - 확인: `python -c "from evdt.io.route import GyeongbuRoute; print(GyeongbuRoute.load().length_km)"` → 415.058
 2. 셀을 쓰는 기기: `seed_cells.py` 로 만든 셀이 415.058 km 를 덮는지 확인 (`cell` 의 마지막 끝 = 415.058)
 3. 휴게소 19곳 하행 기점거리를 서로 비교 (§2 표의 "중심선" 열과 같아야 한다)
