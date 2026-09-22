@@ -126,5 +126,7 @@ python scripts/build_demand_profile.py --direction UP ...   # 상행 (처음)
    - 중심선 parquet 가 있는 기기: `build_route.py` 한 번이면 된다. 길이가 415.058 km 로 나오는지 확인
    - 없는 기기: 중심선 CSV 를 받아 메시지의 명령 순서대로 (load_centerline → build_route → … )
    - 확인: `python -c "from evdt.io.route import GyeongbuRoute; print(GyeongbuRoute.load().length_km)"` → 415.058
-2. 셀을 쓰는 기기: `seed_cells.py` 로 만든 셀이 415.058 km 를 덮는지 확인 (`cell` 의 마지막 끝 = 415.058)
+2. 셀을 쓰는 기기: `python scripts/check_cells.py` — 셀이 0 ~ 415.058 km 를 빈틈·겹침 없이 덮는지,
+   휴게소가 제 셀 안에 있는지, CFL 하한을 지키는지 본다. 틀리면 `seed_cells.py --replace`
+   (표준노드링크 SHP `data/raw/nodelink/MOCT_LINK.shp` 가 필요하다 — data/raw/README.md)
 3. 휴게소 19곳 하행 기점거리를 서로 비교 (§2 표의 "중심선" 열과 같아야 한다)
