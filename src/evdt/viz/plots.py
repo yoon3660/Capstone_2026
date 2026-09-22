@@ -127,6 +127,7 @@ def plot_corridor_heatmap(
     value_label: str = "평균 대기 (분)",
     title: str = "휴게소 × 시간대",
     subtitle: str | None = None,
+    x_label: str = "도착 시각",
 ) -> Path:
     """가로 = 도착 시각(시), 세로 = 기점거리 offset_km (위 = 코리도 시작), 색 = 값.
 
@@ -176,7 +177,7 @@ def plot_corridor_heatmap(
         ax.set_ylim(y_bottom, y_top)                    # 위 = 기점
         ax.set_xticks(range(0, 25, 3))
         ax.set_xticklabels([f"{h}시" for h in range(0, 25, 3)], fontsize=8, color="#6b6a66")
-        ax.set_xlabel("도착 시각", fontsize=9, color="#6b6a66")
+        ax.set_xlabel(x_label, fontsize=9, color="#6b6a66")
         ax.set_title(label, fontsize=10, loc="left")
         ax.grid(axis="y", color="#e6e5e1", linewidth=0.6)
         ax.set_axisbelow(True)

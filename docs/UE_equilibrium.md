@@ -32,6 +32,7 @@ run_id 가 겹치지 않고, 실제로 쓴 설정 전문이 `runs/<run_id>/confi
 | 10 UE | `python scripts/run_ue.py` (또는 `--soc high`, `--demand-multiplier 2`) | `runs/<run_id>/` 에 Parquet · gap 그래프 |
 | 10' 격자 | `python scripts/sweep_ue.py` | SoC × 수요 비교표 |
 | 11 히트맵 | `python scripts/plot_heatmap.py` (최근 run) 또는 `--run <id> --run <id>` (나란히) | `runs/<첫 run_id>/wait_heatmap.png` |
+| 12 반복 실험 | `python scripts/run_experiment.py --seeds 1-20` (+ `--soc`, `--demand-multiplier`) | `runs/experiments/<id>/` 에 신뢰구간 표 · 히트맵 (docs/experiment.md) |
 
 4~7 은 한 번만 하면 된다. 셀 분할(`seed_cells.py`)은 UE 에 필요 없다.
 

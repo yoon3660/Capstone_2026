@@ -440,7 +440,8 @@ def plot_experiment_heatmap(
     grid = corridor_grid(run_ids, metric=metric, db_path=db_path, runs_dir=runs_dir)
     stations = corridor_stations(cfg.corridor_id, db_path=db_path)
     what = "실제로 기다린 평균 (분)" if metric == "wait" else "줄 선 차 수 (대, 5분마다 찍은 값의 평균)"
-    kw = {} if metric == "wait" else {"bins": QUEUE_BINS, "bin_labels": QUEUE_BIN_LABELS, "value_label": "큐 길이 (대)"}
+    kw = {} if metric == "wait" else {"bins": QUEUE_BINS, "bin_labels": QUEUE_BIN_LABELS,
+                                      "value_label": "큐 길이 (대)", "x_label": "시각 (그 시각의 상태)"}
 
     return plot_corridor_heatmap(
         [(f"{cfg.label}", grid)],
@@ -469,6 +470,10 @@ KPI_LABELS: dict[str, str] = {
     "n_charge_visits": "충전 정차 (회)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
+    "n_ev": "진입 EV (대)",
+    "n_ev_no_charge": "충전 없이 도착 (대)",
+    "n_ev_infeasible": "3회 정차로도 불가 (대)",
+    "departure_soc_mean": "출발 SoC 평균",
 }
 
 
@@ -519,6 +524,14 @@ def summarize_kpis(run_ids: Sequence[str], *, db_path: Path | None = None) -> pd
     return out.sort_values("metric", key=lambda s: s.map(lambda m: order.get(m, len(order)))).reset_index(drop=True)
 
 
+def _formatter(metric: str, unit: str):
+    if metric == "ue_final_gap":
+        return lambda x: f"{x:.4f}"
+    if unit == "ratio":
+        return lambda x: f"{x:.2f}"
+    return lambda x: f"{x:,.1f}"
+
+
 def summary_markdown(summary: pd.DataFrame, cfg: ScenarioConfig, seeds: Sequence[int]) -> str:
     """발표 슬라이드에 바로 붙이는 신뢰구간 표."""
 
@@ -534,7 +547,7 @@ def summary_markdown(summary: pd.DataFrame, cfg: ScenarioConfig, seeds: Sequence
     ]
 
     for r in summary.itertuples():
-        f = (lambda x: f"{x:.4f}") if r.metric == "ue_final_gap" else (lambda x: f"{x:,.1f}")
+        f = _formatter(r.metric, r.unit)
         lines.append(f"| {r.label} | {f(r.mean)} | {f(r.ci_low)} – {f(r.ci_high)} | {f(r.sd)} | "
                      f"{f(r.min)} – {f(r.max)} |")
 

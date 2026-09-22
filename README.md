@@ -240,6 +240,7 @@ docs/T16_charging_des.md 충전 큐 DES (SimPy 는 시간만 굴린다)
 docs/T17_cells.md        CTM 셀 분할 (수정된 완료조건, 가짜 휴게소 사고)
 docs/event_log.md        이벤트 로거 · 스냅샷 계약 · 휴게소×시간대 대기 SQL 한 줄
 docs/UE_equilibrium.md   UE 반복 균형 · 쏠림이 어디서 오는가 · 지킬 수 없는 완료조건
+docs/experiment.md       시드 반복 · 95% 신뢰구간 · offset_km 축 히트맵 (run_experiment.py)
 docs/fake_data_audit.md  가짜 휴게소가 어디에 영향을 줬는지 전수 검토
 ```
 
