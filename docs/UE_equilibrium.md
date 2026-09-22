@@ -1,5 +1,10 @@
 # UE: 자율 선택 균형 (이슈 #29)
 
+> **관점 변경 (2026-09-23, 설계문서 §1):** 디지털 트윈은 2026 설 연휴를 재현한 시험장이고,
+> **UE = 재현된 2026 설 연휴** 다. 이 문서의 반복 균형(Wardrop)은 재현 UE 의 **운전자 행동 모델
+> 후보 중 하나**다. 어떤 행동 모델(완전 균형 / 현재 화면 / 혼합)이 설 2026 을 재현하는지는 3차
+> 스프린트에서 실측과 대조해 정한다. 아래의 수요 ×3 · 출발 SoC high 실험은 재현이 아니라 민감도다.
+
 `src/evdt/engine/ue.py` · `engine/ue_demand.py` · `engine/ledger.py` · `io/demand_profile.py`
 실행: `scripts/build_demand_profile.py` → `scripts/run_ue.py`
 테스트: `tests/test_ue.py` (14), `tests/test_ue_demand.py` (18), `tests/test_ledger.py` (6)
