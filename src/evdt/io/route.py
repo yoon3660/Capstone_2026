@@ -1,14 +1,17 @@
 """경부선 노선 좌표계 — 위경도를 offset_km 로 바꾼다.
 
-T-06 의 route_mileposts 로 만든 노선 폴리라인(구서IC → 양재IC) 위에
+도로중심선(T-09a, #23) 으로 만든 노선 폴리라인(구서IC → 양재IC, 415.058 km) 위에
 임의의 점을 투영해 이정을 구한다. 휴게소·VDS 구간·CTM 셀이 모두 같은
 좌표계를 쓰게 하려는 것이 목적이다 (설계 규칙 3).
 
     UP   offset_km = m          (구서IC 기점)
     DOWN offset_km = L - m      (양재IC 기점)
 
-T-09a 의 offset_of() 가 이 역할을 맡기로 되어 있었으나 아직 없어서
-T-07 에서 먼저 만든다. 셀 분할도 이 함수를 쓰면 된다.
+⚠ 노선은 하나뿐이어야 한다 (#51)
+    예전에는 IC·휴게소 좌표를 직선으로 이은 노선(점 91개, 392.978 km)이 있었다. 굽은
+    도로를 짧게 재서 남쪽 휴게소가 최대 21 km 앞당겨졌다. #23 에서 중심선으로 바꿨지만
+    파일을 다시 만들지 않은 기기는 옛 노선을 계속 썼고, 읽는 쪽이 검사하지 않아 아무도
+    몰랐다. 그래서 load() 가 노선의 출처와 길이를 검사하고, 틀리면 멈춘다.
 
 노선은 scripts/build_route.py 가 한 번 만들어 data/processed/gyeongbu_route.json
 에 저장하고, 휴게소 적재(load_chargers)와 교통량·속도 정리(build_traffic)가
@@ -23,13 +26,33 @@ from dataclasses import dataclass
 from math import cos, radians, sqrt
 from pathlib import Path
 
-from evdt.io.charger_ingest import route_mileposts
 from evdt.paths import DATA_PROCESSED_DIR
 
 ROUTE_PATH = DATA_PROCESSED_DIR / "gyeongbu_route.json"
 
 # 투영점이 노선에서 이만큼 넘게 떨어지면 노선 위의 점이 아니다.
 MAX_OFF_ROUTE_KM = 2.0
+
+#: 노선의 출처. build_route.py 가 meta 에 적는다
+CENTERLINE_SOURCE = "centerline"
+
+#: 중심선 기준 구서IC~양재IC 길이 (docs/T09a_centerline.md §4). 중심선 원본이 바뀌면 여기도 바꾼다
+EXPECTED_ROUTE_KM = 415.058
+ROUTE_LENGTH_TOL_KM = 0.01
+
+REBUILD_STEPS = (
+    "python scripts/load_centerline.py data/raw/ETC_S0_07_04_345774.csv\n"
+    "    python scripts/build_route.py\n"
+    "    python scripts/seed_corridor.py\n"
+    "    python scripts/load_chargers.py\n"
+    "    python scripts/build_traffic.py\n"
+    "    python scripts/build_demand_profile.py   (하행·상행 모두)\n"
+    "  (셀을 쓰면 build_lane_profile.py → estimate_flow_params.py → seed_cells.py --replace 도)"
+)
+
+
+class RouteOutdatedError(RuntimeError):
+    """노선 파일이 중심선 기준이 아니다. 옛 노선으로 계산한 거리는 전부 틀린다."""
 
 
 def _local_xy(lat: float, lon: float, ref_lat: float) -> tuple[float, float]:
@@ -46,23 +69,6 @@ class GyeongbuRoute:
     @property
     def length_km(self) -> float:
         return self.mileposts[-1]
-
-    @classmethod
-    def build(
-        cls,
-        origins: dict[str, tuple[float, float]],
-        points: set[tuple[float, float]],
-        waypoints: list[dict] | None = None,
-    ) -> GyeongbuRoute:
-        """charger_ingest.route_mileposts 와 같은 입력으로 만든다."""
-
-        milepost, _ = route_mileposts(origins, points, waypoints)
-        ordered = sorted(milepost.items(), key=lambda item: item[1])
-
-        return cls(
-            points=tuple(p for p, _ in ordered),
-            mileposts=tuple(m for _, m in ordered),
-        )
 
     def save(self, path: Path = ROUTE_PATH, **meta: object) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +88,12 @@ class GyeongbuRoute:
         return path
 
     @classmethod
-    def load(cls, path: Path = ROUTE_PATH) -> GyeongbuRoute:
+    def load(cls, path: Path = ROUTE_PATH, *, validate: bool | None = None) -> GyeongbuRoute:
+        """노선 파일을 읽는다. 프로젝트 노선(ROUTE_PATH)이면 중심선 기준인지 검사한다.
+
+        validate: None 이면 ROUTE_PATH 일 때만 검사한다 (테스트의 임시 노선은 검사하지 않는다).
+        """
+
         if not path.exists():
             raise FileNotFoundError(
                 f"노선 파일이 없습니다: {path}\n"
@@ -90,10 +101,15 @@ class GyeongbuRoute:
             )
 
         data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(
+        route = cls(
             points=tuple((lat, lon) for lat, lon in data["points"]),
             mileposts=tuple(data["mileposts"]),
         )
+
+        if validate if validate is not None else path.resolve() == ROUTE_PATH.resolve():
+            check_centerline_route(route, data.get("meta") or {}, path)
+
+        return route
 
     def project(self, lat: float, lon: float) -> tuple[float, float]:
         """(m, 노선까지 거리 km). m 은 구서IC 에서의 누적거리."""
@@ -139,3 +155,22 @@ class GyeongbuRoute:
         if direction == "DOWN":
             return self.length_km - m
         raise ValueError(f"알 수 없는 방향: {direction}")
+
+
+def check_centerline_route(route: GyeongbuRoute, meta: dict, path: Path) -> None:
+    """중심선으로 만든 노선인지, 길이가 기준과 같은지. 아니면 다시 만드는 순서를 알려주고 멈춘다."""
+
+    problems = []
+
+    if meta.get("source") != CENTERLINE_SOURCE:
+        problems.append(f"출처가 중심선이 아니다 (meta.source={meta.get('source')!r}, 점 {len(route.points)}개)")
+
+    if abs(route.length_km - EXPECTED_ROUTE_KM) > ROUTE_LENGTH_TOL_KM:
+        problems.append(f"길이 {route.length_km:.3f} km ≠ 기준 {EXPECTED_ROUTE_KM} km")
+
+    if problems:
+        raise RouteOutdatedError(
+            f"노선 파일이 도로중심선 기준이 아니다: {path}\n  - " + "\n  - ".join(problems) + "\n"
+            "옛 노선으로 계산한 휴게소·콘존·셀 거리는 전부 틀린다 (#51). 다시 만들 것:\n    "
+            + REBUILD_STEPS
+        )

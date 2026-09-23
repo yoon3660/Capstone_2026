@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 
 import pytest
 
@@ -72,86 +71,6 @@ def test_same_name_far_away_is_rejected():
 
     with pytest.raises(RuntimeError, match="좌표가"):
         ci.filter_gyeongbu_chargers([far], areas)
-
-
-def _ic(lat, lon):
-    return {"yValue": str(lat), "xValue": str(lon)}
-
-
-def _arc_route(origin, n=40):
-    """기점에서 북쪽으로 올라갔다가 기점을 중심으로 서쪽으로 도는 노선.
-
-    경부선 영천~경산처럼 기점 직선거리가 거의 그대로이거나 줄어드는 구간이
-    생긴다. 직선거리로 정렬하면 이 구간에서 순서가 뒤집힌다.
-    """
-
-    lat0, lon0 = origin
-    points = [(lat0 + 0.07 * i, lon0) for i in range(1, 10)]   # 북쪽 약 70km
-
-    for i in range(1, n + 1):
-        theta = math.radians(90 + 100 * i / n)                  # 북 → 서남서
-        radius = 0.63 - 0.05 * math.sin(math.pi * i / n)        # 가운데서 살짝 안쪽
-        points.append(
-            (
-                lat0 + radius * math.sin(theta),
-                lon0 + radius * math.cos(theta) / math.cos(math.radians(lat0)),
-            )
-        )
-
-    return points
-
-
-def test_offset_follows_route_not_chord():
-    up_origin = (35.00, 129.00)
-    route = _arc_route(up_origin)
-    down_origin = route.pop()
-    origins = {"UP": up_origin, "DOWN": down_origin}
-
-    # 호 구간에서 기점 직선거리가 실제로 줄어드는지 (테스트 전제 확인)
-    chords = [ci.haversine_km(*up_origin, *p) for p in route]
-    assert any(b < a for a, b in zip(chords, chords[1:], strict=False))
-
-    station_idx = [5, 15, 22, 30, 40]
-    stations = [
-        {"name": f"s{i}", "direction": "UP", "lat": route[i][0], "lon": route[i][1]}
-        for i in station_idx
-    ]
-    stations.append(
-        {"name": "s_down", "direction": "DOWN", "lat": route[22][0], "lon": route[22][1]}
-    )
-    waypoints = [
-        _ic(lat, lon) for i, (lat, lon) in enumerate(route) if i not in station_idx
-    ]
-    waypoints.append(_ic(*route[22]))   # 휴게소와 같은 좌표
-    waypoints.append(_ic(*route[3]))    # 중복 IC
-
-    result = {s["name"]: s for s in ci.add_offset_km(stations, origins, waypoints)}
-
-    true_milepost = [0.0]
-    prev = up_origin
-    for point in route:
-        true_milepost.append(true_milepost[-1] + ci.haversine_km(*prev, *point))
-        prev = point
-    length = true_milepost[-1] + ci.haversine_km(*prev, *down_origin)
-
-    for i in station_idx:
-        assert result[f"s{i}"]["offset_km"] == pytest.approx(true_milepost[i + 1], abs=0.01)
-
-    # 같은 지점이면 상행 + 하행 = 총연장
-    same_point = result["s_down"]["offset_km"] + result["s22"]["offset_km"]
-    assert same_point == pytest.approx(length, abs=0.01)
-
-
-def test_off_route_waypoint_is_ignored():
-    origins = {"UP": (35.0, 129.0), "DOWN": (36.0, 129.0)}
-    stations = [{"name": "mid", "direction": "UP", "lat": 35.5, "lon": 129.0}]
-    on_route = [_ic(35.25, 129.0), _ic(35.75, 129.0)]
-    stray = [_ic(35.4, 128.5)]   # 노선에서 45km 떨어진 IC (좌표 오류)
-
-    clean = ci.add_offset_km(stations, origins, on_route)
-    noisy = ci.add_offset_km(stations, origins, on_route + stray)
-
-    assert noisy[0]["offset_km"] == pytest.approx(clean[0]["offset_km"])
 
 
 def test_official_direction_fills_names_without_direction():

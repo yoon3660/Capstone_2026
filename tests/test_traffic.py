@@ -339,3 +339,56 @@ def test_speed_comparison_confusion_and_onset():
     assert result.recall == pytest.approx(0.5)
     assert result.onset_lag_h["lag_h"].tolist() == [1]
     assert result.mae_kmh == pytest.approx((0 + 5 + 55 + 5 + 35 + 0) / 6)
+
+
+# ---------------------------------------------------------------------------
+# #51: 프로젝트 노선은 중심선 기준이어야 한다
+# ---------------------------------------------------------------------------
+
+
+def _save_as_project_route(route, tmp_path, monkeypatch, **meta):
+    import evdt.io.route as route_mod
+
+    path = tmp_path / "gyeongbu_route.json"
+    monkeypatch.setattr(route_mod, "ROUTE_PATH", path)
+    route.save(path, **meta)
+    return path
+
+
+def test_old_ic_route_is_refused(tmp_path, monkeypatch):
+    """IC 를 직선으로 이은 옛 노선(출처 없음, 392.978 km)을 조용히 쓰지 않는다."""
+    from evdt.io.route import RouteOutdatedError
+
+    path = _save_as_project_route(_straight_route(), tmp_path, monkeypatch, raw_dir="old")
+
+    with pytest.raises(RouteOutdatedError, match="중심선") as info:
+        GyeongbuRoute.load(path)
+
+    assert "build_route.py" in str(info.value)          # 다시 만드는 순서를 알려준다
+
+
+def test_centerline_route_of_the_wrong_length_is_refused(tmp_path, monkeypatch):
+    from evdt.io.route import CENTERLINE_SOURCE, RouteOutdatedError
+
+    path = _save_as_project_route(_straight_route(), tmp_path, monkeypatch, source=CENTERLINE_SOURCE)
+
+    with pytest.raises(RouteOutdatedError, match="415.058"):
+        GyeongbuRoute.load(path)
+
+
+def test_centerline_route_of_the_expected_length_loads(tmp_path, monkeypatch):
+    from evdt.io.route import CENTERLINE_SOURCE, EXPECTED_ROUTE_KM
+
+    base = _straight_route()
+    scale = EXPECTED_ROUTE_KM / base.length_km
+    route = GyeongbuRoute(points=base.points, mileposts=tuple(m * scale for m in base.mileposts))
+    path = _save_as_project_route(route, tmp_path, monkeypatch, source=CENTERLINE_SOURCE)
+
+    assert GyeongbuRoute.load(path).length_km == pytest.approx(EXPECTED_ROUTE_KM)
+
+
+def test_temporary_routes_are_not_checked(tmp_path):
+    """테스트·실험용 임시 노선은 검사하지 않는다 (프로젝트 노선 파일만)."""
+    path = _straight_route().save(tmp_path / "other.json")
+
+    assert GyeongbuRoute.load(path) == _straight_route()

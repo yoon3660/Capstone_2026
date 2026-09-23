@@ -1,5 +1,10 @@
 # UE: 자율 선택 균형 (이슈 #29)
 
+> **관점 변경 (2026-09-23, 설계문서 §1):** 디지털 트윈은 2026 설 연휴를 재현한 시험장이고,
+> **UE = 재현된 2026 설 연휴** 다. 이 문서의 반복 균형(Wardrop)은 재현 UE 의 **운전자 행동 모델
+> 후보 중 하나**다. 어떤 행동 모델(완전 균형 / 현재 화면 / 혼합)이 설 2026 을 재현하는지는 3차
+> 스프린트에서 실측과 대조해 정한다. 아래의 수요 ×3 · 출발 SoC high 실험은 재현이 아니라 민감도다.
+
 `src/evdt/engine/ue.py` · `engine/ue_demand.py` · `engine/ledger.py` · `io/demand_profile.py`
 실행: `scripts/build_demand_profile.py` → `scripts/run_ue.py`
 테스트: `tests/test_ue.py` (14), `tests/test_ue_demand.py` (18), `tests/test_ledger.py` (6)
@@ -239,7 +244,7 @@ FIFO 에서 한 차의 대기는 **그 차보다 먼저 온 차들만** 정한�
    같은 low. 어느 쪽을 "본 실험" 으로 할지는 T-14 담당과 정할 일이다.
 2. **EV 비중·수요 배율.** 쏠림이 나타나는 수요 구간을 찾는 것이 RQ1 그 자체다.
    `demand.demand_multiplier` 로 훑으면 된다 (§5 나 의 표가 그 첫 줄).
-3. **로컬 route 가 393 km 다** (팀 DB 는 415 km). 휴게소 위치가 조금 다르다.
+3. ~~로컬 route 가 393 km 다~~ → #51 에서 해결. 위 §5 숫자는 옛 노선 결과다. 중심선 기준은 `docs/debug_centerlines_log.md` §5.
 
 ## 7. 쏠림을 어떻게 확인하나 · 엔진이 나오면 무엇을 보나 · 어떻게 보여주나
 
@@ -285,7 +290,7 @@ FIFO 에서 한 차의 대기는 **그 차보다 먼저 온 차들만** 정한�
 | gap 수렴 그래프 | UE 가 진짜 균형이라는 근거 | `solver_log` (`ue_gap.png`) |
 | SoC × 수요 배율 표/히트맵 | 쏠림이 어느 수요에서 시작되나 (RQ1) | `sweep_ue.py` 결과 |
 | 대기 시간 흐름 (한 휴게소) | 표시 대기(S0)와 실제 대기의 어긋남, 큐 진동 | `snapshot` `wait_min` + charge_event |
-| 지도 위 휴게소 원 (크기=대기) | 코리도 전체를 한눈에 (Sprint 4, Plotly/deck.gl) | snapshot 의 위경도 |
+| 지도 위 휴게소 원 (크기=대기) | 코리도 전체를 한눈에 (Sprint 6, Plotly/deck.gl) | snapshot 의 위경도 |
 
 히트맵은 **한 가지 색의 진하기**(옅음 = 0, 짙음 = 오래)로 그리고, 여러 run 을 나란히 놓을
 때는 **같은 구간(0 / 10 / 30 / 60분 / 2시간 / 4시간)** 을 쓴다. 칸마다 색 범위가 다르면
