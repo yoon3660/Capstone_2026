@@ -7,6 +7,7 @@
 셀 위치가 어긋난다. 이 스크립트는 DB 의 cell 테이블만 읽는다 (SHP 불필요).
 
 검사
+    0. corridor.length_km 가 중심선 기준 415.058 km 다 (DB 전체가 옛 노선이면 1~4 는 모두 통과한다)
     1. 방향마다 첫 셀이 0 km 에서 시작하고, 마지막 셀이 corridor.length_km 에서 끝난다
     2. 이웃 셀 사이에 빈틈·겹침이 없다 (앞 셀 끝 = 뒤 셀 시작)
     3. 셀 길이가 CFL 하한 이상이다 (config/flow_params.yaml 의 dt_min 기준)
@@ -18,9 +19,10 @@ from __future__ import annotations
 
 import sys
 
-from _bootstrap import ROOT  # noqa: E402,F401
+from _bootstrap import ROOT  # noqa: E402
 
 from evdt.io.db import get_conn  # noqa: E402
+from evdt.io.route import EXPECTED_ROUTE_KM, ROUTE_LENGTH_TOL_KM  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
 
 TOL_KM = 0.01
@@ -33,6 +35,14 @@ def main() -> int:
         corridors = conn.execute("SELECT corridor_id, length_km FROM corridor ORDER BY corridor_id").fetchall()
 
         for corridor_id, length_km in corridors:
+            # 셀은 corridor.length_km 를 기준으로 검사한다. 그 값 자체가 옛 노선이면
+            # 셀이 아무리 맞아떨어져도 전부 틀린 자리다 (#51).
+            if abs(length_km - EXPECTED_ROUTE_KM) > ROUTE_LENGTH_TOL_KM:
+                problems.append(
+                    f"{corridor_id}: 코리도 길이 {length_km:.3f} km ≠ 중심선 기준 {EXPECTED_ROUTE_KM} km. "
+                    "DB 가 옛 노선으로 만들어졌다. build_route.py 부터 다시 만들 것 (io/route.py REBUILD_STEPS)"
+                )
+
             cells = conn.execute(
                 "SELECT seq, offset_km_start, offset_km_end, length_km, v_free_kmh, w_back_kmh"
                 " FROM cell WHERE corridor_id = ? ORDER BY seq",
@@ -84,8 +94,7 @@ def main() -> int:
                 (dt_min, dt_min),
             ).fetchall()
         for corridor_id, seq, length_km, cfl in worst:
-            if seq is not None:
-                problems.append(f"{corridor_id}: 셀 {seq} 길이 {length_km:.3f} km < CFL 하한 {cfl:.3f} km")
+            problems.append(f"{corridor_id}: 셀 {seq} 길이 {length_km:.3f} km < CFL 하한 {cfl:.3f} km")
     except (OSError, KeyError) as exc:
         problems.append(f"CFL 검사를 못 했다: {exc}")
 

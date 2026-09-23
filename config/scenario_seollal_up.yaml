@@ -26,7 +26,7 @@ demand:
   safety_buffer_km: 30.0
   low_soc_threshold: 0.2
   # 목적지 분포: 부산(구서) 쪽에서 출발한 차 중 각 지점을 지나가는 비율
-  #   python scripts/build_demand_profile.py --direction UP   #     --volume-out data/processed/volume_gyeongbu_up_seollal.csv   #     --through-out data/processed/through_gyeongbu_up_seollal.csv
+  #   scripts/build_demand_profile.py --direction UP
   through_profile: data/processed/through_gyeongbu_up_seollal.csv
   cruise_speed_kmh: 80.0
 
