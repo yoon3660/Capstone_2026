@@ -69,12 +69,34 @@ class LongDistance:
         return f"장거리 {self.share:.0%} ({self.min_trip_km:.0f}km+)"
 
 
-Layer = EvAdoption | LongDistance
+@dataclass(frozen=True, slots=True)
+class OpportunityCharge:
+    """기회 충전 — 필요해서가 아니라 **들른 김에** 꽂는다 (#54).
+
+    명절 고속도로에서 실제로 일어나는 행동이다. 그래서 이건 수요를 부풀리는 가정이
+    아니라 **운전자 행동 모델의 파라미터**이고, #64 충전 실측 조사로 보정할 대상이다
+    (설계문서 §1: 행동 모델은 가정이 아니라 실측과 대조해 고른다).
+
+    soc_margin 으로 거는 이유: 배터리가 작은 차는 도착 SoC 여유가 얇아 **자연히** 더
+    자주 걸린다. 차종별로 충전 횟수를 강제하면 이미 맞게 도는 물리를 덮어쓴다.
+    """
+
+    prob: float
+    soc_margin: float = 0.5
+
+    kind = "opportunity_charge"
+
+    def label(self) -> str:
+        return f"기회 충전 {self.prob:.0%} (도착 SoC<{self.soc_margin:.0%})"
+
+
+Layer = EvAdoption | LongDistance | OpportunityCharge
 
 #: kind → (클래스, 필수 키, 선택 키)
 _KINDS: dict[str, tuple[type, tuple[str, ...], tuple[str, ...]]] = {
     EvAdoption.kind: (EvAdoption, ("ev_share",), ()),
     LongDistance.kind: (LongDistance, ("share",), ("min_trip_km",)),
+    OpportunityCharge.kind: (OpportunityCharge, ("prob",), ("soc_margin",)),
 }
 
 KINDS: tuple[str, ...] = tuple(_KINDS)
@@ -138,6 +160,8 @@ def _build(cls: type, values: dict, errors, where: str) -> Layer | None:
         "ev_share": (0.0, 1.0),
         "share": (0.0, 1.0),
         "min_trip_km": (0.0, None),
+        "prob": (0.0, 1.0),
+        "soc_margin": (0.0, 1.0),
     }
 
     for key, (lo, hi) in numbers.items():
@@ -175,6 +199,8 @@ def tag(layers: tuple[Layer, ...]) -> str:
             parts.append(f"ev{layer.ev_share * 100:.0f}")
         elif isinstance(layer, LongDistance):
             parts.append(f"ld{layer.share * 100:.0f}")
+        elif isinstance(layer, OpportunityCharge):
+            parts.append(f"oc{layer.prob * 100:.0f}")
 
     return "-".join(parts)
 
@@ -189,6 +215,17 @@ def effective_ev_share(layers: tuple[Layer, ...], base_share: float) -> float:
     layer = find(layers, EvAdoption.kind)
 
     return layer.ev_share if isinstance(layer, EvAdoption) else base_share
+
+
+def opportunity_charge(layers: tuple[Layer, ...]) -> tuple[float, float]:
+    """(기회 충전 확률, 도착 SoC 문턱). 레이어가 없으면 (0, 0) — 아무도 안 한다."""
+
+    layer = find(layers, OpportunityCharge.kind)
+
+    if isinstance(layer, OpportunityCharge):
+        return layer.prob, layer.soc_margin
+
+    return 0.0, 0.0
 
 
 def long_distance_share(layers: tuple[Layer, ...]) -> tuple[float, float]:

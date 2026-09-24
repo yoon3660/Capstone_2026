@@ -272,3 +272,120 @@ def test_missing_entry_offset_falls_back_to_the_argument():
                                charge_power_factor=1.0, entry_offset_km=20.0)
 
     assert built.trips[0].entry_offset_km == 20.0
+
+
+# ---------------------------------------------------------------------------
+# 기회 충전 (#54)
+# ---------------------------------------------------------------------------
+
+
+def _opp_setup(**rule_kw):
+    stations = [
+        {"station_id": "A", "offset_km": 30.0, "name": "A"},
+        {"station_id": "B", "offset_km": 60.0, "name": "B"},
+    ]
+    vclasses = {
+        "big": {"vclass_id": "big", "battery_kwh": 100.0, "consumption_kwh_km": 0.2, "vmax_kw": 200.0},
+        "small": {"vclass_id": "small", "battery_kwh": 30.0, "consumption_kwh_km": 0.2, "vmax_kw": 100.0},
+    }
+    curves = {k: ((0.0, 1.0, 200.0),) for k in vclasses}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3, **rule_kw)
+    return stations, vclasses, curves, rule
+
+
+def _ev(ev_id: str, vclass: str, soc: float, dest: float = 90.0) -> dict:
+    return {"ev_id": ev_id, "vclass_id": vclass, "entry_time_min": 0.0,
+            "initial_soc": soc, "dest_offset_km": dest, "entry_offset_km": 0.0}
+
+
+def test_without_the_layer_nobody_charges_opportunistically():
+    """기본값은 0 이다. 레이어를 안 켜면 수요가 몰래 늘지 않는다."""
+    stations, vclasses, curves, rule = _opp_setup()
+    evs = [_ev(f"e{i}", "big", 0.9) for i in range(50)]
+
+    built = build_trip_demands(evs, stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+
+    assert built.n_opportunity == 0
+    assert built.n_no_charge == 50
+
+
+def test_opportunity_charging_creates_demand_that_was_not_there():
+    """목적지까지 갈 수 있는 차도 들른 김에 충전한다 — 이게 이 레이어의 전부다."""
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=1.0)
+    evs = [_ev(f"e{i}", "big", 0.9) for i in range(50)]
+
+    built = build_trip_demands(evs, stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, rng=np.random.default_rng(0))
+
+    assert built.n_opportunity == 50
+    assert len(built.trips) == 50
+    assert built.n_no_charge == 0
+
+
+def test_opportunity_stop_actually_charges():
+    """0분짜리 정차면 충전기를 점유하지도 대기를 만들지도 않는다 — 있으나 마나 하다."""
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=1.0)
+
+    built = build_trip_demands([_ev("e", "big", 0.9)], stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0, rng=np.random.default_rng(0))
+    stop = built.trips[0].plans[0].stops[0]
+
+    assert stop.soc_out > stop.soc_in
+    assert stop.soc_out == pytest.approx(rule.target_soc_cap)
+
+
+def test_thick_margin_does_not_trigger_it():
+    """도착 SoC 여유가 두꺼우면 들러도 안 꽂는다."""
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=0.2)
+    evs = [_ev(f"e{i}", "big", 0.95, dest=40.0) for i in range(30)]   # 거의 안 쓰고 도착
+
+    built = build_trip_demands(evs, stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, rng=np.random.default_rng(0))
+
+    assert built.n_opportunity == 0
+
+
+def test_small_batteries_are_caught_more_often_without_naming_them():
+    """경차를 따로 지정하지 않아도 여유가 얇아 **자연히** 더 걸린다.
+
+    차종별로 충전 횟수를 강제하면 이미 맞게 도는 물리를 덮어쓰게 된다.
+    """
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=0.5)
+
+    big = build_trip_demands([_ev(f"b{i}", "big", 0.8) for i in range(40)], stations,
+                             vclasses, curves, rule=rule, charge_power_factor=1.0,
+                             rng=np.random.default_rng(0))
+    small = build_trip_demands([_ev(f"s{i}", "small", 0.8) for i in range(40)], stations,
+                               vclasses, curves, rule=rule, charge_power_factor=1.0,
+                               rng=np.random.default_rng(0))
+
+    assert small.n_opportunity > big.n_opportunity
+
+
+def test_probability_scales_the_number_of_opportunity_stops():
+    stations, vclasses, curves, _ = _opp_setup()
+    evs = [_ev(f"e{i}", "big", 0.9) for i in range(2_000)]
+
+    counts = []
+    for prob in (0.2, 0.6):
+        rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                          target_soc_cap=0.8, max_stops=3,
+                          opportunity_prob=prob, opportunity_soc_margin=1.0)
+        built = build_trip_demands(evs, stations, vclasses, curves, rule=rule,
+                                   charge_power_factor=1.0, rng=np.random.default_rng(1))
+        counts.append(built.n_opportunity / len(evs))
+
+    assert counts[0] == pytest.approx(0.2, abs=0.03)
+    assert counts[1] == pytest.approx(0.6, abs=0.03)
+
+
+def test_cars_that_really_need_a_charge_are_unaffected():
+    """기회 충전을 꺼도 필요한 차는 그대로 충전한다."""
+    stations, vclasses, curves, rule = _opp_setup()
+    built = build_trip_demands([_ev("need", "small", 0.3)], stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+
+    assert len(built.trips) == 1
+    assert built.n_opportunity == 0
