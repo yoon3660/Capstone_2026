@@ -173,7 +173,12 @@ def build_trip_demands(
 ) -> DemandBuild:
     """synthetic_ev 의 EV 행 → 충전이 필요한 차의 선택지.
 
-    evs 행: ev_id, vclass_id, entry_time_min, initial_soc, dest_offset_km
+    evs 행: ev_id, vclass_id, entry_time_min, initial_soc, dest_offset_km,
+            entry_offset_km (없으면 인자 기본값)
+
+    진입 지점이 **차마다 다르다** (#54). 전에는 전원이 코리도 한쪽 끝에서 출발했는데,
+    실제로는 수원·천안·대전에서 타는 차가 더 많다. 진입 지점이 다르면 갈 수 있는
+    휴게소도 달라지므로, 선택지 자체가 차마다 달라진다.
     """
 
     trips: list[TripDemand] = []
@@ -182,9 +187,10 @@ def build_trip_demands(
     for ev in evs:
         n_ev += 1
         v = vclasses[str(ev["vclass_id"])]
+        entry_km = float(ev.get("entry_offset_km", entry_offset_km))
         plans = enumerate_plans(
             stations,
-            entry_offset_km=entry_offset_km,
+            entry_offset_km=entry_km,
             dest_offset_km=float(ev["dest_offset_km"]),
             soc0=float(ev["initial_soc"]),
             battery_kwh=float(v["battery_kwh"]),
@@ -205,7 +211,7 @@ def build_trip_demands(
                 ev_id=str(ev["ev_id"]),
                 vclass_id=str(ev["vclass_id"]),
                 entry_min=float(ev["entry_time_min"]),
-                entry_offset_km=entry_offset_km,
+                entry_offset_km=entry_km,
                 dest_offset_km=float(ev["dest_offset_km"]),
                 battery_kwh=float(v["battery_kwh"]),
                 vmax_kw=float(v["vmax_kw"]),

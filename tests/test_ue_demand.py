@@ -224,3 +224,51 @@ def test_wait_heatmap_is_written(tmp_path):
     out = plot_wait_heatmap(hourly, stations, [("r1", "UE"), ("r2", "엔진")], tmp_path / "h.png")
 
     assert out.is_file() and out.stat().st_size > 1000
+
+
+def test_entry_offset_is_read_per_ev():
+    """진입 지점이 차마다 다르다 (#54). 늦게 탄 차는 앞쪽 휴게소를 고를 수 없다."""
+    stations = [
+        {"station_id": "A", "offset_km": 50.0, "name": "A"},
+        {"station_id": "B", "offset_km": 150.0, "name": "B"},
+    ]
+    vclasses = {"vc": {"vclass_id": "vc", "battery_kwh": 60.0, "consumption_kwh_km": 0.25,
+                       "vmax_kw": 200.0}}
+    curves = {"vc": ((0.0, 1.0, 200.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3)
+
+    evs = [
+        {"ev_id": "early", "vclass_id": "vc", "entry_time_min": 0.0, "initial_soc": 0.5,
+         "dest_offset_km": 250.0, "entry_offset_km": 0.0},
+        {"ev_id": "late", "vclass_id": "vc", "entry_time_min": 0.0, "initial_soc": 0.5,
+         "dest_offset_km": 250.0, "entry_offset_km": 100.0},
+    ]
+
+    built = build_trip_demands(evs, stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+    by_id = {t.ev_id: t for t in built.trips}
+
+    assert by_id["early"].entry_offset_km == 0.0
+    assert by_id["late"].entry_offset_km == 100.0
+
+    # 100 km 에서 탄 차의 어떤 계획에도 50 km 휴게소는 없다
+    late_stations = {s for plan in by_id["late"].plans for s in plan.station_ids}
+    assert "A" not in late_stations
+
+
+def test_missing_entry_offset_falls_back_to_the_argument():
+    """예전 호출(진입 지점 하나)이 그대로 돈다."""
+    stations = [{"station_id": "A", "offset_km": 50.0, "name": "A"}]
+    vclasses = {"vc": {"vclass_id": "vc", "battery_kwh": 60.0, "consumption_kwh_km": 0.25,
+                       "vmax_kw": 200.0}}
+    curves = {"vc": ((0.0, 1.0, 200.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3)
+    ev = {"ev_id": "e", "vclass_id": "vc", "entry_time_min": 0.0, "initial_soc": 0.3,
+          "dest_offset_km": 200.0}
+
+    built = build_trip_demands([ev], stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, entry_offset_km=20.0)
+
+    assert built.trips[0].entry_offset_km == 20.0
