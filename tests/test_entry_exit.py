@@ -13,6 +13,7 @@ import pytest
 from evdt.io.entry_exit import (
     MAX_EXIT_SHARE,
     corridor_entry_hourly,
+    corridor_entry_hourly_from_profile,
     entry_exit_profile,
     entry_points,
     ramp_arrays,
@@ -266,3 +267,22 @@ def test_exit_ratio_stays_within_zero_and_one() -> None:
         _profile_rows([(5.0, 0.0, 0.9), (6.0, 0.0, 0.9), (7.0, 0.0, 0.9)]), 0, edges)
 
     assert 0.0 <= exit_ratio[0] <= 1.0
+
+
+def test_entry_points_total_is_head_plus_middle() -> None:
+    """EV 대수는 **코리도 전체 진입**에서 나와야 한다 (#54).
+
+    `volume_profile` 은 기점 콘존만이라, 그것만으로 EV 를 뽑으면 중간 IC 에서 타는 차가
+    통째로 빠진다 (실측에서 하행 3.5배 · 상행 7.6배 부족했다). CTM 램프는 이미 전체를
+    쓰고 있어서 EV 와 배경 교통이 서로 다른 수요에서 나오고 있었다.
+    """
+    traffic = _traffic([(0.0, 10.0, 100.0), (10.0, 20.0, 150.0), (20.0, 30.0, 190.0)])
+    profile = entry_exit_profile(traffic, period=PERIOD, direction=DIRECTION)
+    volume = pd.DataFrame({"hour": [0, 1], "volume_veh": [100.0, 100.0]})
+
+    points = corridor_entry_hourly_from_profile(profile, volume)
+    hour0 = points[points["hour"] == 0]
+
+    # 기점 100 + 10km 에서 50 + 20km 에서 40
+    assert hour0["entry_veh"].sum() == pytest.approx(190.0)
+    assert sorted(hour0["offset_km"]) == [0.0, 10.0, 20.0]

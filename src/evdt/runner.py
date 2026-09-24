@@ -142,13 +142,24 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
     if share != cfg.demand.ev_share:
         cfg = dataclasses.replace(cfg, demand=dataclasses.replace(cfg.demand, ev_share=share))
 
-    evs = generate_evs(volume, cfg, dest_offset_km=corridor_end_km)
     rng = np.random.default_rng([cfg.vehicles.seed, DEST_STREAM])
+    points = None
 
     if cfg.demand.entry_exit_profile:
-        # 차마다 진입 지점이 다르고, 목적지는 실측 진출 비율로 하류를 훑으며 뽑는다
+        # ⚠ EV 대수는 **코리도 전체 진입**에서 나와야 한다. volume_profile 은 기점
+        # 콘존만이라, 그걸로 뽑으면 중간 IC 에서 타는 차가 통째로 빠진다
+        # (하행 3.5배 · 상행 7.6배 부족). CTM 램프는 이미 전체를 쓰고 있어서
+        # EV 와 배경 교통이 서로 다른 수요에서 나오고 있었다.
         profile = pd.read_csv(root / cfg.demand.entry_exit_profile)
         points = corridor_entry_hourly_from_profile(profile, volume)
+        volume = (points.groupby("hour")["entry_veh"].sum()
+                  .reindex(range(24), fill_value=0.0)
+                  .rename("volume_veh").reset_index())
+
+    evs = generate_evs(volume, cfg, dest_offset_km=corridor_end_km)
+
+    if points is not None:
+        # 목적지는 실측 진출 비율로 하류를 훑으며 뽑는다
         hours = ((evs["entry_time_min"] // 60).astype(int) % 24).to_numpy()
         entry = np.zeros(len(evs))
         dest = np.zeros(len(evs))
