@@ -29,6 +29,8 @@ demand:
   #   scripts/build_demand_profile.py --direction UP
   through_profile: data/processed/through_gyeongbu_up_seollal.csv
   cruise_speed_kmh: 80.0
+  # 통행시간을 무엇으로 재나 (#56): fixed = 위 고정 속도 · ctm = CTM 셀 속도
+  travel_time: fixed
 
 vehicles:
   seed: 7

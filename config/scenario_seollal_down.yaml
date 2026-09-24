@@ -27,6 +27,8 @@ demand:
   # 목적지 분포: 서울에서 출발한 차 중 각 지점을 지나가는 비율 (scripts/build_demand_profile.py)
   through_profile: data/processed/through_gyeongbu_down_seollal.csv
   cruise_speed_kmh: 80.0    # 휴게소 사이 주행 속도. Sprint 2 에 CTM 속도로 바뀐다
+  # 통행시간을 무엇으로 재나 (#56): fixed = 위 고정 속도 · ctm = CTM 셀 속도
+  travel_time: fixed
 
 vehicles:
   seed: 7                   # 시드 고정. 같은 시드면 모든 스테이지가 같은 차량 집합을 받는다

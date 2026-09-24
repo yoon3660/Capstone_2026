@@ -59,6 +59,7 @@ from dataclasses import dataclass, field
 from evdt.engine.ledger import Arrival, Charger, StationLedger
 from evdt.engine.ue_demand import Plan, TripDemand
 from evdt.world.sim import EVArrival
+from evdt.world.travel import ConstantSpeed, TravelTime
 
 #: 이보다 작은 개선은 동률로 본다 (부동소수 오차로 계획을 바꾸지 않는다)
 GAIN_EPS_MIN = 1e-9
@@ -77,7 +78,13 @@ class UESettings:
     max_iter: int = 50
     gap_tol: float = 0.03
     min_gain_min: float = 1.0
+    #: 고정 속도(km/h). travel 을 주지 않으면 이 속도로 달린다
     speed_kmh: float = 80.0
+    #: 통행시간. None 이면 ConstantSpeed(speed_kmh). CTM 을 켜면 CellSpeedField 가 온다
+    travel: TravelTime | None = None
+
+    def travel_time(self) -> TravelTime:
+        return self.travel if self.travel is not None else ConstantSpeed(self.speed_kmh)
 
 
 @dataclass(frozen=True)
@@ -123,12 +130,10 @@ class UEResult:
 # ---------------------------------------------------------------------------
 
 
-def drive_min(from_km: float, to_km: float, speed_kmh: float) -> float:
-    return (to_km - from_km) / speed_kmh * 60.0
-
-
-def _first_arrival_min(trip: TripDemand, plan: Plan, speed_kmh: float) -> float:
-    return trip.entry_min + drive_min(trip.entry_offset_km, plan.stops[0].offset_km, speed_kmh)
+def _first_arrival_min(trip: TripDemand, plan: Plan, travel: TravelTime) -> float:
+    return trip.entry_min + travel.minutes(
+        trip.entry_offset_km, plan.stops[0].offset_km, trip.entry_min
+    )
 
 
 def _arrival(trip: TripDemand, seq: int, t: float, plan: Plan) -> Arrival:
@@ -156,7 +161,7 @@ def _roll(
     trips: Sequence[TripDemand],
     choice: Mapping[str, int],
     chargers: Mapping[str, tuple[Charger, ...]],
-    speed_kmh: float,
+    travel: TravelTime,
 ) -> tuple[Ledgers, list[Visit]]:
     """전원이 고른 계획대로 하루를 굴린다. 원장과 실제 정차 목록을 돌려준다.
 
@@ -169,7 +174,7 @@ def _roll(
     ledgers = _ledgers(chargers)
     by_id = {t.ev_id: t for t in trips}
     heap = [
-        (_first_arrival_min(t, t.plans[choice[t.ev_id]], speed_kmh), t.ev_id, 0) for t in trips
+        (_first_arrival_min(t, t.plans[choice[t.ev_id]], travel), t.ev_id, 0) for t in trips
     ]
     heapq.heapify(heap)
     visits: list[Visit] = []
@@ -188,7 +193,11 @@ def _roll(
 
         if seq + 1 < len(plan.stops):
             nxt = plan.stops[seq + 1]
-            heapq.heappush(heap, (t + dwell + drive_min(stop.offset_km, nxt.offset_km, speed_kmh), ev_id, seq + 1))
+            left = t + dwell
+            heapq.heappush(
+                heap,
+                (left + travel.minutes(stop.offset_km, nxt.offset_km, left), ev_id, seq + 1),
+            )
 
     return ledgers, visits
 
@@ -197,7 +206,7 @@ def _plan_cost(
     trip: TripDemand,
     plan: Plan,
     ledgers: Ledgers,
-    speed_kmh: float,
+    travel: TravelTime,
     *,
     exclude_self: bool,
 ) -> tuple[float, list[Arrival]]:
@@ -207,7 +216,7 @@ def _plan_cost(
     기존 정차를 빼고 계산한다 ("나 혼자 계획을 바꾸면?").
     """
 
-    t = _first_arrival_min(trip, plan, speed_kmh)
+    t = _first_arrival_min(trip, plan, travel)
     total = 0.0
     arrivals: list[Arrival] = []
     exclude = trip.ev_id if exclude_self else None
@@ -219,7 +228,8 @@ def _plan_cost(
         total += dwell
 
         if seq + 1 < len(plan.stops):
-            t += dwell + drive_min(stop.offset_km, plan.stops[seq + 1].offset_km, speed_kmh)
+            t += dwell
+            t += travel.minutes(stop.offset_km, plan.stops[seq + 1].offset_km, t)
 
     return total, arrivals
 
@@ -249,9 +259,9 @@ def evaluate(
     trips: Sequence[TripDemand],
     choice: Mapping[str, int],
     chargers: Mapping[str, tuple[Charger, ...]],
-    speed_kmh: float,
+    travel: TravelTime,
 ) -> Evaluation:
-    ledgers, visits = _roll(trips, choice, chargers, speed_kmh)
+    ledgers, visits = _roll(trips, choice, chargers, travel)
     current: dict[str, float] = {}
 
     for v in visits:
@@ -268,7 +278,7 @@ def evaluate(
             if k == mine:
                 continue
 
-            cost, _ = _plan_cost(trip, plan, ledgers, speed_kmh, exclude_self=True)
+            cost, _ = _plan_cost(trip, plan, ledgers, travel, exclude_self=True)
 
             if cost < best_cost[trip.ev_id] - GAIN_EPS_MIN:
                 best_plan[trip.ev_id], best_cost[trip.ev_id] = k, cost
@@ -288,13 +298,13 @@ def _best(costs: Sequence[float]) -> int:
 def free_flow_choice(
     trips: Sequence[TripDemand],
     chargers: Mapping[str, tuple[Charger, ...]],
-    speed_kmh: float,
+    travel: TravelTime,
 ) -> dict[str, int]:
     """빈 휴게소 기준 각자 가장 빠른 계획 — 대기를 모르는 운전자. 반복 0."""
 
     empty = _ledgers(chargers)
     return {
-        trip.ev_id: _best([_plan_cost(trip, p, empty, speed_kmh, exclude_self=False)[0] for p in trip.plans])
+        trip.ev_id: _best([_plan_cost(trip, p, empty, travel, exclude_self=False)[0] for p in trip.plans])
         for trip in trips
     }
 
@@ -305,6 +315,7 @@ def _sweep(
     chargers: Mapping[str, tuple[Charger, ...]],
     current: Evaluation,
     settings: UESettings,
+    travel: TravelTime,
 ) -> int:
     """진입 순서대로 한 대씩 최적반응으로 바꾼다. 바꾼 대수를 돌려준다."""
 
@@ -323,7 +334,7 @@ def _sweep(
         for sid in own[trip.ev_id]:
             ledgers[sid].cancel(trip.ev_id)
 
-        evals = [_plan_cost(trip, plan, ledgers, settings.speed_kmh, exclude_self=False) for plan in trip.plans]
+        evals = [_plan_cost(trip, plan, ledgers, travel, exclude_self=False) for plan in trip.plans]
         mine = choice[trip.ev_id]
         best = _best([c for c, _ in evals])
 
@@ -365,11 +376,12 @@ def solve_ue(
     if missing:
         raise ValueError(f"충전기 정보가 없는 휴게소가 계획에 있다: {missing}")
 
-    choice = free_flow_choice(trips, chargers, settings.speed_kmh)
+    travel = settings.travel_time()
+    choice = free_flow_choice(trips, chargers, travel)
     history: list[IterationStat] = []
 
     for k in range(settings.max_iter + 1):
-        ev = evaluate(trips, choice, chargers, settings.speed_kmh)
+        ev = evaluate(trips, choice, chargers, travel)
         n_improvable = _improvable(ev, settings.min_gain_min)
         done = ev.rel_gap <= settings.gap_tol or n_improvable == 0
 
@@ -377,7 +389,7 @@ def solve_ue(
             history.append(IterationStat(k, ev.rel_gap, sum(ev.current.values()), n_improvable, 0))
             break
 
-        switched = _sweep(trips, choice, chargers, ev, settings)
+        switched = _sweep(trips, choice, chargers, ev, settings, travel)
         history.append(IterationStat(k, ev.rel_gap, sum(ev.current.values()), n_improvable, switched))
 
     result = UEResult(

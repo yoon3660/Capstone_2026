@@ -151,6 +151,10 @@ class TimeConfig:
         return self.end_min - self.start_min
 
 
+#: demand.travel_time 이 가질 수 있는 값 (#56)
+TRAVEL_TIME_MODES: frozenset[str] = frozenset({"fixed", "ctm"})
+
+
 @dataclass(frozen=True, slots=True)
 class DemandConfig:
     volume_profile: str        # 시간대별 교통량 CSV (T-07 산출물)
@@ -161,8 +165,13 @@ class DemandConfig:
     low_soc_threshold: float   # 이 SoC 아래면 무조건 충전 (0.2)
     #: 목적지 분포 CSV (offset_km, share = 그 지점을 지나가는 비율). 없으면 전원 코리도 끝까지 간다.
     through_profile: str | None = None
-    #: 휴게소 사이 주행 속도 (km/h). Sprint 2 에 CTM 속도로 바뀐다
+    #: 휴게소 사이 주행 속도 (km/h). travel_time == "fixed" 일 때만 쓴다
     cruise_speed_kmh: float = 80.0
+    #: 통행시간을 무엇으로 재나 (#56)
+    #:   "fixed"  cruise_speed_kmh 고정 속도 (옛 실험 재현)
+    #:   "ctm"    CTM 이 낸 셀 속도. 셀이 없으면 멈춘다 — 조용히 고정 속도로 돌아가지 않는다
+    travel_time: str = "fixed"
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +232,9 @@ class QueueConfig:
 class OutputConfig:
     write_snapshots: bool
     snapshot_every_min: int
+    #: CTM 스텝 (분). CFL 하한(max(v_free, w_back) × dt ≤ 셀 길이)을 어기면
+    #: 돌기 전에 멈춘다. config/flow_params.yaml 의 dt_min 과 같은 값을 쓴다.
+    ctm_dt_min: float = 0.2
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +347,10 @@ class ScenarioConfig:
         through_profile = d.get("through_profile")
         if through_profile is not None:
             through_profile = e.text(through_profile, "demand.through_profile")
+        travel_time = str(d.get("travel_time", "fixed"))
+        if travel_time not in TRAVEL_TIME_MODES:
+            e.add("demand.travel_time",
+                  f"{sorted(TRAVEL_TIME_MODES)} 중 하나여야 한다 (받은 값: {travel_time!r})")
         cruise_speed_kmh = e.number(
             d.get("cruise_speed_kmh", 80.0), "demand.cruise_speed_kmh", lo=0.0, lo_exclusive=True
         )
@@ -437,6 +453,9 @@ class ScenarioConfig:
             o.get("snapshot_every_min", 5), "output.snapshot_every_min",
             lo=0, lo_exclusive=True, integer=True,
         )
+        ctm_dt_min = e.number(
+            o.get("ctm_dt_min", 0.2), "output.ctm_dt_min", lo=0, lo_exclusive=True,
+        )
 
         # 알 수 없는 최상위 키 — 오타를 조용히 넘기지 않는다
         known_top = {
@@ -465,6 +484,7 @@ class ScenarioConfig:
                 low_soc_threshold=low_soc_threshold,       # type: ignore[arg-type]
                 through_profile=through_profile,           # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
+                travel_time=travel_time,
             ),
             vehicles=VehiclesConfig(
                 seed=seed,                                 # type: ignore[arg-type]
@@ -476,7 +496,7 @@ class ScenarioConfig:
             environment=EnvironmentConfig(temp_c),         # type: ignore[arg-type]
             policy=PolicyConfig(stage, participation, dict(params), ue),  # type: ignore[arg-type]
             queue=QueueConfig(discipline, charger_select), # type: ignore[arg-type]
-            output=OutputConfig(write_snapshots, snapshot_every_min),  # type: ignore[arg-type]
+            output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min),  # type: ignore[arg-type]
             source_path=source_path,
             raw_yaml=raw_yaml,
             config_hash=hashlib.sha256(raw_yaml.encode("utf-8")).hexdigest()[:16],

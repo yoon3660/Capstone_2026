@@ -123,13 +123,21 @@ SNAPSHOT_COLUMNS: tuple[str, ...] = (
 
 #: entity_type 별로 내보낼 수 있는 state. **여기에 없는 값은 로거가 거부한다.**
 #: 오타 난 state 는 조용히 저장되고, 렌더러에서 빈 칸으로만 드러난다.
-#: cell·vehicle 은 Sprint 2 에서 CTM·차량 스냅샷을 붙일 때 state 를 정한다.
+#: vehicle 은 차량 스냅샷을 붙일 때 정한다 (아직 미정).
 SNAPSHOT_STATES: Mapping[str, tuple[str, ...]] = {
     "station": (
         "wait_min",         # 지금 도착하면 기다릴 시간(분) — S0 가 보는 값
         "queue_len",        # 도착했지만 아직 충전을 시작하지 못한 차 수
         "chargers_busy",    # 충전 중인 충전기 수
         "chargers_total",   # 총 충전기 수
+    ),
+    # CTM 셀 (#56). 셀의 lat/lon 은 셀 **시작점**을 쓴다 — 셀은 선분이라 점 하나로
+    # 줄여야 하는데, 끝점을 쓰면 이웃 셀과 겹쳐 보인다.
+    "cell": (
+        "speed_kmh",        # 유량 ÷ 밀도. 빈 셀은 자유속도
+        "density_veh_km",   # 셀 전체(차로 합) 밀도. 차로당 값이 아니다
+        "flow_veh_h",       # 셀에서 하류로 나간 유량
+        "ev_count",         # 그 셀 안에 있는 합성 EV 수 (배경 교통은 빼고)
     ),
 }
 

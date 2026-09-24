@@ -28,6 +28,7 @@ from evdt.io.db import get_conn, read_table
 from evdt.io.run_registry import RunContext
 from evdt.io.writers import SCHEMAS
 from evdt.world.sim import StationSpec, expand_chargers, run_charging_des
+from evdt.world.travel import ConstantSpeed
 
 FLAT = ((0.0, 1.0, 10_000.0),)
 DSOC = 0.5
@@ -247,19 +248,19 @@ def test_unilateral_cost_is_exact_for_single_stop():
     trips, ch = _random_single_stop(6, n=60)
     trips = sorted(trips, key=lambda t: t.ev_id)
     choice = {t.ev_id: 0 for t in trips}
-    ledgers, _ = _roll(trips, choice, ch, SPEED)
+    ledgers, _ = _roll(trips, choice, ch, ConstantSpeed(SPEED))
 
     for trip in trips[::7]:
         for k, plan in enumerate(trip.plans):
-            predicted, _ = _plan_cost(trip, plan, ledgers, SPEED, exclude_self=True)
-            _, visits = _roll(trips, {**choice, trip.ev_id: k}, ch, SPEED)
+            predicted, _ = _plan_cost(trip, plan, ledgers, ConstantSpeed(SPEED), exclude_self=True)
+            _, visits = _roll(trips, {**choice, trip.ev_id: k}, ch, ConstantSpeed(SPEED))
             actual = sum(v.dwell_min for v in visits if v.ev_id == trip.ev_id)
             assert predicted == pytest.approx(actual, abs=1e-9)
 
 
 def test_evaluate_matches_the_definition_of_gap():
     trips, ch = _random_single_stop(7, n=40)
-    ev = evaluate(sorted(trips, key=lambda t: t.ev_id), {t.ev_id: 0 for t in trips}, ch, SPEED)
+    ev = evaluate(sorted(trips, key=lambda t: t.ev_id), {t.ev_id: 0 for t in trips}, ch, ConstantSpeed(SPEED))
     excess = sum(ev.current[e] - ev.best_cost[e] for e in ev.current)
 
     assert ev.rel_gap == pytest.approx(excess / sum(ev.current.values()))
@@ -290,8 +291,63 @@ def test_equilibrium_leaves_captive_drivers_waiting():
     assert r.final_gap == 0.0                                  # 정말 균형이다
     assert r.dwell_by_ev["c0"] == pytest.approx(29.0 + 30.0)   # captive 가 기다린다
 
-    so = evaluate([captive, flexible], {"f0": 1, "c0": 0}, ch, SPEED)
+    so = evaluate([captive, flexible], {"f0": 1, "c0": 0}, ch, ConstantSpeed(SPEED))
     so_total = sum(so.current.values())
 
     assert so_total == pytest.approx(40.0 + 30.0)
     assert ue_total - so_total == pytest.approx(19.0)          # UE 가 남긴 사회적 손실
+
+
+# ---------------------------------------------------------------------------
+# CTM 통행시간으로 바꿔 끼우기 (#56)
+# ---------------------------------------------------------------------------
+
+
+def test_congested_travel_time_pushes_arrivals_later():
+    """막힌 구간을 지나오면 휴게소 도착이 늦어진다.
+
+    고정 80 km/h 로는 이게 아예 나오지 않는다. "도로가 막혀서 도착이 밀리고
+    그래서 몰린다" 가 설 연휴의 핵심이라, 이 한 칸이 UE 와 CTM 을 잇는 자리다.
+    """
+    import numpy as np
+
+    from evdt.world.travel import CellSpeedField
+
+    edges = np.arange(0.0, 401.0, 10.0)          # 10 km 셀 40개
+    speeds = np.full((288, edges.size - 1), SPEED)
+    speeds[:, 1:3] = SPEED / 4                    # 10~30 km 가 1/4 속도
+
+    trips = [_trip(f"e{i:02d}", i * 2.0, [[("A", 50.0)]]) for i in range(5)]
+
+    free = solve_ue(trips, {"A": _chargers(2)}, _settings())
+    jammed = solve_ue(trips, {"A": _chargers(2)}, _settings(travel=CellSpeedField(edges, speeds)))
+
+    first_free = min(v.t_arrive_min for v in free.visits)
+    first_jammed = min(v.t_arrive_min for v in jammed.visits)
+
+    # 20 km 를 1/4 속도(15 km/h)로 지나면 20분이 80분이 된다 → 60분 늦다
+    assert first_jammed - first_free == pytest.approx(60.0, abs=1e-6)
+
+
+def test_uniform_travel_time_reproduces_the_fixed_speed_run():
+    """전 구간이 같은 속도인 격자는 고정 속도와 완전히 같은 결과를 낸다.
+
+    CTM 을 켠 것 말고는 모두 같다는 비교가 성립하려면 이 자리가 새는 곳이 없어야 한다.
+    """
+    import numpy as np
+
+    from evdt.world.travel import CellSpeedField
+
+    edges = np.arange(0.0, 401.0, 10.0)
+    field = CellSpeedField(edges, np.full((288, edges.size - 1), SPEED))
+
+    trips = [_trip(f"e{i:02d}", i * 3.0, [[("A", 40.0)], [("B", 90.0)]]) for i in range(8)]
+    chargers = {"A": _chargers(1), "B": _chargers(1)}
+
+    fixed = solve_ue(trips, chargers, _settings())
+    gridded = solve_ue(trips, chargers, _settings(travel=field))
+
+    assert fixed.station_of(trips) == gridded.station_of(trips)
+    assert [v.t_arrive_min for v in fixed.visits] == pytest.approx(
+        [v.t_arrive_min for v in gridded.visits]
+    )

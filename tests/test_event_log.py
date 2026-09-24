@@ -132,7 +132,8 @@ def test_valid_snapshot_row_has_no_problems():
     [
         ({"state": "wait_mins"}, "state='wait_mins'"),          # 오타 — 조용히 저장되면 렌더러에서 빈 칸
         ({"entity_type": "stations"}, "entity_type='stations'"),
-        ({"entity_type": "cell", "state": "density"}, "entity_type='cell'"),  # 아직 계약 없음
+        # cell 은 #56 에서 계약이 생겼다. entity_type 은 통과하고 state 만 걸려야 한다
+        ({"entity_type": "cell", "state": "density"}, "state='density'"),
         ({"lat": 127.5, "lon": 36.5}, "lat=127.5"),              # 뒤바뀐 좌표
         ({"lat": None}, "lat=None"),
         ({"lon": math.nan}, "lon=nan"),
@@ -144,6 +145,12 @@ def test_valid_snapshot_row_has_no_problems():
 def test_bad_snapshot_rows_are_named(over, needle):
     problems = snapshot_row_problems(_snap(**over))
     assert any(needle in p for p in problems), problems
+
+
+def test_cell_snapshot_row_is_accepted():
+    """CTM 셀 스냅샷 계약 (#56). 네 지표 모두 통과해야 한다."""
+    for state in ("speed_kmh", "density_veh_km", "flow_veh_h", "ev_count"):
+        assert snapshot_row_problems(_snap(entity_type="cell", entity_id="c1", state=state)) == []
 
 
 def test_snapshot_with_extra_column_is_rejected():
