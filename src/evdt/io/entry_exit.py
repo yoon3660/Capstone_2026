@@ -245,3 +245,36 @@ def corridor_entry_hourly_from_profile(
         raise ValueError("진입·진출 표의 첫 경계가 0 km 이하다")
 
     return entry_points(profile, head)
+
+
+def ramp_arrays(
+    profile: pd.DataFrame,
+    hour: int,
+    cell_edges: np.ndarray,
+    *,
+    scale: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """진입·진출 표를 CTM 셀 배열로 옮긴다 (`ramp_demand_veh`, `exit_ratio`).
+
+    경계는 셀과 정확히 맞지 않는다 (콘존 경계 vs 셀 경계). 그래서 각 경계를 **그것을
+    품은 셀**에 얹는다. 같은 셀에 여러 경계가 걸리면 진입은 더하고, 진출 비율은
+    "둘 다 통과했을 때 살아남을 확률" 로 합친다 — 그냥 더하면 1을 넘을 수 있다.
+
+    scale: 시간당 대수를 한 스텝 분량으로 바꾸는 배율 (dt_min / 60).
+    """
+
+    edges = np.asarray(cell_edges, dtype=float)
+    n_cells = edges.size - 1
+    entry = np.zeros(n_cells)
+    survive = np.ones(n_cells)
+
+    rows = profile[profile["hour"] == hour]
+
+    for km, entry_veh, exit_share in zip(
+        rows["offset_km"], rows["entry_veh"], rows["exit_share"], strict=True
+    ):
+        cell = int(np.clip(np.searchsorted(edges, float(km), side="right") - 1, 0, n_cells - 1))
+        entry[cell] += float(entry_veh) * scale
+        survive[cell] *= 1.0 - float(exit_share)
+
+    return entry, np.clip(1.0 - survive, 0.0, 1.0)

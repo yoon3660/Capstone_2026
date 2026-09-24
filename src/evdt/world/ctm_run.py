@@ -87,6 +87,8 @@ def run_day(
     horizon_min: float = 24 * 60.0,
     ramp_demand_veh: np.ndarray | None = None,
     exit_ratio: np.ndarray | None = None,
+    ramp_demand_per_step=None,
+    exit_ratio_per_step=None,
     ev_count_per_cell=None,
     record_every_min: float = RECORD_EVERY_MIN,
 ) -> CTMRun:
@@ -96,6 +98,9 @@ def run_day(
         `io.cells.read_cells` 가 준 행. cell_id 와 좌표를 여기서 꺼내 쓴다.
     inflow_veh_per_step
         `f(t_min) -> 이번 스텝에 코리도 시작점으로 들어오려는 대수`.
+    ramp_demand_veh / exit_ratio
+        시각에 무관한 램프. 시간대별로 바꾸려면 `*_per_step` 에 `f(t_min) -> 배열` 을
+        준다 — #54 의 중간 진입·진출 표가 이쪽으로 들어온다. 둘 다 주면 per_step 이 이긴다.
     ev_count_per_cell
         `f(t_min) -> 셀마다 그 시각의 합성 EV 수`. 없으면 0 으로 둔다 (배경 교통만
         도는 경우). EV 이동은 UE 가 통행시간으로 계산하므로, 여기서는 **보여주기용**
@@ -126,8 +131,10 @@ def run_day(
         result = step(
             n, cells, dt_min,
             inflow_veh=float(inflow_veh_per_step(t_min)),
-            ramp_demand_veh=ramp_demand_veh,
-            exit_ratio=exit_ratio,
+            ramp_demand_veh=(ramp_demand_veh if ramp_demand_per_step is None
+                             else ramp_demand_per_step(t_min)),
+            exit_ratio=(exit_ratio if exit_ratio_per_step is None
+                        else exit_ratio_per_step(t_min)),
         )
         n = result.n_veh
         entered += result.boundary_flow[0] + result.ramp_in_veh.sum()

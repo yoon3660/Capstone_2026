@@ -15,6 +15,7 @@ from evdt.io.entry_exit import (
     corridor_entry_hourly,
     entry_exit_profile,
     entry_points,
+    ramp_arrays,
     sample_entry_offsets,
     sample_exit_offsets,
 )
@@ -214,3 +215,54 @@ def test_hour_without_entry_is_refused() -> None:
 
     with pytest.raises(ValueError, match="진입 지점이 없다"):
         sample_entry_offsets(10, 5, points, np.random.default_rng(0))
+
+
+# ---------------------------------------------------------------------------
+# CTM 램프로 옮기기 (#54)
+# ---------------------------------------------------------------------------
+
+
+def _profile_rows(rows: list[tuple[float, float, float]]) -> pd.DataFrame:
+    """rows: [(offset_km, entry_veh, exit_share), ...]"""
+    return pd.DataFrame([
+        {"hour": 0, "offset_km": km, "entry_veh": entry, "exit_share": share}
+        for km, entry, share in rows
+    ])
+
+
+def test_ramps_land_in_the_cell_that_contains_the_boundary() -> None:
+    """콘존 경계와 셀 경계는 안 맞는다. 경계를 품은 셀에 얹는다."""
+    edges = np.array([0.0, 10.0, 20.0, 30.0])
+    entry, exit_ratio = ramp_arrays(_profile_rows([(12.0, 100.0, 0.2)]), 0, edges)
+
+    assert entry.tolist() == [0.0, 100.0, 0.0]
+    assert exit_ratio[1] == pytest.approx(0.2)
+
+
+def test_two_boundaries_in_one_cell_add_up_correctly() -> None:
+    """진입은 더한다. 진출 비율은 **더하면 안 된다** — 1 을 넘을 수 있다.
+
+    둘 다 통과했을 때 살아남을 확률로 합친다: 1 − (1−a)(1−b).
+    """
+    edges = np.array([0.0, 10.0, 20.0])
+    entry, exit_ratio = ramp_arrays(
+        _profile_rows([(2.0, 30.0, 0.5), (5.0, 70.0, 0.5)]), 0, edges)
+
+    assert entry[0] == pytest.approx(100.0)
+    assert exit_ratio[0] == pytest.approx(0.75)       # 1 - 0.5*0.5, 1.0 이 아니다
+    assert exit_ratio[0] < 1.0
+
+
+def test_scale_converts_hourly_to_per_step() -> None:
+    edges = np.array([0.0, 10.0, 20.0])
+    entry, _ = ramp_arrays(_profile_rows([(12.0, 600.0, 0.0)]), 0, edges, scale=0.2 / 60)
+
+    assert entry[1] == pytest.approx(2.0)             # 600대/h 를 0.2분 분량으로
+
+
+def test_exit_ratio_stays_within_zero_and_one() -> None:
+    edges = np.array([0.0, 10.0])
+    _, exit_ratio = ramp_arrays(
+        _profile_rows([(5.0, 0.0, 0.9), (6.0, 0.0, 0.9), (7.0, 0.0, 0.9)]), 0, edges)
+
+    assert 0.0 <= exit_ratio[0] <= 1.0

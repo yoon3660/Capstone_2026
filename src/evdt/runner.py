@@ -37,6 +37,7 @@ from evdt.io.db import get_conn
 from evdt.io.demand_profile import sample_dest_offsets
 from evdt.io.entry_exit import (
     corridor_entry_hourly_from_profile,
+    ramp_arrays,
     sample_entry_offsets,
     sample_exit_offsets,
 )
@@ -190,9 +191,11 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
 def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log = print):
     """CTM 을 하루 돌려 통행시간용 속도 격자를 만든다 (demand.travel_time == "ctm").
 
-    ⚠ 지금은 배경 교통이 **전부 코리도 시작점으로 들어와 끝까지 간다**. 실제로는
-    대부분 중간 IC 에서 빠지므로, 뒤쪽 구간의 정체가 과장된다. 중간 진출입은 #54·#63,
-    파라미터 보정은 #57, 실측 대조는 #58 이다. 그때까지 이 스위치로 낸 결과는
+    `demand.entry_exit_profile` 이 있으면 **중간 진입·진출 램프까지 채운다** (#54).
+    EV 와 배경 교통이 **같은 표**에서 나와야 CTM 이 만든 정체와 EV 의 도착이 어긋나지
+    않는다. 없으면 예전처럼 전부 기점으로 들어와 끝까지 가고, 뒤쪽 정체가 과장된다.
+
+    ⚠ 파라미터 보정은 #57, 실측 대조는 #58 이다. 그 전까지 이 스위치로 낸 결과는
     "CTM 을 얹으면 무엇이 달라지나" 를 보는 용도지 재현이 아니다.
     """
 
@@ -202,14 +205,28 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
     hourly = (volume.groupby("hour")["volume_veh"].sum()
               .reindex(range(24), fill_value=0.0) * cfg.demand.demand_multiplier)
     dt_min = float(cfg.output.ctm_dt_min)
+    edges = np.array([rows[0]["offset_km_start"]] + [r["offset_km_end"] for r in rows], dtype=float)
 
     def inflow(t_min: float) -> float:
         return float(hourly.iloc[int(t_min // 60) % 24]) * dt_min / 60.0
 
-    ctm = run_day(cells, rows, dt_min, inflow_veh_per_step=inflow)
+    ramps = None
+    if cfg.demand.entry_exit_profile:
+        profile = pd.read_csv(PROJECT_ROOT / cfg.demand.entry_exit_profile)
+        scale = cfg.demand.demand_multiplier * dt_min / 60.0
+        ramps = {h: ramp_arrays(profile, h, edges, scale=scale) for h in range(24)}
+
+    ctm = run_day(
+        cells, rows, dt_min,
+        inflow_veh_per_step=inflow,
+        ramp_demand_per_step=None if ramps is None else (lambda t: ramps[int(t // 60) % 24][0]),
+        exit_ratio_per_step=None if ramps is None else (lambda t: ramps[int(t // 60) % 24][1]),
+    )
 
     log(f"CTM  셀 {len(cells)}개 · dt {dt_min}분 · 진입 {ctm.entered_veh:,.0f}대 "
         f"· 남은 차 {ctm.remaining_veh:,.0f}대 · 보존오차 {ctm.conservation_error_veh:+.6f}")
+    if ramps is None:
+        log("  ⚠ 중간 진출입 없음 — 전부 기점 진입·끝까지. 뒤쪽 정체가 과장된다")
     if ctm.speed_field.jammed_share > 0:
         log(f"  ⚠ 속도 하한에 걸린 칸 {ctm.speed_field.jammed_share:.1%} "
             "— 높으면 통행시간을 믿지 말 것")
