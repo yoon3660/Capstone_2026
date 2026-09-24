@@ -36,6 +36,7 @@ CFL 조건
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -106,6 +107,30 @@ class CellArrays:
                 f"셀 {i}: q_max {self.q_max_veh_h[i]:.1f} ≠ 삼각형 기본도 {expected[i]:.1f} 대/h"
                 " (설계문서 §9.5 — q_max 는 v_free·w_back·k_jam 에서 따라 나오는 값이다)"
             )
+
+    @classmethod
+    def from_rows(cls, rows: Sequence[Mapping[str, object]]) -> CellArrays:
+        """`io.cells.read_cells` 가 돌려준 행(seq 순서)을 배열로 묶는다.
+
+        io 가 world 를 임포트할 수 없어서 변환이 이쪽에 있다 (설계 규칙 2).
+        여기서 만들면 삼각형 기본도와 배열 길이가 한 번 더 검사된다 — DB 의
+        CHECK 를 지나온 행이라도 읽어 오는 과정에서 컬럼이 어긋날 수 있다.
+        """
+
+        if not rows:
+            raise ValueError("셀이 비어 있다")
+
+        def column(name: str) -> np.ndarray:
+            return np.array([float(row[name]) for row in rows], dtype=float)  # type: ignore[arg-type]
+
+        return cls(
+            length_km=column("length_km"),
+            lanes=column("lanes"),
+            v_free_kmh=column("v_free_kmh"),
+            w_back_kmh=column("w_back_kmh"),
+            k_jam_veh_km_lane=column("k_jam_veh_km_lane"),
+            q_max_veh_h=column("q_max_veh_h"),
+        )
 
     def __len__(self) -> int:
         return int(self.length_km.size)

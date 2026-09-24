@@ -372,3 +372,46 @@ def test_one_day_of_the_down_corridor_is_fast_enough() -> None:
         ).n_veh
 
     assert time.perf_counter() - started < 30.0
+
+
+# ---------------------------------------------------------------------------
+# DB 의 셀을 읽어 오는 길 (#56)
+# ---------------------------------------------------------------------------
+
+
+def test_from_rows_builds_the_same_arrays() -> None:
+    """io.cells.read_cells 가 돌려주는 모양의 행에서 CellArrays 가 만들어진다."""
+    from evdt.io.cells import CELL_COLUMNS
+
+    source = make_cells([4, 3, 5])
+    rows = [
+        {name: float(getattr(source, name)[i]) for name in CELL_COLUMNS}
+        for i in range(len(source))
+    ]
+
+    rebuilt = CellArrays.from_rows(rows)
+
+    assert np.allclose(rebuilt.lanes, source.lanes)
+    assert np.allclose(rebuilt.q_max_veh_h, source.q_max_veh_h)
+
+
+def test_from_rows_refuses_cells_that_break_the_fundamental_diagram() -> None:
+    """DB 를 거쳐 왔어도 다시 검사한다 — 컬럼이 어긋난 채 읽힐 수 있다."""
+    source = make_cells([4])
+    row = {name: float(getattr(source, name)[0]) for name in
+           ("length_km", "lanes", "v_free_kmh", "w_back_kmh", "k_jam_veh_km_lane", "q_max_veh_h")}
+    row["q_max_veh_h"] *= 1.5
+
+    with pytest.raises(FundamentalDiagramError):
+        CellArrays.from_rows([row])
+
+
+def test_missing_cells_say_how_to_build_them(db_path) -> None:
+    """셀이 없으면 빈 목록이 아니라 만드는 순서를 알려주고 멈춘다.
+
+    빈 목록을 돌려주면 CTM 이 셀 0개로 조용히 돌아 아무 일도 일어나지 않는다.
+    """
+    from evdt.io.cells import read_cells
+
+    with pytest.raises(LookupError, match="seed_cells.py"):
+        read_cells("gyeongbu_down", db_path=db_path)
