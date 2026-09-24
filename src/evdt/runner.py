@@ -218,6 +218,9 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 
     ctm = run_day(
         cells, rows, dt_min,
+        # 빈 도로에서 0시에 시작하면 새벽 교통량이 실측보다 크게 모자란다
+        # (실측 0시에는 전날 들어온 차가 이미 달린다). 코리도를 한 번 훑을 만큼 감는다.
+        warmup_min=float(cfg.output.ctm_warmup_min),
         inflow_veh_per_step=inflow,
         ramp_demand_per_step=None if ramps is None else (lambda t: ramps[int(t // 60) % 24][0]),
         exit_ratio_per_step=None if ramps is None else (lambda t: ramps[int(t // 60) % 24][1]),

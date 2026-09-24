@@ -70,12 +70,18 @@ class CTMRun:
     entered_veh: float
     left_veh: float
     remaining_veh: float
+    #: 기록을 시작할 때 이미 도로에 있던 차 (warmup 이 채워 둔 것)
+    initial_veh: float = 0.0
 
     @property
     def conservation_error_veh(self) -> float:
-        """들어온 차 − 나간 차 − 남은 차. 0 이어야 한다."""
+        """들어온 차 − 나간 차 − 늘어난 차. 0 이어야 한다.
 
-        return self.entered_veh - self.left_veh - self.remaining_veh
+        warmup 으로 시작부터 도로에 차가 있으면 그만큼은 '들어온 차' 가 아니다.
+        빼지 않으면 보존 검사가 warmup 길이만큼 틀리게 나온다.
+        """
+
+        return self.entered_veh - self.left_veh - (self.remaining_veh - self.initial_veh)
 
 
 def run_day(
@@ -91,6 +97,7 @@ def run_day(
     exit_ratio_per_step=None,
     ev_count_per_cell=None,
     record_every_min: float = RECORD_EVERY_MIN,
+    warmup_min: float = 0.0,
 ) -> CTMRun:
     """하루를 돌린다.
 
@@ -105,6 +112,19 @@ def run_day(
         `f(t_min) -> 셀마다 그 시각의 합성 EV 수`. 없으면 0 으로 둔다 (배경 교통만
         도는 경우). EV 이동은 UE 가 통행시간으로 계산하므로, 여기서는 **보여주기용**
         숫자다 — CTM 의 물리에는 들어가지 않는다.
+    warmup_min
+        기록을 시작하기 **전에** 미리 돌리는 시간. 코리도를 빈 채로 0시에 시작하면
+        새벽 교통량이 실측보다 모자란다 (실측 0시에는 전날 들어온 차가 이미 달린다).
+
+        ⚠ **기본 0 이다.** 감는 동안의 입력을 "전날 같은 시각" 으로 보는데, 설 최대일의
+        전날은 교통량이 더 적으므로 이 가정이 틀렸다. 실측 대비
+
+            warmup 0분     0시 −58% · 6시 −25% (부족)
+            warmup 360분   0시 +89%            (과함)
+
+        제대로 하려면 **전날 실측 프로파일**을 따로 넣어야 한다. 어느 쪽을 쓸지는
+        #57 (CTM 보정) 에서 근거를 두고 정한다. 지금은 "모자란 것" 을 기본으로 둔다 —
+        아는 오차가 감춰진 오차보다 낫다.
     """
 
     check_cfl(cells, dt_min)
@@ -114,7 +134,9 @@ def run_day(
 
     n = np.zeros(len(cells))
     zeros = np.zeros(len(cells))
+    initial_veh = 0.0
     steps = int(round(horizon_min / dt_min))
+    warmup_steps = int(round(max(warmup_min, 0.0) / dt_min))
     per_window = max(int(round(record_every_min / dt_min)), 1)
 
     window = _Window()
@@ -125,18 +147,29 @@ def run_day(
     entered = left = 0.0
     result: StepResult | None = None
 
-    for index in range(steps):
+    for index in range(-warmup_steps, steps):
         t_min = index * dt_min
+        # 감아 도는 동안은 전날 같은 시각의 입력을 쓴다
+        clock = t_min % horizon_min
+
+        if index == 0:
+            # 기록을 시작하는 **순간**의 재차. 스텝을 돌린 뒤에 재면 그 스텝에
+            # 들어온 차까지 세어 보존 검사가 어긋난다.
+            initial_veh = float(n.sum())
 
         result = step(
             n, cells, dt_min,
-            inflow_veh=float(inflow_veh_per_step(t_min)),
+            inflow_veh=float(inflow_veh_per_step(clock)),
             ramp_demand_veh=(ramp_demand_veh if ramp_demand_per_step is None
-                             else ramp_demand_per_step(t_min)),
+                             else ramp_demand_per_step(clock)),
             exit_ratio=(exit_ratio if exit_ratio_per_step is None
-                        else exit_ratio_per_step(t_min)),
+                        else exit_ratio_per_step(clock)),
         )
         n = result.n_veh
+
+        if index < 0:      # 감아 도는 동안은 아무것도 세지 않는다
+            continue
+
         entered += result.boundary_flow[0] + result.ramp_in_veh.sum()
         left += result.boundary_flow[-1] + result.ramp_out_veh.sum()
 
@@ -171,6 +204,7 @@ def run_day(
         entered_veh=entered,
         left_veh=left,
         remaining_veh=float(n.sum()),
+        initial_veh=initial_veh,
     )
 
 

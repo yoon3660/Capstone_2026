@@ -244,6 +244,12 @@ class OutputConfig:
     #: CTM 스텝 (분). CFL 하한(max(v_free, w_back) × dt ≤ 셀 길이)을 어기면
     #: 돌기 전에 멈춘다. config/flow_params.yaml 의 dt_min 과 같은 값을 쓴다.
     ctm_dt_min: float = 0.2
+    #: 기록 전에 미리 돌리는 시간(분). **기본 0 이다** — 켜고 끄는 근거는 #57 에서 정한다.
+    #:   0 이면   빈 도로에서 0시 시작 → 실측 대비 0시 −58% · 6시 −25% (부족)
+    #:   360 이면 전날 같은 시각 입력으로 감음 → 0시 +89% (과함).
+    #: 감는 입력을 "전날 같은 시각" 으로 본 것이 틀렸다. 설 최대일의 전날은 교통량이
+    #: 더 적으므로, 제대로 하려면 **전날 실측 프로파일**을 따로 넣어야 한다.
+    ctm_warmup_min: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,6 +484,9 @@ class ScenarioConfig:
         ctm_dt_min = e.number(
             o.get("ctm_dt_min", 0.2), "output.ctm_dt_min", lo=0, lo_exclusive=True,
         )
+        ctm_warmup_min = e.number(
+            o.get("ctm_warmup_min", 0.0), "output.ctm_warmup_min", lo=0,
+        )
 
         # 알 수 없는 최상위 키 — 오타를 조용히 넘기지 않는다
         known_top = {
@@ -520,7 +529,8 @@ class ScenarioConfig:
             environment=EnvironmentConfig(temp_c),         # type: ignore[arg-type]
             policy=PolicyConfig(stage, participation, dict(params), ue),  # type: ignore[arg-type]
             queue=QueueConfig(discipline, charger_select), # type: ignore[arg-type]
-            output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min),  # type: ignore[arg-type]
+            output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min,  # type: ignore[arg-type]
+                                ctm_warmup_min),  # type: ignore[arg-type]
             source_path=source_path,
             raw_yaml=raw_yaml,
             config_hash=hashlib.sha256(raw_yaml.encode("utf-8")).hexdigest()[:16],
