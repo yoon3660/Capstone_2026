@@ -223,6 +223,7 @@ def run_ue_once(
         f"(주행 {range_factor:.2f} · 충전출력 {cpf:.2f})")
     log(f"휴게소 {len(stations)}곳 · 충전기 {sum(len(c) for c in chargers.values())}기 · "
         f"코리도 {corridor_end_km:.1f} km")
+    log(f"수요: {cfg.demand_label}")
     log(f"출발 SoC {cfg.vehicles.departure_soc or '(soc_beta)'}: 평균 {soc_mean:.0%} · "
         f"수요 배율 ×{cfg.demand.demand_multiplier:g}")
     log(f"진입 EV {built.n_ev:,}대 → 충전 필요 {len(built.trips):,}대 "
@@ -239,6 +240,8 @@ def run_ue_once(
         "departure_soc": cfg.vehicles.departure_soc,
         "departure_soc_mean": round(soc_mean, 4),
         "demand_multiplier": cfg.demand.demand_multiplier,
+        # 실측 위에 무엇이 얹혔나 (#54). 결과를 다시 볼 때 가장 먼저 봐야 하는 값이다
+        "demand_layers": cfg.demand_label,
     }
 
     with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, runs_dir=runs,
@@ -492,7 +495,7 @@ def plot_experiment_heatmap(
         stations,
         path,
         title=f"휴게소 × 시간대 — {'대기시간' if metric == 'wait' else '큐 길이'} (시드 {n_seeds}개 합산)",
-        subtitle=f"{cfg.scenario_id} · 색 = {what} · 세로축은 실제 기점거리",
+        subtitle=f"{cfg.scenario_id} · {cfg.demand_label} · 색 = {what} · 세로축은 실제 기점거리",
         **kw,
     )
 
@@ -585,6 +588,8 @@ def summary_markdown(summary: pd.DataFrame, cfg: ScenarioConfig, seeds: Sequence
         f"시나리오 `{cfg.scenario_id}` · 시드 {len(seeds)}개 ({min(seeds)}–{max(seeds)}) · "
         f"출발 SoC {cfg.vehicles.departure_soc or '-'} · 수요 ×{cfg.demand.demand_multiplier:g} · "
         f"{int(CI_LEVEL * 100)}% 신뢰구간 (t 분포)",
+        "",
+        f"**{cfg.demand_label}**",
         "",
         "| KPI | 평균 | 95% 신뢰구간 | 표준편차 | 최소 – 최대 |",
         "|---|---:|---|---:|---|",

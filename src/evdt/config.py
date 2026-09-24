@@ -24,6 +24,9 @@ from typing import Any
 
 import yaml
 
+from evdt.demand_layers import Layer, parse_layers
+from evdt.demand_layers import label as layer_label
+
 # run.stage 의 허용값 (schema.sql 의 CHECK 와 반드시 일치해야 한다)
 VALID_STAGES: tuple[str, ...] = (
     "UE", "S0", "S1", "S2", "S3", "S4",
@@ -167,6 +170,8 @@ class DemandConfig:
     through_profile: str | None = None
     #: 휴게소 사이 주행 속도 (km/h). travel_time == "fixed" 일 때만 쓴다
     cruise_speed_kmh: float = 80.0
+    #: 실측 위에 얹은 가정 레이어 (#54). 비어 있으면 2026 재현 그대로
+    layers: tuple[Layer, ...] = ()
     #: 통행시간을 무엇으로 재나 (#56)
     #:   "fixed"  cruise_speed_kmh 고정 속도 (옛 실험 재현)
     #:   "ctm"    CTM 이 낸 셀 속도. 셀이 없으면 멈춘다 — 조용히 고정 속도로 돌아가지 않는다
@@ -277,6 +282,15 @@ class ScenarioConfig:
         text = yaml.safe_dump(data, allow_unicode=True, sort_keys=True)
         return cls._build(data, source_path=source, raw_yaml=text)
 
+    @property
+    def demand_label(self) -> str:
+        """실측 위에 무엇이 얹혔나. 그림 부제와 run params 에 그대로 들어간다 (#54).
+
+        그림만 보고도 재현인지 가정인지 알 수 있어야 한다.
+        """
+
+        return layer_label(self.demand.layers)
+
     def variant(self, tag: str, overrides: dict[str, Any]) -> ScenarioConfig:
         """이 시나리오에서 몇 개 값만 바꾼 실험. scenario_id 뒤에 __<tag> 가 붙는다.
 
@@ -347,6 +361,7 @@ class ScenarioConfig:
         through_profile = d.get("through_profile")
         if through_profile is not None:
             through_profile = e.text(through_profile, "demand.through_profile")
+        layers = parse_layers(d.get("layers"), e)
         travel_time = str(d.get("travel_time", "fixed"))
         if travel_time not in TRAVEL_TIME_MODES:
             e.add("demand.travel_time",
@@ -485,6 +500,7 @@ class ScenarioConfig:
                 through_profile=through_profile,           # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
                 travel_time=travel_time,
+                layers=layers,
             ),
             vehicles=VehiclesConfig(
                 seed=seed,                                 # type: ignore[arg-type]
