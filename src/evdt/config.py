@@ -168,6 +168,10 @@ class DemandConfig:
     low_soc_threshold: float   # 이 SoC 아래면 무조건 충전 (0.2)
     #: 목적지 분포 CSV (offset_km, share = 그 지점을 지나가는 비율). 없으면 전원 코리도 끝까지 간다.
     through_profile: str | None = None
+    #: 중간 진입·진출 CSV (#54). 있으면 through_profile 대신 이걸 쓴다 —
+    #: 차마다 진입 지점이 달라지고, 목적지는 실측 진출 비율로 뽑는다.
+    #: scripts/build_entry_exit_profile.py 가 만든다.
+    entry_exit_profile: str | None = None
     #: 휴게소 사이 주행 속도 (km/h). travel_time == "fixed" 일 때만 쓴다
     cruise_speed_kmh: float = 80.0
     #: 실측 위에 얹은 가정 레이어 (#54). 비어 있으면 2026 재현 그대로
@@ -361,6 +365,9 @@ class ScenarioConfig:
         through_profile = d.get("through_profile")
         if through_profile is not None:
             through_profile = e.text(through_profile, "demand.through_profile")
+        entry_exit_profile = d.get("entry_exit_profile")
+        if entry_exit_profile is not None:
+            entry_exit_profile = e.text(entry_exit_profile, "demand.entry_exit_profile")
         layers = parse_layers(d.get("layers"), e)
         travel_time = str(d.get("travel_time", "fixed"))
         if travel_time not in TRAVEL_TIME_MODES:
@@ -498,6 +505,7 @@ class ScenarioConfig:
                 safety_buffer_km=safety_buffer_km,         # type: ignore[arg-type]
                 low_soc_threshold=low_soc_threshold,       # type: ignore[arg-type]
                 through_profile=through_profile,           # type: ignore[arg-type]
+                entry_exit_profile=entry_exit_profile,     # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
                 travel_time=travel_time,
                 layers=layers,
@@ -530,6 +538,8 @@ class ScenarioConfig:
         candidates = [self.demand.volume_profile]
         if self.demand.through_profile:
             candidates.append(self.demand.through_profile)
+        if self.demand.entry_exit_profile:
+            candidates.append(self.demand.entry_exit_profile)
         return [c for c in candidates if not (base / c).is_file() and not Path(c).is_file()]
 
     # -- DB 연동 -------------------------------------------------------------

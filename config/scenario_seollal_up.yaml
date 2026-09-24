@@ -28,6 +28,9 @@ demand:
   # 목적지 분포: 부산(구서) 쪽에서 출발한 차 중 각 지점을 지나가는 비율
   #   scripts/build_demand_profile.py --direction UP
   through_profile: data/processed/through_gyeongbu_up_seollal.csv
+  # 중간 진입·진출 (#54). 있으면 through_profile 대신 이걸 쓴다
+  #   scripts/build_entry_exit_profile.py --direction UP
+  entry_exit_profile: data/processed/entry_exit_gyeongbu_up_seollal.csv
   cruise_speed_kmh: 80.0
   # 통행시간을 무엇으로 재나 (#56): fixed = 위 고정 속도 · ctm = CTM 셀 속도
   travel_time: fixed

@@ -29,11 +29,17 @@ import numpy as np
 import pandas as pd
 
 from evdt.config import ScenarioConfig
+from evdt.demand_layers import effective_ev_share, opportunity_charge
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
 from evdt.io.db import get_conn
 from evdt.io.demand_profile import sample_dest_offsets
+from evdt.io.entry_exit import (
+    corridor_entry_hourly_from_profile,
+    sample_entry_offsets,
+    sample_exit_offsets,
+)
 from evdt.io.event_log import load_sql, log_sim_result
 from evdt.io.loaders import duck_connect, load_run_table
 from evdt.io.run_registry import RunContext, make_run_id
@@ -57,6 +63,8 @@ BOTTLENECK_WAIT_MIN = 30.0
 
 #: 목적지 난수는 EV 생성 난수와 다른 흐름을 쓴다 (generate_evs 가 seed 를 그대로 쓴다)
 DEST_STREAM = 1
+#: 기회 충전 추첨도 다른 흐름을 쓴다 — 확률을 바꿔도 EV 집합은 그대로여야 한다
+OPPORTUNITY_STREAM = 2
 
 #: 신뢰구간 수준과 최소 시드 수 (이슈 #30 완료조건)
 CI_LEVEL = 0.95
@@ -126,20 +134,46 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         )
 
     volume = pd.read_csv(root / cfg.demand.volume_profile)
-    evs = generate_evs(volume, cfg, dest_offset_km=corridor_end_km)
 
-    if cfg.demand.through_profile:
-        rng = np.random.default_rng([cfg.vehicles.seed, DEST_STREAM])
+    # EV 보급률 레이어는 실측 비중을 **덮어쓴다** (#54). 곱하지 않는다 —
+    # "2030년에 25% 라면" 을 그대로 쓰기 위해서다.
+    share = effective_ev_share(cfg.demand.layers, cfg.demand.ev_share)
+    if share != cfg.demand.ev_share:
+        cfg = dataclasses.replace(cfg, demand=dataclasses.replace(cfg.demand, ev_share=share))
+
+    evs = generate_evs(volume, cfg, dest_offset_km=corridor_end_km)
+    rng = np.random.default_rng([cfg.vehicles.seed, DEST_STREAM])
+
+    if cfg.demand.entry_exit_profile:
+        # 차마다 진입 지점이 다르고, 목적지는 실측 진출 비율로 하류를 훑으며 뽑는다
+        profile = pd.read_csv(root / cfg.demand.entry_exit_profile)
+        points = corridor_entry_hourly_from_profile(profile, volume)
+        hours = ((evs["entry_time_min"] // 60).astype(int) % 24).to_numpy()
+        entry = np.zeros(len(evs))
+        dest = np.zeros(len(evs))
+        for hour in np.unique(hours):
+            pick = hours == hour
+            here = sample_entry_offsets(int(pick.sum()), int(hour), points, rng)
+            entry[pick] = here
+            dest[pick] = sample_exit_offsets(here, int(hour), profile, rng,
+                                             corridor_end_km=corridor_end_km)
+        evs["entry_offset_km"] = entry
+        evs["dest_offset_km"] = dest
+    elif cfg.demand.through_profile:
         through = pd.read_csv(root / cfg.demand.through_profile)
-        evs["dest_offset_km"] = sample_dest_offsets(len(evs), through, rng, corridor_end_km=corridor_end_km)
+        evs["dest_offset_km"] = sample_dest_offsets(len(evs), through, rng,
+                                                    corridor_end_km=corridor_end_km)
 
     range_factor, charge_power_factor = temp_factors(cfg.environment.temp_c, temp_table(temps))
+    opp_prob, opp_margin = opportunity_charge(cfg.demand.layers)
     rule = ChargeRule(
         range_factor=range_factor,
         buffer_km=cfg.demand.safety_buffer_km,
         reserve_soc=cfg.demand.low_soc_threshold,
         target_soc_cap=cfg.vehicles.target_soc_cap,
         max_stops=cfg.policy.ue.max_stops,
+        opportunity_prob=opp_prob,
+        opportunity_soc_margin=opp_margin,
     )
     built = build_trip_demands(
         evs.to_dict("records"),
@@ -148,6 +182,7 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         {v["vclass_id"]: tuple(curve_segments(curves, v["vclass_id"])) for v in vclasses},
         rule=rule,
         charge_power_factor=charge_power_factor,
+        rng=np.random.default_rng([cfg.vehicles.seed, OPPORTUNITY_STREAM]),
     )
     return built, range_factor, charge_power_factor
 

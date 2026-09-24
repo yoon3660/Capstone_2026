@@ -217,3 +217,31 @@ def sample_exit_offsets(
         alive &= ~leaving
 
     return out
+
+
+def corridor_entry_hourly_from_profile(
+    profile: pd.DataFrame,
+    volume: pd.DataFrame,
+) -> pd.DataFrame:
+    """저장된 진입·진출 표 + 시간대별 진입 교통량 → 진입 지점 표.
+
+    `entry_exit_profile` CSV 에는 코리도 진입점이 들어 있지 않다 (경계만 있다).
+    진입점의 시간대별 대수는 `volume_profile` (hour, volume_veh) 이 그대로 준다.
+    """
+
+    first_boundary = float(profile["offset_km"].min())
+    hourly = (
+        volume.groupby("hour")["volume_veh"].sum()
+        .reindex(range(24), fill_value=0.0)
+    )
+    head = pd.DataFrame({
+        "hour": hourly.index.astype(int),
+        # 진입점은 첫 경계보다 상류다. 0 으로 두면 어떤 경계에서도 빠질 수 있다
+        "offset_km": 0.0,
+        "entry_veh": hourly.to_numpy(),
+    })
+
+    if first_boundary <= 0:
+        raise ValueError("진입·진출 표의 첫 경계가 0 km 이하다")
+
+    return entry_points(profile, head)

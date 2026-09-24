@@ -26,6 +26,9 @@ demand:
   low_soc_threshold: 0.2    # 이 아래면 무조건 충전
   # 목적지 분포: 서울에서 출발한 차 중 각 지점을 지나가는 비율 (scripts/build_demand_profile.py)
   through_profile: data/processed/through_gyeongbu_down_seollal.csv
+  # 중간 진입·진출 (#54). 있으면 through_profile 대신 이걸 쓴다
+  #   scripts/build_entry_exit_profile.py --direction DOWN
+  entry_exit_profile: data/processed/entry_exit_gyeongbu_down_seollal.csv
   cruise_speed_kmh: 80.0    # 휴게소 사이 주행 속도. Sprint 2 에 CTM 속도로 바뀐다
   # 통행시간을 무엇으로 재나 (#56): fixed = 위 고정 속도 · ctm = CTM 셀 속도
   travel_time: fixed
