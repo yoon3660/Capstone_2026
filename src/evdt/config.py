@@ -26,6 +26,7 @@ import yaml
 
 from evdt.demand_layers import Layer, parse_layers
 from evdt.demand_layers import label as layer_label
+from evdt.replay import describe as describe_period
 
 # run.stage 의 허용값 (schema.sql 의 CHECK 와 반드시 일치해야 한다)
 VALID_STAGES: tuple[str, ...] = (
@@ -168,6 +169,9 @@ class DemandConfig:
     low_soc_threshold: float   # 이 SoC 아래면 무조건 충전 (0.2)
     #: 목적지 분포 CSV (offset_km, share = 그 지점을 지나가는 비율). 없으면 전원 코리도 끝까지 간다.
     through_profile: str | None = None
+    #: 재현 기간. traffic_gyeongbu.parquet 의 period 열과 같아야 한다 (evdt/replay.py).
+    #: 무대를 갈아끼우는 스위치다 — 설 → 추석은 이 값과 프로파일 3개만 바꾸면 된다.
+    period: str = "seollal2026"
     #: 중간 진입·진출 CSV (#54). 있으면 through_profile 대신 이걸 쓴다 —
     #: 차마다 진입 지점이 달라지고, 목적지는 실측 진출 비율로 뽑는다.
     #: scripts/build_entry_exit_profile.py 가 만든다.
@@ -299,7 +303,7 @@ class ScenarioConfig:
         그림만 보고도 재현인지 가정인지 알 수 있어야 한다.
         """
 
-        return layer_label(self.demand.layers)
+        return f"{describe_period(self.demand.period)} · {layer_label(self.demand.layers)}"
 
     def variant(self, tag: str, overrides: dict[str, Any]) -> ScenarioConfig:
         """이 시나리오에서 몇 개 값만 바꾼 실험. scenario_id 뒤에 __<tag> 가 붙는다.
@@ -355,6 +359,7 @@ class ScenarioConfig:
 
         # demand -----------------------------------------------------------
         d = e.section(data, "demand")
+        period = e.text(d.get("period", "seollal2026"), "demand.period")
         volume_profile = e.text(e.require(d, "demand", "volume_profile"), "demand.volume_profile")
         demand_multiplier = e.number(
             e.require(d, "demand", "demand_multiplier"), "demand.demand_multiplier",
@@ -507,6 +512,7 @@ class ScenarioConfig:
             day_type=day_type,                             # type: ignore[arg-type]
             time=TimeConfig(start_min, end_min, dt_min),   # type: ignore[arg-type]
             demand=DemandConfig(
+                period=period,                             # type: ignore[arg-type]
                 volume_profile=volume_profile,             # type: ignore[arg-type]
                 demand_multiplier=demand_multiplier,       # type: ignore[arg-type]
                 ev_share=ev_share,                         # type: ignore[arg-type]

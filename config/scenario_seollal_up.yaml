@@ -19,6 +19,9 @@ time:
   dt_min: 5
 
 demand:
+  # 재현 기간 — 무대를 갈아끼우는 스위치 (src/evdt/replay.py)
+  #   scripts/build_replay.py --period <기간> --direction <방향>
+  period: seollal2026
   volume_profile: data/processed/volume_gyeongbu_up_seollal.csv
   demand_multiplier: 1.0
   ev_share: 0.08

@@ -45,7 +45,7 @@ def test_label_names_every_layer() -> None:
         {"kind": "long_distance", "share": 0.1, "min_trip_km": 200},
     ])
 
-    assert cfg.demand_label == "가정: EV 보급률 25% · 장거리 10% (200km+)"
+    assert cfg.demand_label.endswith("가정: EV 보급률 25% · 장거리 10% (200km+)")
     assert "가정" in cfg.demand_label
 
 
@@ -111,3 +111,31 @@ def test_the_run_records_what_was_assumed() -> None:
     cfg = _config([{"kind": "long_distance", "share": 0.1}])
 
     assert "장거리 10%" in cfg.demand_label
+
+
+# ---------------------------------------------------------------------------
+# 재현 기간 스위치 (#54)
+# ---------------------------------------------------------------------------
+
+
+def test_period_appears_in_the_label() -> None:
+    """어느 연휴를 재현했는지가 그림 부제와 run params 에 남아야 한다."""
+    cfg = _config([])
+
+    assert "2026 설 연휴" in cfg.demand_label
+    assert "seollal2026" in cfg.demand_label
+
+
+def test_unknown_period_is_allowed_but_flagged() -> None:
+    """등록 안 된 기간도 쓸 수 있다 — 다만 그렇다고 말한다."""
+    from evdt.replay import describe
+
+    assert "등록되지 않은" in describe("seollal2030")
+    assert "등록되지 않은" not in describe("chuseok2026")
+
+
+def test_profile_tag_drops_the_year() -> None:
+    from evdt.replay import PERIODS
+
+    assert PERIODS["seollal2026"].profile_tag() == "seollal"
+    assert PERIODS["chuseok2026"].profile_tag() == "chuseok"

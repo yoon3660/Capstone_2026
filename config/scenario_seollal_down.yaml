@@ -18,6 +18,9 @@ time:
 
 demand:
   # T-07 산출물. 시간대별 교통량 프로파일 (방향별)
+  # 재현 기간 — 무대를 갈아끼우는 스위치 (src/evdt/replay.py)
+  #   scripts/build_replay.py --period <기간> --direction <방향>
+  period: seollal2026
   volume_profile: data/processed/volume_gyeongbu_down_seollal.csv
   demand_multiplier: 1.0
   ev_share: 0.08            # 통과 차량 중 EV 비중. 민감도 분석 대상
