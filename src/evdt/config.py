@@ -232,6 +232,9 @@ class QueueConfig:
 class OutputConfig:
     write_snapshots: bool
     snapshot_every_min: int
+    #: CTM 스텝 (분). CFL 하한(max(v_free, w_back) × dt ≤ 셀 길이)을 어기면
+    #: 돌기 전에 멈춘다. config/flow_params.yaml 의 dt_min 과 같은 값을 쓴다.
+    ctm_dt_min: float = 0.2
 
 
 @dataclass(frozen=True, slots=True)
@@ -450,6 +453,9 @@ class ScenarioConfig:
             o.get("snapshot_every_min", 5), "output.snapshot_every_min",
             lo=0, lo_exclusive=True, integer=True,
         )
+        ctm_dt_min = e.number(
+            o.get("ctm_dt_min", 0.2), "output.ctm_dt_min", lo=0, lo_exclusive=True,
+        )
 
         # 알 수 없는 최상위 키 — 오타를 조용히 넘기지 않는다
         known_top = {
@@ -490,7 +496,7 @@ class ScenarioConfig:
             environment=EnvironmentConfig(temp_c),         # type: ignore[arg-type]
             policy=PolicyConfig(stage, participation, dict(params), ue),  # type: ignore[arg-type]
             queue=QueueConfig(discipline, charger_select), # type: ignore[arg-type]
-            output=OutputConfig(write_snapshots, snapshot_every_min),  # type: ignore[arg-type]
+            output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min),  # type: ignore[arg-type]
             source_path=source_path,
             raw_yaml=raw_yaml,
             config_hash=hashlib.sha256(raw_yaml.encode("utf-8")).hexdigest()[:16],

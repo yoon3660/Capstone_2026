@@ -31,6 +31,7 @@ import pandas as pd
 from evdt.config import ScenarioConfig
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
+from evdt.io.cells import read_cells
 from evdt.io.db import get_conn
 from evdt.io.demand_profile import sample_dest_offsets
 from evdt.io.event_log import load_sql, log_sim_result
@@ -47,6 +48,8 @@ from evdt.viz.plots import (
     plot_ue_gap,
 )
 from evdt.world.charging import temp_factors
+from evdt.world.ctm import CellArrays
+from evdt.world.ctm_run import run_day
 from evdt.world.sim import check_queue_config, run_charging_des, station_specs
 
 #: 병목 기준 (설계문서 §8.1): 휴게소×시간 평균 대기가 이 이상이면 병목 슬롯
@@ -149,6 +152,36 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
     return built, range_factor, charge_power_factor
 
 
+def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log = print):
+    """CTM 을 하루 돌려 통행시간용 속도 격자를 만든다 (demand.travel_time == "ctm").
+
+    ⚠ 지금은 배경 교통이 **전부 코리도 시작점으로 들어와 끝까지 간다**. 실제로는
+    대부분 중간 IC 에서 빠지므로, 뒤쪽 구간의 정체가 과장된다. 중간 진출입은 #54·#63,
+    파라미터 보정은 #57, 실측 대조는 #58 이다. 그때까지 이 스위치로 낸 결과는
+    "CTM 을 얹으면 무엇이 달라지나" 를 보는 용도지 재현이 아니다.
+    """
+
+    rows = read_cells(cfg.corridor_id)
+    cells = CellArrays.from_rows(rows)
+    volume = pd.read_csv(PROJECT_ROOT / cfg.demand.volume_profile)
+    hourly = (volume.groupby("hour")["volume_veh"].sum()
+              .reindex(range(24), fill_value=0.0) * cfg.demand.demand_multiplier)
+    dt_min = float(cfg.output.ctm_dt_min)
+
+    def inflow(t_min: float) -> float:
+        return float(hourly.iloc[int(t_min // 60) % 24]) * dt_min / 60.0
+
+    ctm = run_day(cells, rows, dt_min, inflow_veh_per_step=inflow)
+
+    log(f"CTM  셀 {len(cells)}개 · dt {dt_min}분 · 진입 {ctm.entered_veh:,.0f}대 "
+        f"· 남은 차 {ctm.remaining_veh:,.0f}대 · 보존오차 {ctm.conservation_error_veh:+.6f}")
+    if ctm.speed_field.jammed_share > 0:
+        log(f"  ⚠ 속도 하한에 걸린 칸 {ctm.speed_field.jammed_share:.1%} "
+            "— 높으면 통행시간을 믿지 말 것")
+
+    return ctm
+
+
 def run_ue_once(
     cfg: ScenarioConfig,
     *,
@@ -196,9 +229,11 @@ def run_ue_once(
         f"(충전 없이 도착 {built.n_no_charge:,} · {cfg.policy.ue.max_stops}회 안에 불가 {built.n_infeasible:,})")
 
     ue = cfg.policy.ue
+    ctm = build_travel_field(cfg, corridor_end_km, log=log) if cfg.demand.travel_time == "ctm" else None
     settings = UESettings(
         max_iter=ue.max_iter, gap_tol=ue.gap_tol, min_gain_min=ue.min_gain_min,
         speed_kmh=cfg.demand.cruise_speed_kmh,
+        travel=None if ctm is None else ctm.speed_field,
     )
     params = {
         "departure_soc": cfg.vehicles.departure_soc,
@@ -218,6 +253,15 @@ def run_ue_once(
         })
 
         # 수렴 못 하면 gap 이력을 남기고 예외 → RunContext 가 run 을 FAILED 로 기록한다
+        if ctm is not None:
+            run.writer.append_many("cell_state", list(ctm.cell_state_rows))
+            if cfg.output.write_snapshots:
+                run.writer.append_many("snapshot", list(ctm.snapshot_rows))
+            run.kpis({
+                "ctm_jammed_share": (ctm.speed_field.jammed_share, "ratio"),
+                "ctm_remaining_veh": (ctm.remaining_veh, "count"),
+            })
+
         result = solve_and_log(built.trips, chargers, settings, run.writer)
 
         for h in result.history:
