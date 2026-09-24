@@ -215,7 +215,10 @@ def enumerate_plans(
         if plans:
             return tuple(Plan(p) for p in plans)
 
-    return ()
+    # 기회 충전 차는 원래 충전 없이도 목적지까지 간다. 들를 휴게소가 없으면
+    # "불가능" 이 아니라 그냥 **안 들르는** 것이다. () 로 돌려주면 결과에서
+    # 통째로 빠져나가 진입 EV 가 조용히 줄어든다.
+    return () if needs_charge else None
 
 
 def build_trip_demands(

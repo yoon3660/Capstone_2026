@@ -389,3 +389,41 @@ def test_cars_that_really_need_a_charge_are_unaffected():
 
     assert len(built.trips) == 1
     assert built.n_opportunity == 0
+
+
+def test_opportunity_car_with_no_station_in_range_just_does_not_stop():
+    """기회 충전 차는 원래 충전 없이도 간다. 들를 곳이 없으면 '불가능' 이 아니다.
+
+    () 로 돌려주면 그 차가 결과에서 통째로 빠져나가 진입 EV 가 조용히 줄어든다.
+    """
+    stations = [{"station_id": "far", "offset_km": 5.0, "name": "far"}]   # 진입 지점보다 상류
+    vclasses = {"big": {"vclass_id": "big", "battery_kwh": 100.0,
+                        "consumption_kwh_km": 0.2, "vmax_kw": 200.0}}
+    curves = {"big": ((0.0, 1.0, 200.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1, target_soc_cap=0.8,
+                      max_stops=3, opportunity_prob=1.0, opportunity_soc_margin=1.0)
+    ev = {"ev_id": "e", "vclass_id": "big", "entry_time_min": 0.0, "initial_soc": 0.9,
+          "dest_offset_km": 50.0, "entry_offset_km": 20.0}
+
+    built = build_trip_demands([ev], stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, rng=np.random.default_rng(0))
+
+    assert built.n_infeasible == 0
+    assert built.n_no_charge == 1
+
+
+def test_a_car_that_truly_cannot_make_it_is_still_infeasible():
+    """진짜 못 가는 차는 그대로 불가능으로 남는다 (위 수정이 이걸 가리면 안 된다)."""
+    stations = [{"station_id": "far", "offset_km": 300.0, "name": "far"}]
+    vclasses = {"small": {"vclass_id": "small", "battery_kwh": 20.0,
+                          "consumption_kwh_km": 0.25, "vmax_kw": 100.0}}
+    curves = {"small": ((0.0, 1.0, 100.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3)
+    ev = {"ev_id": "e", "vclass_id": "small", "entry_time_min": 0.0, "initial_soc": 0.15,
+          "dest_offset_km": 400.0, "entry_offset_km": 0.0}
+
+    built = build_trip_demands([ev], stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+
+    assert built.n_infeasible == 1
