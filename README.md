@@ -243,6 +243,7 @@ docs/UE_equilibrium.md   UE 반복 균형 · 쏠림이 어디서 오는가 · �
 docs/experiment.md       시드 반복 · 95% 신뢰구간 · offset_km 축 히트맵 (run_experiment.py)
 docs/ctm.md              CTM 셀 전송 모형 · 통행시간 · cell_state · 시공간 속도 지도 읽는 법
 docs/demand_layers.md    중간 진입·진출 · 기회 충전 · 티핑 포인트 · 실측과 가정 가르기
+docs/dev_log.md          개발 로그 — 무엇을 잘못 알았고 어떻게 알아챘나 (길을 잃으면 여기부터)
 docs/fake_data_audit.md  가짜 휴게소가 어디에 영향을 줬는지 전수 검토
 ```
 
