@@ -24,6 +24,10 @@ from typing import Any
 
 import yaml
 
+from evdt.demand_layers import Layer, parse_layers
+from evdt.demand_layers import label as layer_label
+from evdt.replay import describe as describe_period
+
 # run.stage 의 허용값 (schema.sql 의 CHECK 와 반드시 일치해야 한다)
 VALID_STAGES: tuple[str, ...] = (
     "UE", "S0", "S1", "S2", "S3", "S4",
@@ -160,17 +164,36 @@ class DemandConfig:
     volume_profile: str        # 시간대별 교통량 CSV (T-07 산출물)
     demand_multiplier: float
     ev_share: float
-    charge_prob: float         # Rupnik 규칙의 충전확률 (0.95)
+    #: ⚠ **UE 경로에서 쓰이지 않는다** (#54). `world.charge_decision.should_charge` 가
+    #: 이 값을 받는데, 그 함수를 부르는 곳이 자기 테스트뿐이다. UE 는
+    #: `engine.ue_demand.enumerate_plans` 에서 `can_reach_destination` 으로 직접 판단한다.
+    #: 값을 바꿔도 결과가 안 바뀌므로 **여기서 조정하려 하지 말 것.**
+    #: 충전 확률을 넣으려면 `ChargeRule.opportunity_prob`(기회 충전) 쪽이다.
+    #: S0 이후 정책이 should_charge 를 쓰게 되면 그때 되살아난다.
+    charge_prob: float
     safety_buffer_km: float    # Rupnik 규칙의 안전버퍼 (30km)
     low_soc_threshold: float   # 이 SoC 아래면 무조건 충전 (0.2)
     #: 목적지 분포 CSV (offset_km, share = 그 지점을 지나가는 비율). 없으면 전원 코리도 끝까지 간다.
     through_profile: str | None = None
+    #: 재현 기간. traffic_gyeongbu.parquet 의 period 열과 같아야 한다 (evdt/replay.py).
+    #: 무대를 갈아끼우는 스위치다 — 설 → 추석은 이 값과 프로파일 3개만 바꾸면 된다.
+    period: str = "seollal2026"
+    #: 중간 진입·진출 CSV (#54). 있으면 through_profile 대신 이걸 쓴다 —
+    #: 차마다 진입 지점이 달라지고, 목적지는 실측 진출 비율로 뽑는다.
+    #: scripts/build_entry_exit_profile.py 가 만든다.
+    entry_exit_profile: str | None = None
     #: 휴게소 사이 주행 속도 (km/h). travel_time == "fixed" 일 때만 쓴다
     cruise_speed_kmh: float = 80.0
+    #: 실측 위에 얹은 가정 레이어 (#54). 비어 있으면 2026 재현 그대로
+    layers: tuple[Layer, ...] = ()
     #: 통행시간을 무엇으로 재나 (#56)
     #:   "fixed"  cruise_speed_kmh 고정 속도 (옛 실험 재현)
     #:   "ctm"    CTM 이 낸 셀 속도. 셀이 없으면 멈춘다 — 조용히 고정 속도로 돌아가지 않는다
     travel_time: str = "fixed"
+    #: 고속도로를 벗어나 시내에서 충전하고 돌아오는 데 드는 시간(분) (#54).
+    #: 휴게소 계획이 전부 이보다 비싸면 차는 코리도를 벗어난다 → KPI `n_escaped`.
+    #: 0 이면 이탈 선택지가 없다. ⚠ 120분은 잠정값, 근거는 #64
+    escape_cost_min: float = 0.0
 
 
 
@@ -235,6 +258,12 @@ class OutputConfig:
     #: CTM 스텝 (분). CFL 하한(max(v_free, w_back) × dt ≤ 셀 길이)을 어기면
     #: 돌기 전에 멈춘다. config/flow_params.yaml 의 dt_min 과 같은 값을 쓴다.
     ctm_dt_min: float = 0.2
+    #: 기록 전에 미리 돌리는 시간(분). **기본 0 이다** — 켜고 끄는 근거는 #57 에서 정한다.
+    #:   0 이면   빈 도로에서 0시 시작 → 실측 대비 0시 −58% · 6시 −25% (부족)
+    #:   360 이면 전날 같은 시각 입력으로 감음 → 0시 +89% (과함).
+    #: 감는 입력을 "전날 같은 시각" 으로 본 것이 틀렸다. 설 최대일의 전날은 교통량이
+    #: 더 적으므로, 제대로 하려면 **전날 실측 프로파일**을 따로 넣어야 한다.
+    ctm_warmup_min: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +305,15 @@ class ScenarioConfig:
     def from_dict(cls, data: dict[str, Any], *, source: str = "<dict>") -> ScenarioConfig:
         text = yaml.safe_dump(data, allow_unicode=True, sort_keys=True)
         return cls._build(data, source_path=source, raw_yaml=text)
+
+    @property
+    def demand_label(self) -> str:
+        """실측 위에 무엇이 얹혔나. 그림 부제와 run params 에 그대로 들어간다 (#54).
+
+        그림만 보고도 재현인지 가정인지 알 수 있어야 한다.
+        """
+
+        return f"{describe_period(self.demand.period)} · {layer_label(self.demand.layers)}"
 
     def variant(self, tag: str, overrides: dict[str, Any]) -> ScenarioConfig:
         """이 시나리오에서 몇 개 값만 바꾼 실험. scenario_id 뒤에 __<tag> 가 붙는다.
@@ -331,6 +369,7 @@ class ScenarioConfig:
 
         # demand -----------------------------------------------------------
         d = e.section(data, "demand")
+        period = e.text(d.get("period", "seollal2026"), "demand.period")
         volume_profile = e.text(e.require(d, "demand", "volume_profile"), "demand.volume_profile")
         demand_multiplier = e.number(
             e.require(d, "demand", "demand_multiplier"), "demand.demand_multiplier",
@@ -347,6 +386,12 @@ class ScenarioConfig:
         through_profile = d.get("through_profile")
         if through_profile is not None:
             through_profile = e.text(through_profile, "demand.through_profile")
+        entry_exit_profile = d.get("entry_exit_profile")
+        if entry_exit_profile is not None:
+            entry_exit_profile = e.text(entry_exit_profile, "demand.entry_exit_profile")
+        layers = parse_layers(d.get("layers"), e)
+        escape_cost_min = e.number(
+            d.get("escape_cost_min", 0.0), "demand.escape_cost_min", lo=0.0)
         travel_time = str(d.get("travel_time", "fixed"))
         if travel_time not in TRAVEL_TIME_MODES:
             e.add("demand.travel_time",
@@ -456,6 +501,9 @@ class ScenarioConfig:
         ctm_dt_min = e.number(
             o.get("ctm_dt_min", 0.2), "output.ctm_dt_min", lo=0, lo_exclusive=True,
         )
+        ctm_warmup_min = e.number(
+            o.get("ctm_warmup_min", 0.0), "output.ctm_warmup_min", lo=0,
+        )
 
         # 알 수 없는 최상위 키 — 오타를 조용히 넘기지 않는다
         known_top = {
@@ -476,6 +524,7 @@ class ScenarioConfig:
             day_type=day_type,                             # type: ignore[arg-type]
             time=TimeConfig(start_min, end_min, dt_min),   # type: ignore[arg-type]
             demand=DemandConfig(
+                period=period,                             # type: ignore[arg-type]
                 volume_profile=volume_profile,             # type: ignore[arg-type]
                 demand_multiplier=demand_multiplier,       # type: ignore[arg-type]
                 ev_share=ev_share,                         # type: ignore[arg-type]
@@ -483,8 +532,11 @@ class ScenarioConfig:
                 safety_buffer_km=safety_buffer_km,         # type: ignore[arg-type]
                 low_soc_threshold=low_soc_threshold,       # type: ignore[arg-type]
                 through_profile=through_profile,           # type: ignore[arg-type]
+                entry_exit_profile=entry_exit_profile,     # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
                 travel_time=travel_time,
+                escape_cost_min=escape_cost_min,             # type: ignore[arg-type]
+                layers=layers,
             ),
             vehicles=VehiclesConfig(
                 seed=seed,                                 # type: ignore[arg-type]
@@ -496,7 +548,8 @@ class ScenarioConfig:
             environment=EnvironmentConfig(temp_c),         # type: ignore[arg-type]
             policy=PolicyConfig(stage, participation, dict(params), ue),  # type: ignore[arg-type]
             queue=QueueConfig(discipline, charger_select), # type: ignore[arg-type]
-            output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min),  # type: ignore[arg-type]
+            output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min,  # type: ignore[arg-type]
+                                ctm_warmup_min),  # type: ignore[arg-type]
             source_path=source_path,
             raw_yaml=raw_yaml,
             config_hash=hashlib.sha256(raw_yaml.encode("utf-8")).hexdigest()[:16],
@@ -514,6 +567,8 @@ class ScenarioConfig:
         candidates = [self.demand.volume_profile]
         if self.demand.through_profile:
             candidates.append(self.demand.through_profile)
+        if self.demand.entry_exit_profile:
+            candidates.append(self.demand.entry_exit_profile)
         return [c for c in candidates if not (base / c).is_file() and not Path(c).is_file()]
 
     # -- DB 연동 -------------------------------------------------------------

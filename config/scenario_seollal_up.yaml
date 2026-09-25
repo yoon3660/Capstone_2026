@@ -19,16 +19,32 @@ time:
   dt_min: 5
 
 demand:
+  # 재현 기간 — 무대를 갈아끼우는 스위치 (src/evdt/replay.py)
+  #   scripts/build_replay.py --period <기간> --direction <방향>
+  period: seollal2026
   volume_profile: data/processed/volume_gyeongbu_up_seollal.csv
   demand_multiplier: 1.0
-  ev_share: 0.08
+  # ⚠ 잠정값이다. 근거 확정은 #67 (3차 스프린트).
+  #   8% 면 가동률 90%·포화 8/19 로 이미 포화라 엔진이 옮길 자리가 없다.
+  #   5% 는 티핑 포인트(4→5%) 바로 위 — 쏠림은 있고 빈 곳도 있다.
+  #   "티핑 포인트라서" 는 근거가 아니다. #67 에서 출처로 바꾼다.
+  ev_share: 0.05            # 통과 차량 중 EV 비중
+  # ⚠ UE 경로에서는 쓰이지 않는다 (#54). should_charge 를 부르는 곳이 없다 —
+  #   값을 바꿔도 결과가 안 바뀐다. S0(#59) 가 쓰게 되면 그때 살아난다
   charge_prob: 0.95
   safety_buffer_km: 30.0
   low_soc_threshold: 0.2
   # 목적지 분포: 부산(구서) 쪽에서 출발한 차 중 각 지점을 지나가는 비율
   #   scripts/build_demand_profile.py --direction UP
   through_profile: data/processed/through_gyeongbu_up_seollal.csv
+  # 중간 진입·진출 (#54). 있으면 through_profile 대신 이걸 쓴다
+  #   scripts/build_entry_exit_profile.py --direction UP
+  entry_exit_profile: data/processed/entry_exit_gyeongbu_up_seollal.csv
   cruise_speed_kmh: 80.0
+  # 휴게소 줄이 이보다 길면 IC 로 빠져 시내에서 충전하고 돌아온다 (#54)
+  #   KPI n_escaped 로 남는다. 엔진이 이 수를 줄이는 것도 개선이다
+  #   ⚠ 120분은 잠정값. 근거는 #64 (충전 실측 조사)
+  escape_cost_min: 120.0
   # 통행시간을 무엇으로 재나 (#56): fixed = 위 고정 속도 · ctm = CTM 셀 속도
   travel_time: fixed
 
@@ -58,7 +74,15 @@ policy:
   params: {}
   ue:
     max_iter: 50
-    gap_tol: 0.03
+    # 3% 는 첫 sweep 에 통과해 "균형" 이라 부를 수 없었다 (반복 1회).
+    # 0.8% 면 반복 5회 — 최적반응을 여러 번 돌았다고 말할 수 있고 비용이 2.5배다.
+    # 0.7% 는 12회, 0.6% 는 28회로 급해지는데 KPI 는 나아지지 않는다.
+    #
+    # ⚠ KPI 로 고른 값이 아니다. 이탈 선택지가 생기면서 **균형해가 여럿**이 됐고
+    #   (누가 나가느냐에 따라 달라진다) 0.5~1.0% 사이 평균 대기가 19.7~21.4분으로
+    #   방향 없이 흔들린다. 그 폭(±0.85분)이 시드 산포(±0.95분)와 비슷하다.
+    #   그래서 **엔진과 비교할 때는 양쪽을 같은 gap_tol 로 고정해야 한다.**
+    gap_tol: 0.008
     min_gain_min: 1.0
     max_stops: 3
 

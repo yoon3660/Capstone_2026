@@ -145,7 +145,8 @@ def test_sampled_destinations_follow_the_share():
 
 def test_ue_settings_come_from_config(cfg: ScenarioConfig):
     assert cfg.policy.ue.max_iter == 50
-    assert cfg.policy.ue.gap_tol == 0.03
+    # 3% 는 첫 sweep 에 통과해 "균형" 이라 부를 수 없었다 → 0.8% 로 조였다 (#54)
+    assert cfg.policy.ue.gap_tol == 0.008
     assert cfg.demand.through_profile.endswith("through_gyeongbu_down_seollal.csv")
 
 
@@ -224,3 +225,206 @@ def test_wait_heatmap_is_written(tmp_path):
     out = plot_wait_heatmap(hourly, stations, [("r1", "UE"), ("r2", "엔진")], tmp_path / "h.png")
 
     assert out.is_file() and out.stat().st_size > 1000
+
+
+def test_entry_offset_is_read_per_ev():
+    """진입 지점이 차마다 다르다 (#54). 늦게 탄 차는 앞쪽 휴게소를 고를 수 없다."""
+    stations = [
+        {"station_id": "A", "offset_km": 50.0, "name": "A"},
+        {"station_id": "B", "offset_km": 150.0, "name": "B"},
+    ]
+    vclasses = {"vc": {"vclass_id": "vc", "battery_kwh": 60.0, "consumption_kwh_km": 0.25,
+                       "vmax_kw": 200.0}}
+    curves = {"vc": ((0.0, 1.0, 200.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3)
+
+    evs = [
+        {"ev_id": "early", "vclass_id": "vc", "entry_time_min": 0.0, "initial_soc": 0.5,
+         "dest_offset_km": 250.0, "entry_offset_km": 0.0},
+        {"ev_id": "late", "vclass_id": "vc", "entry_time_min": 0.0, "initial_soc": 0.5,
+         "dest_offset_km": 250.0, "entry_offset_km": 100.0},
+    ]
+
+    built = build_trip_demands(evs, stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+    by_id = {t.ev_id: t for t in built.trips}
+
+    assert by_id["early"].entry_offset_km == 0.0
+    assert by_id["late"].entry_offset_km == 100.0
+
+    # 100 km 에서 탄 차의 어떤 계획에도 50 km 휴게소는 없다
+    late_stations = {s for plan in by_id["late"].plans for s in plan.station_ids}
+    assert "A" not in late_stations
+
+
+def test_missing_entry_offset_falls_back_to_the_argument():
+    """예전 호출(진입 지점 하나)이 그대로 돈다."""
+    stations = [{"station_id": "A", "offset_km": 50.0, "name": "A"}]
+    vclasses = {"vc": {"vclass_id": "vc", "battery_kwh": 60.0, "consumption_kwh_km": 0.25,
+                       "vmax_kw": 200.0}}
+    curves = {"vc": ((0.0, 1.0, 200.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3)
+    ev = {"ev_id": "e", "vclass_id": "vc", "entry_time_min": 0.0, "initial_soc": 0.3,
+          "dest_offset_km": 200.0}
+
+    built = build_trip_demands([ev], stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, entry_offset_km=20.0)
+
+    assert built.trips[0].entry_offset_km == 20.0
+
+
+# ---------------------------------------------------------------------------
+# 기회 충전 (#54)
+# ---------------------------------------------------------------------------
+
+
+def _opp_setup(**rule_kw):
+    stations = [
+        {"station_id": "A", "offset_km": 30.0, "name": "A"},
+        {"station_id": "B", "offset_km": 60.0, "name": "B"},
+    ]
+    vclasses = {
+        "big": {"vclass_id": "big", "battery_kwh": 100.0, "consumption_kwh_km": 0.2, "vmax_kw": 200.0},
+        "small": {"vclass_id": "small", "battery_kwh": 30.0, "consumption_kwh_km": 0.2, "vmax_kw": 100.0},
+    }
+    curves = {k: ((0.0, 1.0, 200.0),) for k in vclasses}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3, **rule_kw)
+    return stations, vclasses, curves, rule
+
+
+def _ev(ev_id: str, vclass: str, soc: float, dest: float = 90.0) -> dict:
+    return {"ev_id": ev_id, "vclass_id": vclass, "entry_time_min": 0.0,
+            "initial_soc": soc, "dest_offset_km": dest, "entry_offset_km": 0.0}
+
+
+def test_without_the_layer_nobody_charges_opportunistically():
+    """기본값은 0 이다. 레이어를 안 켜면 수요가 몰래 늘지 않는다."""
+    stations, vclasses, curves, rule = _opp_setup()
+    evs = [_ev(f"e{i}", "big", 0.9) for i in range(50)]
+
+    built = build_trip_demands(evs, stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+
+    assert built.n_opportunity == 0
+    assert built.n_no_charge == 50
+
+
+def test_opportunity_charging_creates_demand_that_was_not_there():
+    """목적지까지 갈 수 있는 차도 들른 김에 충전한다 — 이게 이 레이어의 전부다."""
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=1.0)
+    evs = [_ev(f"e{i}", "big", 0.9) for i in range(50)]
+
+    built = build_trip_demands(evs, stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, rng=np.random.default_rng(0))
+
+    assert built.n_opportunity == 50
+    assert len(built.trips) == 50
+    assert built.n_no_charge == 0
+
+
+def test_opportunity_stop_actually_charges():
+    """0분짜리 정차면 충전기를 점유하지도 대기를 만들지도 않는다 — 있으나 마나 하다."""
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=1.0)
+
+    built = build_trip_demands([_ev("e", "big", 0.9)], stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0, rng=np.random.default_rng(0))
+    stop = built.trips[0].plans[0].stops[0]
+
+    assert stop.soc_out > stop.soc_in
+    assert stop.soc_out == pytest.approx(rule.target_soc_cap)
+
+
+def test_thick_margin_does_not_trigger_it():
+    """도착 SoC 여유가 두꺼우면 들러도 안 꽂는다."""
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=0.2)
+    evs = [_ev(f"e{i}", "big", 0.95, dest=40.0) for i in range(30)]   # 거의 안 쓰고 도착
+
+    built = build_trip_demands(evs, stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, rng=np.random.default_rng(0))
+
+    assert built.n_opportunity == 0
+
+
+def test_small_batteries_are_caught_more_often_without_naming_them():
+    """경차를 따로 지정하지 않아도 여유가 얇아 **자연히** 더 걸린다.
+
+    차종별로 충전 횟수를 강제하면 이미 맞게 도는 물리를 덮어쓰게 된다.
+    """
+    stations, vclasses, curves, rule = _opp_setup(opportunity_prob=1.0, opportunity_soc_margin=0.5)
+
+    big = build_trip_demands([_ev(f"b{i}", "big", 0.8) for i in range(40)], stations,
+                             vclasses, curves, rule=rule, charge_power_factor=1.0,
+                             rng=np.random.default_rng(0))
+    small = build_trip_demands([_ev(f"s{i}", "small", 0.8) for i in range(40)], stations,
+                               vclasses, curves, rule=rule, charge_power_factor=1.0,
+                               rng=np.random.default_rng(0))
+
+    assert small.n_opportunity > big.n_opportunity
+
+
+def test_probability_scales_the_number_of_opportunity_stops():
+    stations, vclasses, curves, _ = _opp_setup()
+    evs = [_ev(f"e{i}", "big", 0.9) for i in range(2_000)]
+
+    counts = []
+    for prob in (0.2, 0.6):
+        rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                          target_soc_cap=0.8, max_stops=3,
+                          opportunity_prob=prob, opportunity_soc_margin=1.0)
+        built = build_trip_demands(evs, stations, vclasses, curves, rule=rule,
+                                   charge_power_factor=1.0, rng=np.random.default_rng(1))
+        counts.append(built.n_opportunity / len(evs))
+
+    assert counts[0] == pytest.approx(0.2, abs=0.03)
+    assert counts[1] == pytest.approx(0.6, abs=0.03)
+
+
+def test_cars_that_really_need_a_charge_are_unaffected():
+    """기회 충전을 꺼도 필요한 차는 그대로 충전한다."""
+    stations, vclasses, curves, rule = _opp_setup()
+    built = build_trip_demands([_ev("need", "small", 0.3)], stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+
+    assert len(built.trips) == 1
+    assert built.n_opportunity == 0
+
+
+def test_opportunity_car_with_no_station_in_range_just_does_not_stop():
+    """기회 충전 차는 원래 충전 없이도 간다. 들를 곳이 없으면 '불가능' 이 아니다.
+
+    () 로 돌려주면 그 차가 결과에서 통째로 빠져나가 진입 EV 가 조용히 줄어든다.
+    """
+    stations = [{"station_id": "far", "offset_km": 5.0, "name": "far"}]   # 진입 지점보다 상류
+    vclasses = {"big": {"vclass_id": "big", "battery_kwh": 100.0,
+                        "consumption_kwh_km": 0.2, "vmax_kw": 200.0}}
+    curves = {"big": ((0.0, 1.0, 200.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1, target_soc_cap=0.8,
+                      max_stops=3, opportunity_prob=1.0, opportunity_soc_margin=1.0)
+    ev = {"ev_id": "e", "vclass_id": "big", "entry_time_min": 0.0, "initial_soc": 0.9,
+          "dest_offset_km": 50.0, "entry_offset_km": 20.0}
+
+    built = build_trip_demands([ev], stations, vclasses, curves, rule=rule,
+                               charge_power_factor=1.0, rng=np.random.default_rng(0))
+
+    assert built.n_infeasible == 0
+    assert built.n_no_charge == 1
+
+
+def test_a_car_that_truly_cannot_make_it_is_still_infeasible():
+    """진짜 못 가는 차는 그대로 불가능으로 남는다 (위 수정이 이걸 가리면 안 된다)."""
+    stations = [{"station_id": "far", "offset_km": 300.0, "name": "far"}]
+    vclasses = {"small": {"vclass_id": "small", "battery_kwh": 20.0,
+                          "consumption_kwh_km": 0.25, "vmax_kw": 100.0}}
+    curves = {"small": ((0.0, 1.0, 100.0),)}
+    rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                      target_soc_cap=0.8, max_stops=3)
+    ev = {"ev_id": "e", "vclass_id": "small", "entry_time_min": 0.0, "initial_soc": 0.15,
+          "dest_offset_km": 400.0, "entry_offset_km": 0.0}
+
+    built = build_trip_demands([ev], stations, vclasses, curves,
+                               rule=rule, charge_power_factor=1.0)
+
+    assert built.n_infeasible == 1

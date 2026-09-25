@@ -197,3 +197,44 @@ def test_ev_count_is_recorded_when_given() -> None:
     last_cell = [r for r in ev_rows if r["entity_id"] == f"gyeongbu_down_{n_cells - 1:04d}"]
 
     assert all(r["value"] == pytest.approx(n_cells - 1) for r in last_cell)
+
+
+# ---------------------------------------------------------------------------
+# warmup — 빈 도로에서 0시에 시작하지 않는다 (#54)
+# ---------------------------------------------------------------------------
+
+
+def test_warmup_fills_the_corridor_before_recording() -> None:
+    """실측 0시에는 전날 들어온 차가 이미 달리고 있다. 빈 채로 시작하면 새벽이 모자란다."""
+    cold = _run(n_cells=8, horizon_min=120.0)
+    warm = run_day(make_cells([4] * 8), _cell_rows(8), DT_MIN,
+                   inflow_veh_per_step=lambda t: 20.0, horizon_min=120.0, warmup_min=60.0)
+
+    assert cold.initial_veh == 0.0
+    assert warm.initial_veh > 0.0
+
+    first = lambda run: min(r["t_min"] for r in run.cell_state_rows)   # noqa: E731
+    cold_flow = [r["flow_veh_h"] for r in cold.cell_state_rows if r["t_min"] == first(cold)]
+    warm_flow = [r["flow_veh_h"] for r in warm.cell_state_rows if r["t_min"] == first(warm)]
+
+    assert sum(warm_flow) > sum(cold_flow)
+
+
+def test_conservation_still_holds_with_warmup() -> None:
+    """시작부터 도로에 있던 차는 '들어온 차' 가 아니다. 안 빼면 보존이 warmup 만큼 틀린다."""
+    warm = run_day(make_cells([4] * 8), _cell_rows(8), DT_MIN,
+                   inflow_veh_per_step=lambda t: 25.0, horizon_min=120.0, warmup_min=30.0)
+
+    assert warm.initial_veh > 0.0
+    assert warm.conservation_error_veh == pytest.approx(0.0, abs=1e-6)
+
+
+def test_warmup_records_nothing_extra() -> None:
+    """감아 도는 구간은 기록에 남지 않는다."""
+    warm = run_day(make_cells([4] * 4), _cell_rows(4), DT_MIN,
+                   inflow_veh_per_step=lambda t: 10.0, horizon_min=30.0, warmup_min=60.0)
+
+    times = sorted({r["t_min"] for r in warm.cell_state_rows})
+
+    assert min(times) > 0.0
+    assert max(times) == pytest.approx(30.0)

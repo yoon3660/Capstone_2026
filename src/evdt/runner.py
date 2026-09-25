@@ -29,11 +29,18 @@ import numpy as np
 import pandas as pd
 
 from evdt.config import ScenarioConfig
+from evdt.demand_layers import effective_ev_share, opportunity_charge
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
 from evdt.io.db import get_conn
 from evdt.io.demand_profile import sample_dest_offsets
+from evdt.io.entry_exit import (
+    corridor_entry_hourly_from_profile,
+    ramp_arrays,
+    sample_entry_offsets,
+    sample_exit_offsets,
+)
 from evdt.io.event_log import load_sql, log_sim_result
 from evdt.io.loaders import duck_connect, load_run_table
 from evdt.io.run_registry import RunContext, make_run_id
@@ -57,6 +64,8 @@ BOTTLENECK_WAIT_MIN = 30.0
 
 #: 목적지 난수는 EV 생성 난수와 다른 흐름을 쓴다 (generate_evs 가 seed 를 그대로 쓴다)
 DEST_STREAM = 1
+#: 기회 충전 추첨도 다른 흐름을 쓴다 — 확률을 바꿔도 EV 집합은 그대로여야 한다
+OPPORTUNITY_STREAM = 2
 
 #: 신뢰구간 수준과 최소 시드 수 (이슈 #30 완료조건)
 CI_LEVEL = 0.95
@@ -126,20 +135,58 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         )
 
     volume = pd.read_csv(root / cfg.demand.volume_profile)
+
+    # EV 보급률 레이어는 실측 비중을 **덮어쓴다** (#54). 곱하지 않는다 —
+    # "2030년에 25% 라면" 을 그대로 쓰기 위해서다.
+    share = effective_ev_share(cfg.demand.layers, cfg.demand.ev_share)
+    if share != cfg.demand.ev_share:
+        cfg = dataclasses.replace(cfg, demand=dataclasses.replace(cfg.demand, ev_share=share))
+
+    rng = np.random.default_rng([cfg.vehicles.seed, DEST_STREAM])
+    points = None
+
+    if cfg.demand.entry_exit_profile:
+        # ⚠ EV 대수는 **코리도 전체 진입**에서 나와야 한다. volume_profile 은 기점
+        # 콘존만이라, 그걸로 뽑으면 중간 IC 에서 타는 차가 통째로 빠진다
+        # (하행 3.5배 · 상행 7.6배 부족). CTM 램프는 이미 전체를 쓰고 있어서
+        # EV 와 배경 교통이 서로 다른 수요에서 나오고 있었다.
+        profile = pd.read_csv(root / cfg.demand.entry_exit_profile)
+        points = corridor_entry_hourly_from_profile(profile, volume)
+        volume = (points.groupby("hour")["entry_veh"].sum()
+                  .reindex(range(24), fill_value=0.0)
+                  .rename("volume_veh").reset_index())
+
     evs = generate_evs(volume, cfg, dest_offset_km=corridor_end_km)
 
-    if cfg.demand.through_profile:
-        rng = np.random.default_rng([cfg.vehicles.seed, DEST_STREAM])
+    if points is not None:
+        # 목적지는 실측 진출 비율로 하류를 훑으며 뽑는다
+        hours = ((evs["entry_time_min"] // 60).astype(int) % 24).to_numpy()
+        entry = np.zeros(len(evs))
+        dest = np.zeros(len(evs))
+        for hour in np.unique(hours):
+            pick = hours == hour
+            here = sample_entry_offsets(int(pick.sum()), int(hour), points, rng)
+            entry[pick] = here
+            dest[pick] = sample_exit_offsets(here, int(hour), profile, rng,
+                                             corridor_end_km=corridor_end_km)
+        evs["entry_offset_km"] = entry
+        evs["dest_offset_km"] = dest
+    elif cfg.demand.through_profile:
         through = pd.read_csv(root / cfg.demand.through_profile)
-        evs["dest_offset_km"] = sample_dest_offsets(len(evs), through, rng, corridor_end_km=corridor_end_km)
+        evs["dest_offset_km"] = sample_dest_offsets(len(evs), through, rng,
+                                                    corridor_end_km=corridor_end_km)
 
     range_factor, charge_power_factor = temp_factors(cfg.environment.temp_c, temp_table(temps))
+    opp_prob, opp_margin = opportunity_charge(cfg.demand.layers)
     rule = ChargeRule(
         range_factor=range_factor,
         buffer_km=cfg.demand.safety_buffer_km,
         reserve_soc=cfg.demand.low_soc_threshold,
         target_soc_cap=cfg.vehicles.target_soc_cap,
         max_stops=cfg.policy.ue.max_stops,
+        escape_cost_min=cfg.demand.escape_cost_min,
+        opportunity_prob=opp_prob,
+        opportunity_soc_margin=opp_margin,
     )
     built = build_trip_demands(
         evs.to_dict("records"),
@@ -148,6 +195,7 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         {v["vclass_id"]: tuple(curve_segments(curves, v["vclass_id"])) for v in vclasses},
         rule=rule,
         charge_power_factor=charge_power_factor,
+        rng=np.random.default_rng([cfg.vehicles.seed, OPPORTUNITY_STREAM]),
     )
     return built, range_factor, charge_power_factor
 
@@ -155,9 +203,11 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
 def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log = print):
     """CTM 을 하루 돌려 통행시간용 속도 격자를 만든다 (demand.travel_time == "ctm").
 
-    ⚠ 지금은 배경 교통이 **전부 코리도 시작점으로 들어와 끝까지 간다**. 실제로는
-    대부분 중간 IC 에서 빠지므로, 뒤쪽 구간의 정체가 과장된다. 중간 진출입은 #54·#63,
-    파라미터 보정은 #57, 실측 대조는 #58 이다. 그때까지 이 스위치로 낸 결과는
+    `demand.entry_exit_profile` 이 있으면 **중간 진입·진출 램프까지 채운다** (#54).
+    EV 와 배경 교통이 **같은 표**에서 나와야 CTM 이 만든 정체와 EV 의 도착이 어긋나지
+    않는다. 없으면 예전처럼 전부 기점으로 들어와 끝까지 가고, 뒤쪽 정체가 과장된다.
+
+    ⚠ 파라미터 보정은 #57, 실측 대조는 #58 이다. 그 전까지 이 스위치로 낸 결과는
     "CTM 을 얹으면 무엇이 달라지나" 를 보는 용도지 재현이 아니다.
     """
 
@@ -167,14 +217,31 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
     hourly = (volume.groupby("hour")["volume_veh"].sum()
               .reindex(range(24), fill_value=0.0) * cfg.demand.demand_multiplier)
     dt_min = float(cfg.output.ctm_dt_min)
+    edges = np.array([rows[0]["offset_km_start"]] + [r["offset_km_end"] for r in rows], dtype=float)
 
     def inflow(t_min: float) -> float:
         return float(hourly.iloc[int(t_min // 60) % 24]) * dt_min / 60.0
 
-    ctm = run_day(cells, rows, dt_min, inflow_veh_per_step=inflow)
+    ramps = None
+    if cfg.demand.entry_exit_profile:
+        profile = pd.read_csv(PROJECT_ROOT / cfg.demand.entry_exit_profile)
+        scale = cfg.demand.demand_multiplier * dt_min / 60.0
+        ramps = {h: ramp_arrays(profile, h, edges, scale=scale) for h in range(24)}
+
+    ctm = run_day(
+        cells, rows, dt_min,
+        # 빈 도로에서 0시에 시작하면 새벽 교통량이 실측보다 크게 모자란다
+        # (실측 0시에는 전날 들어온 차가 이미 달린다). 코리도를 한 번 훑을 만큼 감는다.
+        warmup_min=float(cfg.output.ctm_warmup_min),
+        inflow_veh_per_step=inflow,
+        ramp_demand_per_step=None if ramps is None else (lambda t: ramps[int(t // 60) % 24][0]),
+        exit_ratio_per_step=None if ramps is None else (lambda t: ramps[int(t // 60) % 24][1]),
+    )
 
     log(f"CTM  셀 {len(cells)}개 · dt {dt_min}분 · 진입 {ctm.entered_veh:,.0f}대 "
         f"· 남은 차 {ctm.remaining_veh:,.0f}대 · 보존오차 {ctm.conservation_error_veh:+.6f}")
+    if ramps is None:
+        log("  ⚠ 중간 진출입 없음 — 전부 기점 진입·끝까지. 뒤쪽 정체가 과장된다")
     if ctm.speed_field.jammed_share > 0:
         log(f"  ⚠ 속도 하한에 걸린 칸 {ctm.speed_field.jammed_share:.1%} "
             "— 높으면 통행시간을 믿지 말 것")
@@ -223,6 +290,7 @@ def run_ue_once(
         f"(주행 {range_factor:.2f} · 충전출력 {cpf:.2f})")
     log(f"휴게소 {len(stations)}곳 · 충전기 {sum(len(c) for c in chargers.values())}기 · "
         f"코리도 {corridor_end_km:.1f} km")
+    log(f"수요: {cfg.demand_label}")
     log(f"출발 SoC {cfg.vehicles.departure_soc or '(soc_beta)'}: 평균 {soc_mean:.0%} · "
         f"수요 배율 ×{cfg.demand.demand_multiplier:g}")
     log(f"진입 EV {built.n_ev:,}대 → 충전 필요 {len(built.trips):,}대 "
@@ -234,11 +302,14 @@ def run_ue_once(
         max_iter=ue.max_iter, gap_tol=ue.gap_tol, min_gain_min=ue.min_gain_min,
         speed_kmh=cfg.demand.cruise_speed_kmh,
         travel=None if ctm is None else ctm.speed_field,
+        escape_cost_min=cfg.demand.escape_cost_min,
     )
     params = {
         "departure_soc": cfg.vehicles.departure_soc,
         "departure_soc_mean": round(soc_mean, 4),
         "demand_multiplier": cfg.demand.demand_multiplier,
+        # 실측 위에 무엇이 얹혔나 (#54). 결과를 다시 볼 때 가장 먼저 봐야 하는 값이다
+        "demand_layers": cfg.demand_label,
     }
 
     with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, runs_dir=runs,
@@ -274,7 +345,18 @@ def run_ue_once(
                        write_snapshots=cfg.output.write_snapshots)
 
         waits = np.array([e["wait_min"] for e in sim.charge_events]) if sim.charge_events else np.zeros(1)
+        escape_rows = result.escape_rows(built.trips, cfg.demand.escape_cost_min)
+        run.writer.append_many("escape_event", escape_rows)
+        n_escaped = len(escape_rows)
+        n_balked = sum(1 for r in escape_rows if r["reason"] == "balked")
+        log(f"코리도 이탈 {n_escaped:,}대 ({n_escaped / max(len(built.trips), 1):.1%}) "
+            f"— 줄이 길어서 {n_balked:,} · 닿는 휴게소가 없어서 {n_escaped - n_balked:,}")
         run.kpis({
+            # 평균 대기만 보면 이 차들이 빠져서 좋아 보인다. 문제가 사라진 게 아니라
+            # 고속도로 밖으로 옮겨간 것이므로 항상 같이 본다 (#54)
+            "n_escaped": (n_escaped, "count"),
+            # 엔진이 고칠 수 있는 몫만. no_plan 은 증설·SoC 문제라 엔진 성과가 아니다
+            "n_escaped_balked": (n_balked, "count"),
             "ue_iterations": (result.history[-1].iteration, "count"),
             "ue_final_gap": (result.final_gap, "ratio"),
             "n_charge_visits": (len(sim.charge_events), "count"),
@@ -492,7 +574,7 @@ def plot_experiment_heatmap(
         stations,
         path,
         title=f"휴게소 × 시간대 — {'대기시간' if metric == 'wait' else '큐 길이'} (시드 {n_seeds}개 합산)",
-        subtitle=f"{cfg.scenario_id} · 색 = {what} · 세로축은 실제 기점거리",
+        subtitle=f"{cfg.scenario_id} · {cfg.demand_label} · 색 = {what} · 세로축은 실제 기점거리",
         **kw,
     )
 
@@ -585,6 +667,8 @@ def summary_markdown(summary: pd.DataFrame, cfg: ScenarioConfig, seeds: Sequence
         f"시나리오 `{cfg.scenario_id}` · 시드 {len(seeds)}개 ({min(seeds)}–{max(seeds)}) · "
         f"출발 SoC {cfg.vehicles.departure_soc or '-'} · 수요 ×{cfg.demand.demand_multiplier:g} · "
         f"{int(CI_LEVEL * 100)}% 신뢰구간 (t 분포)",
+        "",
+        f"**{cfg.demand_label}**",
         "",
         "| KPI | 평균 | 95% 신뢰구간 | 표준편차 | 최소 – 최대 |",
         "|---|---:|---|---:|---|",
