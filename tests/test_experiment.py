@@ -54,11 +54,32 @@ def mini(seeded_db: Path, cfg: ScenarioConfig, tmp_path: Path):
     through = tmp_path / "through.csv"
     pd.DataFrame({"offset_km": [3.0, 100.0, 170.0, 200.0], "share": [1.0, 0.8, 0.5, 0.0]}).to_csv(through, index=False)
 
+    # 운영 config 가 가리키는 **모든** 입력을 tmp_path 로 바꿔야 한다.
+    # 하나라도 놓치면 그 파일이 있는 기기에서는 통과하고 CI 에서만 깨진다
+    # (data/processed 는 gitignore 다). 실제로 #54 에서 겪었다.
+    entry_exit = tmp_path / "entry_exit.csv"
+    pd.DataFrame([
+        {"hour": h, "offset_km": km, "gap_km": 0.0,
+         "volume_veh": vol, "entry_veh": entry, "exit_veh": vol * share,
+         "exit_share": share}
+        for h in range(24)
+        for km, share, entry in ((50.0, 0.0, 60.0), (120.0, 0.3, 0.0), (180.0, 0.5, 0.0))
+        for vol in [180.0 if 7 <= h < 13 else 0.0]
+    ]).to_csv(entry_exit, index=False)
+
     data = yaml.safe_load(cfg.raw_yaml)
     data["scenario_id"] = "mini_test"
     data["demand"]["volume_profile"] = str(volume)
     data["demand"]["through_profile"] = str(through)
+    data["demand"]["entry_exit_profile"] = str(entry_exit)
     mini_cfg = ScenarioConfig.from_dict(data, source="mini")
+
+    # 놓친 입력이 있으면 여기서 잡는다 — CI 까지 가지 않는다
+    assert mini_cfg.missing_inputs(tmp_path) == [], "테스트 config 가 저장소 밖 파일을 가리킨다"
+    outside = [f for f in (mini_cfg.demand.volume_profile, mini_cfg.demand.through_profile,
+                           mini_cfg.demand.entry_exit_profile)
+               if f and not str(f).startswith(str(tmp_path))]
+    assert not outside, f"tmp_path 밖을 가리키는 입력: {outside}"
 
     return mini_cfg, seeded_db, tmp_path / "runs"
 
