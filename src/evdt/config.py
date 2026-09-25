@@ -184,6 +184,10 @@ class DemandConfig:
     #:   "fixed"  cruise_speed_kmh 고정 속도 (옛 실험 재현)
     #:   "ctm"    CTM 이 낸 셀 속도. 셀이 없으면 멈춘다 — 조용히 고정 속도로 돌아가지 않는다
     travel_time: str = "fixed"
+    #: 고속도로를 벗어나 시내에서 충전하고 돌아오는 데 드는 시간(분) (#54).
+    #: 휴게소 계획이 전부 이보다 비싸면 차는 코리도를 벗어난다 → KPI `n_escaped`.
+    #: 0 이면 이탈 선택지가 없다. ⚠ 120분은 잠정값, 근거는 #64
+    escape_cost_min: float = 0.0
 
 
 
@@ -380,6 +384,8 @@ class ScenarioConfig:
         if entry_exit_profile is not None:
             entry_exit_profile = e.text(entry_exit_profile, "demand.entry_exit_profile")
         layers = parse_layers(d.get("layers"), e)
+        escape_cost_min = e.number(
+            d.get("escape_cost_min", 0.0), "demand.escape_cost_min", lo=0.0)
         travel_time = str(d.get("travel_time", "fixed"))
         if travel_time not in TRAVEL_TIME_MODES:
             e.add("demand.travel_time",
@@ -523,6 +529,7 @@ class ScenarioConfig:
                 entry_exit_profile=entry_exit_profile,     # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
                 travel_time=travel_time,
+                escape_cost_min=escape_cost_min,             # type: ignore[arg-type]
                 layers=layers,
             ),
             vehicles=VehiclesConfig(

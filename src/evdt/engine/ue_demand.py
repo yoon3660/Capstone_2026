@@ -47,7 +47,18 @@ class PlannedStop:
 
 @dataclass(frozen=True)
 class Plan:
+    """충전 계획 하나. **정차가 없는 계획은 "코리도 이탈"** 이다 (#54).
+
+    휴게소 줄이 너무 길면 IC 로 빠져 시내에서 충전하고 돌아온다. 그걸 계획 하나로
+    두면 UE 가 다른 계획과 **같은 잣대로** 고른다 — 따로 예외 처리할 필요가 없고,
+    남들이 빠져나가 줄이 짧아지면 다시 휴게소를 고르는 것도 균형이 알아서 한다.
+    """
+
     stops: tuple[PlannedStop, ...]
+
+    @property
+    def is_escape(self) -> bool:
+        return not self.stops
 
     @property
     def station_ids(self) -> tuple[str, ...]:
@@ -93,6 +104,13 @@ class ChargeRule:
     # 명절 고속도로에서 실제로 일어나는 일이고, 우리 관점에서 이건 수요 가정이 아니라
     # **운전자 행동 모델의 파라미터**다 (설계문서 §1: 행동 모델은 실측과 대조해 고른다).
     # #64 충전 실측 조사로 보정할 대상이다.
+    #: 고속도로를 벗어나 시내에서 충전하고 돌아오는 데 드는 시간(분) (#54).
+    #: 휴게소 계획이 전부 이보다 비싸면 차는 코리도를 벗어난다.
+    #: 0 이면 이탈 선택지를 주지 않는다 (예전 동작).
+    #:
+    #: ⚠ 120분은 잠정값이다. 근거는 #64 (충전 실측 조사) 에서.
+    #: 이 값이 **대기의 실질적인 상한**이 되므로 결과에 직접 영향을 준다.
+    escape_cost_min: float = 0.0
     opportunity_prob: float = 0.0
     #: 도착 예상 SoC 가 이보다 얇을 때만 기회 충전을 고려한다.
     #: 차종으로 나누지 않는 이유: 배터리가 작은 차는 여유가 얇아 **자연히** 더 걸린다.
@@ -264,13 +282,19 @@ def build_trip_demands(
             opportunity=opportunity,
         )
 
+        escape = (Plan(()),) if rule.escape_cost_min > 0 else ()
+
         if plans is None:
             n_no_charge += 1
             continue
 
         if not plans:
+            # 3회로도 못 가는 차. 예전에는 결과에서 조용히 빠졌는데, 현실에서는
+            # 그 차도 IC 로 나가 충전한다 — 이탈과 같은 일이다.
             n_infeasible += 1
-            continue
+            if not escape:
+                continue
+            plans = ()
 
         trips.append(
             TripDemand(
@@ -283,7 +307,7 @@ def build_trip_demands(
                 vmax_kw=float(v["vmax_kw"]),
                 curve=tuple(curves[str(ev["vclass_id"])]),
                 cold_factor=charge_power_factor,
-                plans=plans,
+                plans=plans + escape,
             )
         )
 

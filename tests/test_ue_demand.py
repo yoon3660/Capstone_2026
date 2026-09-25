@@ -145,7 +145,8 @@ def test_sampled_destinations_follow_the_share():
 
 def test_ue_settings_come_from_config(cfg: ScenarioConfig):
     assert cfg.policy.ue.max_iter == 50
-    assert cfg.policy.ue.gap_tol == 0.03
+    # 3% 는 첫 sweep 에 통과해 "균형" 이라 부를 수 없었다 → 1% 로 조였다 (#54)
+    assert cfg.policy.ue.gap_tol == 0.01
     assert cfg.demand.through_profile.endswith("through_gyeongbu_down_seollal.csv")
 
 

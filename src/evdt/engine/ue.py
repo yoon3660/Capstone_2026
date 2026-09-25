@@ -78,6 +78,8 @@ class UESettings:
     max_iter: int = 50
     gap_tol: float = 0.03
     min_gain_min: float = 1.0
+    #: 코리도 이탈의 비용(분). 정차 없는 계획(Plan(()))의 값이다 (#54)
+    escape_cost_min: float = 0.0
     #: 고정 속도(km/h). travel 을 주지 않으면 이 속도로 달린다
     speed_kmh: float = 80.0
     #: 통행시간. None 이면 ConstantSpeed(speed_kmh). CTM 을 켜면 CellSpeedField 가 온다
@@ -124,6 +126,16 @@ class UEResult:
     def station_of(self, trips: Sequence[TripDemand]) -> dict[str, tuple[str, ...]]:
         return {t.ev_id: t.plans[self.choice[t.ev_id]].station_ids for t in trips}
 
+    def n_escaped(self, trips: Sequence[TripDemand]) -> int:
+        """코리도를 벗어나 시내에서 충전한 차 (#54).
+
+        평균 대기만 보면 이 차들이 빠져서 좋아진 것처럼 보인다. **문제가 사라진 것이
+        아니라 고속도로 밖으로 옮겨간 것**이므로 항상 같이 본다. 엔진이 이 수를 줄이는
+        것도 개선이다 — 굳이 추가 동선을 만들지 않고 코리도 안에서 해결한다는 뜻이다.
+        """
+
+        return sum(1 for t in trips if t.plans[self.choice[t.ev_id]].is_escape)
+
 
 # ---------------------------------------------------------------------------
 # 한 번 굴리기 — 전원이 계획대로 움직인 결과
@@ -131,6 +143,8 @@ class UEResult:
 
 
 def _first_arrival_min(trip: TripDemand, plan: Plan, travel: TravelTime) -> float:
+    if not plan.stops:
+        raise ValueError("이탈 계획에는 도착 시각이 없다")
     return trip.entry_min + travel.minutes(
         trip.entry_offset_km, plan.stops[0].offset_km, trip.entry_min
     )
@@ -162,6 +176,7 @@ def _roll(
     choice: Mapping[str, int],
     chargers: Mapping[str, tuple[Charger, ...]],
     travel: TravelTime,
+    escape_cost_min: float = 0.0,
 ) -> tuple[Ledgers, list[Visit]]:
     """전원이 고른 계획대로 하루를 굴린다. 원장과 실제 정차 목록을 돌려준다.
 
@@ -174,7 +189,8 @@ def _roll(
     ledgers = _ledgers(chargers)
     by_id = {t.ev_id: t for t in trips}
     heap = [
-        (_first_arrival_min(t, t.plans[choice[t.ev_id]], travel), t.ev_id, 0) for t in trips
+        (_first_arrival_min(t, t.plans[choice[t.ev_id]], travel), t.ev_id, 0)
+        for t in trips if not t.plans[choice[t.ev_id]].is_escape
     ]
     heapq.heapify(heap)
     visits: list[Visit] = []
@@ -209,12 +225,17 @@ def _plan_cost(
     travel: TravelTime,
     *,
     exclude_self: bool,
+    escape_cost_min: float = 0.0,
 ) -> tuple[float, list[Arrival]]:
     """이 차가 plan 으로 가면 총 체류시간과 각 정차의 도착. 원장은 바꾸지 않는다.
 
     앞 정차의 체류가 뒤 정차의 도착을 민다. exclude_self 면 원장에 있는 자기 자신의
     기존 정차를 빼고 계산한다 ("나 혼자 계획을 바꾸면?").
     """
+
+    if plan.is_escape:
+        # 코리도를 벗어난다. 휴게소를 쓰지 않으니 원장에 아무것도 남기지 않는다.
+        return escape_cost_min, []
 
     t = _first_arrival_min(trip, plan, travel)
     total = 0.0
@@ -260,12 +281,18 @@ def evaluate(
     choice: Mapping[str, int],
     chargers: Mapping[str, tuple[Charger, ...]],
     travel: TravelTime,
+    escape_cost_min: float = 0.0,
 ) -> Evaluation:
-    ledgers, visits = _roll(trips, choice, chargers, travel)
+    ledgers, visits = _roll(trips, choice, chargers, travel, escape_cost_min)
     current: dict[str, float] = {}
 
     for v in visits:
         current[v.ev_id] = current.get(v.ev_id, 0.0) + v.dwell_min
+
+    # 이탈한 차는 정차가 없어 visits 에 안 나온다. 비용은 이탈 비용이다.
+    for trip in trips:
+        if trip.plans[choice[trip.ev_id]].is_escape:
+            current[trip.ev_id] = escape_cost_min
 
     best_cost: dict[str, float] = {}
     best_plan: dict[str, int] = {}
@@ -278,7 +305,8 @@ def evaluate(
             if k == mine:
                 continue
 
-            cost, _ = _plan_cost(trip, plan, ledgers, travel, exclude_self=True)
+            cost, _ = _plan_cost(trip, plan, ledgers, travel, exclude_self=True,
+                                 escape_cost_min=escape_cost_min)
 
             if cost < best_cost[trip.ev_id] - GAIN_EPS_MIN:
                 best_plan[trip.ev_id], best_cost[trip.ev_id] = k, cost
@@ -299,12 +327,14 @@ def free_flow_choice(
     trips: Sequence[TripDemand],
     chargers: Mapping[str, tuple[Charger, ...]],
     travel: TravelTime,
+    escape_cost_min: float = 0.0,
 ) -> dict[str, int]:
     """빈 휴게소 기준 각자 가장 빠른 계획 — 대기를 모르는 운전자. 반복 0."""
 
     empty = _ledgers(chargers)
     return {
-        trip.ev_id: _best([_plan_cost(trip, p, empty, travel, exclude_self=False)[0] for p in trip.plans])
+        trip.ev_id: _best([_plan_cost(trip, p, empty, travel, exclude_self=False,
+                                      escape_cost_min=escape_cost_min)[0] for p in trip.plans])
         for trip in trips
     }
 
@@ -331,10 +361,11 @@ def _sweep(
     switched = 0
 
     for trip in sorted(trips, key=lambda t: (t.entry_min, t.ev_id)):
-        for sid in own[trip.ev_id]:
+        for sid in own.get(trip.ev_id, ()):   # 이탈한 차는 원장에 없다
             ledgers[sid].cancel(trip.ev_id)
 
-        evals = [_plan_cost(trip, plan, ledgers, travel, exclude_self=False) for plan in trip.plans]
+        evals = [_plan_cost(trip, plan, ledgers, travel, exclude_self=False,
+                            escape_cost_min=settings.escape_cost_min) for plan in trip.plans]
         mine = choice[trip.ev_id]
         best = _best([c for c, _ in evals])
 
@@ -377,11 +408,11 @@ def solve_ue(
         raise ValueError(f"충전기 정보가 없는 휴게소가 계획에 있다: {missing}")
 
     travel = settings.travel_time()
-    choice = free_flow_choice(trips, chargers, travel)
+    choice = free_flow_choice(trips, chargers, travel, settings.escape_cost_min)
     history: list[IterationStat] = []
 
     for k in range(settings.max_iter + 1):
-        ev = evaluate(trips, choice, chargers, travel)
+        ev = evaluate(trips, choice, chargers, travel, settings.escape_cost_min)
         n_improvable = _improvable(ev, settings.min_gain_min)
         done = ev.rel_gap <= settings.gap_tol or n_improvable == 0
 

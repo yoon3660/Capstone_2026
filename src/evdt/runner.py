@@ -184,6 +184,7 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         reserve_soc=cfg.demand.low_soc_threshold,
         target_soc_cap=cfg.vehicles.target_soc_cap,
         max_stops=cfg.policy.ue.max_stops,
+        escape_cost_min=cfg.demand.escape_cost_min,
         opportunity_prob=opp_prob,
         opportunity_soc_margin=opp_margin,
     )
@@ -301,6 +302,7 @@ def run_ue_once(
         max_iter=ue.max_iter, gap_tol=ue.gap_tol, min_gain_min=ue.min_gain_min,
         speed_kmh=cfg.demand.cruise_speed_kmh,
         travel=None if ctm is None else ctm.speed_field,
+        escape_cost_min=cfg.demand.escape_cost_min,
     )
     params = {
         "departure_soc": cfg.vehicles.departure_soc,
@@ -343,7 +345,13 @@ def run_ue_once(
                        write_snapshots=cfg.output.write_snapshots)
 
         waits = np.array([e["wait_min"] for e in sim.charge_events]) if sim.charge_events else np.zeros(1)
+        n_escaped = result.n_escaped(built.trips)
+        log(f"코리도 이탈 {n_escaped:,}대 "
+            f"({n_escaped / max(len(built.trips), 1):.1%}) — 시내에서 충전하고 돌아온다")
         run.kpis({
+            # 평균 대기만 보면 이 차들이 빠져서 좋아 보인다. 문제가 사라진 게 아니라
+            # 고속도로 밖으로 옮겨간 것이므로 항상 같이 본다 (#54)
+            "n_escaped": (n_escaped, "count"),
             "ue_iterations": (result.history[-1].iteration, "count"),
             "ue_final_gap": (result.final_gap, "ratio"),
             "n_charge_visits": (len(sim.charge_events), "count"),

@@ -351,3 +351,74 @@ def test_uniform_travel_time_reproduces_the_fixed_speed_run():
     assert [v.t_arrive_min for v in fixed.visits] == pytest.approx(
         [v.t_arrive_min for v in gridded.visits]
     )
+
+
+# ---------------------------------------------------------------------------
+# 코리도 이탈 (#54)
+# ---------------------------------------------------------------------------
+
+
+def _escape_settings(cost: float, **kw):
+    return UESettings(speed_kmh=SPEED, escape_cost_min=cost, **kw)
+
+
+def _escape_trips(n: int, service_min: float = 30.0):
+    """휴게소 한 곳(1기)에 n 대가 몰린다 — 뒤에 올수록 오래 기다린다.
+
+    이탈 계획(정차 없는 Plan)은 build_trip_demands 가 붙인다. 여기서는 UE 쪽만
+    보려는 것이므로 직접 붙인다.
+    """
+    from dataclasses import replace as _replace
+
+    out = []
+    for i in range(n):
+        t = _trip(f"e{i:02d}", i * 0.5, [[("A", 50.0)]], service_min=service_min)
+        out.append(_replace(t, plans=(*t.plans, Plan(()))))
+    return out
+
+
+def test_nobody_escapes_when_the_queue_is_short():
+    """줄이 이탈 비용보다 짧으면 아무도 안 나간다."""
+    trips = _escape_trips(4)
+    r = solve_ue(trips, {"A": _chargers(4)}, _escape_settings(120.0))
+
+    assert r.n_escaped(trips) == 0
+
+
+def test_long_queues_push_cars_out_of_the_corridor():
+    """줄이 이탈 비용보다 길어지면 나간다. 이게 대기의 실질적 상한이 된다."""
+    trips = _escape_trips(30)
+    r = solve_ue(trips, {"A": _chargers(1)}, _escape_settings(120.0))
+
+    assert r.n_escaped(trips) > 0
+    # 남아서 기다린 차는 이탈 비용보다 오래 기다리지 않는다
+    assert max(v.dwell_min for v in r.visits) <= 120.0 + 1e-6
+
+
+def test_a_cheaper_escape_pushes_more_cars_out():
+    trips = _escape_trips(30)
+
+    cheap = solve_ue(trips, {"A": _chargers(1)}, _escape_settings(60.0))
+    dear = solve_ue(trips, {"A": _chargers(1)}, _escape_settings(300.0))
+
+    assert cheap.n_escaped(trips) > dear.n_escaped(trips)
+
+
+def test_escape_is_off_by_default():
+    """예전 동작 그대로 — 비용을 0 으로 두면 아무도 안 나간다."""
+    trips = [_trip(f"e{i:02d}", i * 0.5, [[("A", 50.0)]]) for i in range(30)]
+    r = solve_ue(trips, {"A": _chargers(1)}, _settings())
+
+    assert r.n_escaped(trips) == 0
+    assert max(v.dwell_min for v in r.visits) > 120.0   # 상한 없이 쌓인다
+
+
+def test_escaped_cars_leave_no_trace_in_the_queue():
+    """이탈한 차는 휴게소를 쓰지 않는다 — 원장에도 DES 입력에도 없다."""
+    trips = _escape_trips(30)
+    r = solve_ue(trips, {"A": _chargers(1)}, _escape_settings(60.0))
+
+    escaped = {t.ev_id for t in trips if t.plans[r.choice[t.ev_id]].is_escape}
+
+    assert escaped
+    assert not (escaped & {v.ev_id for v in r.visits})

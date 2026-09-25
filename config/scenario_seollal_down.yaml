@@ -23,7 +23,11 @@ demand:
   period: seollal2026
   volume_profile: data/processed/volume_gyeongbu_down_seollal.csv
   demand_multiplier: 1.0
-  ev_share: 0.08            # 통과 차량 중 EV 비중. 민감도 분석 대상
+  # ⚠ 잠정값이다. 근거 확정은 #67 (3차 스프린트).
+  #   8% 면 가동률 90%·포화 8/19 로 이미 포화라 엔진이 옮길 자리가 없다.
+  #   5% 는 티핑 포인트(4→5%) 바로 위 — 쏠림은 있고 빈 곳도 있다.
+  #   "티핑 포인트라서" 는 근거가 아니다. #67 에서 출처로 바꾼다.
+  ev_share: 0.05            # 통과 차량 중 EV 비중
   charge_prob: 0.95         # Rupnik 규칙: 충전 조건 충족 시 실제 충전할 확률
   safety_buffer_km: 30.0    # Rupnik 규칙의 안전버퍼
   low_soc_threshold: 0.2    # 이 아래면 무조건 충전
@@ -33,6 +37,10 @@ demand:
   #   scripts/build_entry_exit_profile.py --direction DOWN
   entry_exit_profile: data/processed/entry_exit_gyeongbu_down_seollal.csv
   cruise_speed_kmh: 80.0    # 휴게소 사이 주행 속도. Sprint 2 에 CTM 속도로 바뀐다
+  # 휴게소 줄이 이보다 길면 IC 로 빠져 시내에서 충전하고 돌아온다 (#54)
+  #   KPI n_escaped 로 남는다. 엔진이 이 수를 줄이는 것도 개선이다
+  #   ⚠ 120분은 잠정값. 근거는 #64 (충전 실측 조사)
+  escape_cost_min: 120.0
   # 통행시간을 무엇으로 재나 (#56): fixed = 위 고정 속도 · ctm = CTM 셀 속도
   travel_time: fixed
 
@@ -64,7 +72,10 @@ policy:
   params: {}
   ue:                       # UE 균형 반복 (engine/ue.py, docs/UE_equilibrium.md)
     max_iter: 50            # 반복 1회 = 전원이 도착 순서대로 한 번씩 다시 고름. 넘으면 FAILED
-    gap_tol: 0.03           # 상대 gap 3% 아래면 균형 (여러 번 서는 차 때문에 0 까지 안 간다. docs/UE_equilibrium.md §4)
+    # 3% 는 첫 sweep 에 통과해 "균형" 이라 부를 수 없었다 (반복 1회).
+    # 0.5% 는 35회, 0.3% 는 50회로도 미수렴 — 다중 정차 추월 때문이다.
+    # 1% 면 반복 2회, 0.5% 대비 평균 대기 오차 2.2%. 0.7~0.9% 는 확인 예정
+    gap_tol: 0.01
     min_gain_min: 1.0       # 1분도 안 줄어드는 변경은 하지 않는다
     max_stops: 3            # 한 차가 계획할 수 있는 최대 충전 정차 수
 
