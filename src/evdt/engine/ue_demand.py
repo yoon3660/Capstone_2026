@@ -79,6 +79,14 @@ class TripDemand:
     curve: tuple[CurveSegment, ...]
     cold_factor: float
     plans: tuple[Plan, ...]
+    # --- 아래 셋은 계획을 미리 펼치지 않는 스테이지(S0, #59)를 위한 것이다 -------
+    # UE 는 plans 만 보면 되지만, Δt 루프는 차를 실제로 굴리므로 출발 SoC 와 전비가
+    # 필요하다. **여기서 같이 들고 다녀야** UE 와 S0 가 같은 차량 집합을 받는다 —
+    # S0 쪽에서 따로 만들면 모집단이 갈라지고, 그 차이가 정책 차이로 보고된다.
+    soc0: float = 0.0
+    consumption_kwh_km: float = 0.0
+    #: 필요 없는데 들른 김에 충전하는 차인가 (#54). 추첨은 수요를 만들 때 한 번만 한다
+    wants_opportunity_charge: bool = False
 
 
 @dataclass(frozen=True)
@@ -308,6 +316,9 @@ def build_trip_demands(
                 curve=tuple(curves[str(ev["vclass_id"])]),
                 cold_factor=charge_power_factor,
                 plans=plans + escape,
+                soc0=float(ev["initial_soc"]),
+                consumption_kwh_km=float(v["consumption_kwh_km"]),
+                wants_opportunity_charge=opportunity,
             )
         )
 

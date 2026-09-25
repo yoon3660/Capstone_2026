@@ -1,6 +1,7 @@
 """시나리오를 여러 시드로 반복 실행하고, KPI 신뢰구간과 시공간 히트맵을 뽑는다 (이슈 #30).
 
     python scripts/run_experiment.py --seeds 1-20
+    python scripts/run_experiment.py --seeds 1-20 --stage S0      # 같은 세계, 다른 정책 (#59)
     python scripts/run_experiment.py --seeds 1-20 --soc high --demand-multiplier 3
     python scripts/run_experiment.py --seeds 1-30 --fresh          # DONE 인 run 도 다시 돌린다
 
@@ -30,6 +31,7 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.runner import (  # noqa: E402
     MIN_SEEDS,
+    RUNNABLE_STAGES,
     ExperimentFailed,
     load_config,
     parse_seeds,
@@ -43,14 +45,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seeds", required=True, help="시드 목록: 1-20 / 1,2,5 / 1-10,20")
     ap.add_argument("--soc", default=None, help="출발 SoC 프로파일 (low | high)")
     ap.add_argument("--demand-multiplier", type=float, default=None)
+    ap.add_argument("--stage", default=None, choices=RUNNABLE_STAGES,
+                    help="정책 단계 (기본: config 의 policy.stage). scenario_id 는 안 바뀌고 "
+                         "run_id 에만 들어가서, UE 와 나란히 놓고 볼 수 있다")
     ap.add_argument("--fresh", action="store_true", help="이미 DONE 인 run 도 다시 돌린다 (코드를 고친 뒤)")
     ap.add_argument("--min-seeds", type=int, default=MIN_SEEDS, help=f"최소 시드 수 (기본 {MIN_SEEDS})")
     args = ap.parse_args(argv)
 
-    cfg = load_config(args.config, soc=args.soc, demand_multiplier=args.demand_multiplier)
+    cfg = load_config(args.config, soc=args.soc, demand_multiplier=args.demand_multiplier,
+                      stage=args.stage)
     seeds = parse_seeds(args.seeds)
 
-    print(f"{cfg.scenario_id} · 시드 {len(seeds)}개")
+    print(f"{cfg.scenario_id} · {cfg.policy.stage} · 시드 {len(seeds)}개")
 
     try:
         result = run_experiment(cfg, seeds, reuse_done=not args.fresh, min_seeds=args.min_seeds)

@@ -22,7 +22,8 @@ from evdt.runner import (
     experiment_id,
     parse_seeds,
     run_experiment,
-    run_ue_once,
+    run_once,
+    with_stage,
 )
 from evdt.viz.plots import STATION_BAND_KM, _station_bands
 
@@ -182,14 +183,14 @@ def test_one_failed_seed_stops_without_results(mini, monkeypatch):
     import evdt.runner as runner
 
     cfg, db, runs = mini
-    real = runner.run_ue_once
+    real = runner.run_once
 
     def flaky(c, *, seed=None, **kw):
         if seed == 2:
             raise RuntimeError("일부러 실패")
         return real(c, seed=seed, **kw)
 
-    monkeypatch.setattr(runner, "run_ue_once", flaky)
+    monkeypatch.setattr(runner, "run_once", flaky)
 
     with pytest.raises(ExperimentFailed, match="seed 2 실패"):
         run_experiment(cfg, SEEDS, min_seeds=3, db_path=db, runs_dir=runs, log=lambda _: None)
@@ -200,7 +201,7 @@ def test_one_failed_seed_stops_without_results(mini, monkeypatch):
 def test_failed_run_is_not_reused(mini):
     """이전에 FAILED 로 남은 run 은 재사용하지 않고 다시 돌린다."""
     cfg, db, runs = mini
-    run_id = run_ue_once(cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
+    run_id = run_once(cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
 
     with get_conn(db) as conn:
         conn.execute("UPDATE run SET status = 'FAILED' WHERE run_id = ?", (run_id,))
@@ -257,9 +258,79 @@ def test_experiment_id_names_the_seed_range(cfg):
 def test_concentration_kpis_survive_a_run_without_charging(mini):
     """아무도 충전하지 않는 run 에서도 쏠림 지표가 0 으로 남는다 (NULL 로 빠지지 않는다)."""
     cfg, db, runs = mini
-    run_id = run_ue_once(cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
+    run_id = run_once(cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
     (runs / run_id / "charge_event.parquet").unlink()
 
     _record_concentration_kpis(run_id, db, runs, lambda _: None)
 
     assert _kpis(db, [run_id])[(run_id, "bottleneck_slots")] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 완료조건: 러너가 단계와 상관없이 돈다 (이슈 #59)
+# ---------------------------------------------------------------------------
+
+
+def test_s0_runs_end_to_end_and_the_stage_is_in_the_run_id(mini):
+    """같은 config, `--stage S0` 만 다르게. run_id 에 단계가 들어간다."""
+
+    cfg, db, runs = mini
+    s0_cfg = with_stage(cfg, "S0")
+
+    assert s0_cfg.scenario_id == cfg.scenario_id, (
+        "스테이지는 세계를 바꾸지 않는다 — scenario_id 가 바뀌면 히트맵을 나란히 못 놓는다")
+
+    run_id = run_once(s0_cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
+
+    assert run_id == "mini_test__S0__p100__s0001"
+    assert (runs / run_id / "charge_event.parquet").is_file()
+
+    with get_conn(db, readonly=True) as conn:
+        assert conn.execute("SELECT stage FROM run WHERE run_id = ?", (run_id,)).fetchone()[0] == "S0"
+
+
+def test_ue_and_s0_get_the_same_cars(mini):
+    """**수요는 한 글자도 다르면 안 된다.** 다르면 그 차이가 정책 차이로 보고된다."""
+
+    cfg, db, runs = mini
+    ue = run_once(cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
+    s0 = run_once(with_stage(cfg, "S0"), seed=1, db_path=db, runs_dir=runs,
+                  gap_plot=False, log=lambda _: None)
+
+    kpis = _kpis(db, [ue, s0])
+    for metric in ("n_ev", "n_ev_charging", "n_ev_no_charge", "n_ev_infeasible",
+                   "departure_soc_mean"):
+        assert kpis[(ue, metric)] == kpis[(s0, metric)], f"{metric} 가 다르다"
+
+    # 길에서 멈춘 차가 있으면 정책이 못 닿는 곳을 골랐다는 뜻이다
+    assert kpis[(s0, "policy_stranded")] == 0
+    assert kpis[(s0, "policy_decide_calls")] > 0
+
+
+def test_an_unimplemented_stage_stops_instead_of_running_as_ue(mini):
+    """config 에만 있고 코드가 없는 단계는 멈춘다. 조용히 UE 로 돌면 결과를 못 믿는다."""
+
+    cfg, db, runs = mini
+
+    with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
+        with_stage(cfg, "S3")
+
+    data = yaml.safe_load(cfg.raw_yaml)
+    data["policy"]["stage"] = "S3"
+    with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
+        run_once(ScenarioConfig.from_dict(data, source="mini"), seed=1,
+                 db_path=db, runs_dir=runs, log=lambda _: None)
+
+
+def test_ue_never_strands_a_car_after_it_has_charged(mini):
+    """UE 의 `n_escaped_stranded` 는 0 이어야 한다.
+
+    UE 는 계획을 통째로 세우므로, 갈 수 있는 계획이 있으면 그 계획으로 간다.
+    한 번 서고 나서 "닿는 곳이 없다" 로 나가는 일은 **근시안 정책에서만** 생긴다.
+    0 이 아니면 UE 쪽 계획 열거가 깨진 것이다.
+    """
+
+    cfg, db, runs = mini
+    ue = run_once(cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
+
+    assert _kpis(db, [ue])[(ue, "n_escaped_stranded")] == 0

@@ -1,6 +1,6 @@
 """엔드투엔드 러너 (이슈 #30) — config → EV → UE → DES → Parquet → KPI, 그리고 시드 반복.
 
-    run_ue_once(cfg, seed=7)                      run 하나. run_id 를 돌려준다
+    run_once(cfg, seed=7)                         run 하나 (스테이지는 config 가 정한다)
     run_experiment(cfg, seeds=range(1, 21))       시드 여러 개. 하나라도 실패하면 멈춘다
     summarize_kpis(run_ids)                       KPI 별 평균 · 표준편차 · 95% 신뢰구간
     corridor_grid(run_ids, metric)                히트맵 재료 (휴게소 × 시각, 시드 전체를 합친 값)
@@ -27,9 +27,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from evdt.config import ScenarioConfig
 from evdt.demand_layers import effective_ev_share, opportunity_charge
+from evdt.engine.s0 import S0Policy, S0Settings
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
@@ -55,6 +57,7 @@ from evdt.viz.plots import (
     plot_ue_gap,
 )
 from evdt.world.charging import temp_factors
+from evdt.world.corridor_sim import ChargeAmount, SimEV, run_corridor
 from evdt.world.ctm import CellArrays
 from evdt.world.ctm_run import run_day
 from evdt.world.sim import check_queue_config, run_charging_des, station_specs
@@ -88,9 +91,14 @@ def load_config(
     *,
     soc: str | None = None,
     demand_multiplier: float | None = None,
+    stage: str | None = None,
     root: Path = PROJECT_ROOT,
 ) -> ScenarioConfig:
-    """config 를 읽고, 준 값만 바꾼 실험(variant)으로 만든다. scenario_id 에 __soc-high__dm2 가 붙는다."""
+    """config 를 읽고, 준 값만 바꾼 실험(variant)으로 만든다. scenario_id 에 __soc-high__dm2 가 붙는다.
+
+    `stage` 는 **scenario_id 를 바꾸지 않는다** — 세계가 아니라 정책만 바뀌기 때문이다
+    (`with_stage`). soc·수요배율은 세계를 바꾸므로 이름이 바뀐다.
+    """
 
     cfg = ScenarioConfig.from_yaml(root / path)
     tags: list[str] = []
@@ -106,7 +114,8 @@ def load_config(
         tags.append(f"dm{demand_multiplier:g}")
         overrides["demand.demand_multiplier"] = float(demand_multiplier)
 
-    return cfg.variant("__".join(tags), overrides) if tags else cfg
+    out = cfg.variant("__".join(tags), overrides) if tags else cfg
+    return with_stage(out, stage) if stage is not None else out
 
 
 def with_seed(cfg: ScenarioConfig, seed: int) -> ScenarioConfig:
@@ -249,7 +258,56 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
     return ctm
 
 
-def run_ue_once(
+#: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
+#: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
+RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0")
+
+
+def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
+    """같은 세계를 다른 스테이지로. **scenario_id 는 바꾸지 않는다.**
+
+    soc·수요배율과 달리 스테이지는 **세계를 바꾸지 않는다** — 같은 차가 같은 도로를
+    달리고 정책만 다르다. 그래서 `variant()` 처럼 scenario_id 를 갈면 안 된다.
+    run_id 에는 이미 스테이지가 들어 있어서(`<scenario>__S0__p100__s0007`) 덮어쓰지
+    않고, 히트맵도 같은 축으로 나란히 놓을 수 있다.
+
+    ⚠ scenario 테이블의 `config_yaml` 은 같은 scenario_id 를 공유하므로 **마지막에
+      돈 스테이지의 것**이 남는다 (`policy.stage` 한 줄만 다르다). 어떤 설정으로
+      돌았는지의 정본은 `runs/<run_id>/config.yaml` 이고, 스테이지는 `run.stage` 에
+      따로 박힌다.
+    """
+
+    if stage not in RUNNABLE_STAGES:
+        raise ValueError(
+            f"아직 구현되지 않은 스테이지다: {stage} (지금 돌릴 수 있는 것: "
+            f"{', '.join(RUNNABLE_STAGES)})")
+
+    data = yaml.safe_load(cfg.raw_yaml)
+    data["policy"]["stage"] = stage
+    return ScenarioConfig.from_dict(data, source=f"{cfg.source_path}#stage-{stage}")
+
+
+def _sim_evs(trips: Sequence) -> list[SimEV]:
+    """UE 의 TripDemand 를 Δt 루프의 차로 바꾼다. **같은 모집단이어야 한다** (#59).
+
+    계획(plans)은 넘기지 않는다 — S0 는 미리 펼친 계획을 보지 않고 매번 화면을 보고
+    고른다. 넘기는 것은 차 자체(진입 시각·지점·SoC·전비·목적지)뿐이다.
+    """
+
+    return [
+        SimEV(
+            ev_id=t.ev_id, vclass_id=t.vclass_id, entry_min=t.entry_min,
+            entry_offset_km=t.entry_offset_km, dest_offset_km=t.dest_offset_km,
+            soc0=t.soc0, battery_kwh=t.battery_kwh,
+            consumption_kwh_km=t.consumption_kwh_km, vmax_kw=t.vmax_kw,
+            curve=t.curve, cold_factor=t.cold_factor,
+            wants_opportunity_charge=t.wants_opportunity_charge,
+        )
+        for t in trips
+    ]
+
+
+def run_once(
     cfg: ScenarioConfig,
     *,
     seed: int | None = None,
@@ -260,10 +318,19 @@ def run_ue_once(
     gap_plot: bool = True,
     log: Log = print,
 ) -> str:
-    """UE 한 번. run_id 를 돌려준다. 수렴 실패면 UENotConverged (run 은 FAILED 로 남는다)."""
+    """한 번 돌린다. run_id 를 돌려준다.
 
-    if cfg.policy.stage != "UE":
-        raise ValueError(f"UE 시나리오가 아니다: policy.stage={cfg.policy.stage}")
+    **스테이지에 상관없이 같은 함수다.** 수요·차량·휴게소·기온·통행시간을 만드는 데까지는
+    한 줄도 다르지 않고, 갈라지는 곳은 아래 한 군데뿐이다 (UE 균형 ↔ Δt 루프).
+    그래야 두 결과의 차이를 정책 탓으로 돌릴 수 있다.
+
+    UE 가 수렴 못 하면 UENotConverged (run 은 FAILED 로 남는다).
+    """
+
+    if cfg.policy.stage not in RUNNABLE_STAGES:
+        raise ValueError(
+            f"아직 구현되지 않은 스테이지다: policy.stage={cfg.policy.stage} "
+            f"(지금 돌릴 수 있는 것: {', '.join(RUNNABLE_STAGES)})")
 
     if seed is not None:
         cfg = with_seed(cfg, seed)
@@ -282,6 +349,7 @@ def run_ue_once(
     specs = station_specs(station_rows, charger_rows)
     chargers = {s.station_id: s.chargers for s in specs}
     stations = [r for r in station_rows if r["station_id"] in chargers]
+    offsets = {r["station_id"]: float(r["offset_km"]) for r in stations}
 
     built, range_factor, cpf = build_demand(cfg, stations, vclasses, curves, temps, corridor_end_km, root=root)
     soc_mean = departure_soc_mean(cfg)
@@ -333,20 +401,20 @@ def run_ue_once(
                 "ctm_remaining_veh": (ctm.remaining_veh, "count"),
             })
 
-        result = solve_and_log(built.trips, chargers, settings, run.writer)
+        # === 스테이지가 갈라지는 **유일한** 자리 ==========================
+        if cfg.policy.stage == "UE":
+            charge_events, snapshots, escape_rows, stage_kpis = _run_ue(
+                built, chargers, specs, settings, cfg, run.writer, log)
+        else:
+            charge_events, snapshots, escape_rows, stage_kpis = _run_policy_loop(
+                built, specs, offsets, cfg, settings, range_factor, cpf, log)
+        # ================================================================
 
-        for h in result.history:
-            log(f"  반복 {h.iteration:>2}  gap {h.rel_gap:8.4%}  총 체류 {h.total_dwell_min / 60:9,.0f} 시간  "
-                f"개선 가능 {h.n_improvable:>5}대  바꾼 차 {h.n_switched:>5}대")
-
-        sim = run_charging_des(specs, des_arrivals(built.trips, result),
-                               snapshot_every_min=float(cfg.output.snapshot_every_min))
-        log_sim_result(run.writer, sim.charge_events, sim.snapshots,
+        log_sim_result(run.writer, charge_events, snapshots,
                        write_snapshots=cfg.output.write_snapshots)
-
-        waits = np.array([e["wait_min"] for e in sim.charge_events]) if sim.charge_events else np.zeros(1)
-        escape_rows = result.escape_rows(built.trips, cfg.demand.escape_cost_min)
         run.writer.append_many("escape_event", escape_rows)
+
+        waits = np.array([e["wait_min"] for e in charge_events]) if charge_events else np.zeros(1)
         n_escaped = len(escape_rows)
         n_balked = sum(1 for r in escape_rows if r["reason"] == "balked")
         log(f"코리도 이탈 {n_escaped:,}대 ({n_escaped / max(len(built.trips), 1):.1%}) "
@@ -355,31 +423,134 @@ def run_ue_once(
             # 평균 대기만 보면 이 차들이 빠져서 좋아 보인다. 문제가 사라진 게 아니라
             # 고속도로 밖으로 옮겨간 것이므로 항상 같이 본다 (#54)
             "n_escaped": (n_escaped, "count"),
-            # 엔진이 고칠 수 있는 몫만. no_plan 은 증설·SoC 문제라 엔진 성과가 아니다
+            # 줄이 길어서 나간 몫. 엔진이 곧바로 고칠 수 있는 이탈이다.
+            # 여기에 `n_escaped_stranded`(한 번 서고 나서 갇힌 차) 를 더한 것이
+            # **배정의 과녁**이고, 나머지 no_plan 이 증설·SoC 의 몫이다
             "n_escaped_balked": (n_balked, "count"),
-            "ue_iterations": (result.history[-1].iteration, "count"),
-            "ue_final_gap": (result.final_gap, "ratio"),
-            "n_charge_visits": (len(sim.charge_events), "count"),
+            "n_charge_visits": (len(charge_events), "count"),
             "wait_mean_min": (float(waits.mean()), "min"),
             "wait_p95_min": (float(np.percentile(waits, 95)), "min"),
             "wait_max_min": (float(waits.max()), "min"),
-            "dwell_total_h": (sum(e["dwell_min"] for e in sim.charge_events) / 60.0, "h"),
+            "dwell_total_h": (sum(e["dwell_min"] for e in charge_events) / 60.0, "h"),
+            **stage_kpis,
         })
         run_id = run.run_id
 
-    if gap_plot:
+    if gap_plot and cfg.policy.stage == "UE":
         plot_ue_gap(load_run_table(run_id, "solver_log", runs), runs / run_id / "ue_gap.png", gap_tol=ue.gap_tol)
 
     _record_concentration_kpis(run_id, db, runs, log)
     return run_id
 
 
+def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
+    """UE — 하루를 미리 다 풀어 균형 배정을 찾고, 그 도착을 DES 에 넣는다."""
+
+    result = solve_and_log(built.trips, chargers, settings, writer)
+
+    for h in result.history:
+        log(f"  반복 {h.iteration:>2}  gap {h.rel_gap:8.4%}  총 체류 {h.total_dwell_min / 60:9,.0f} 시간  "
+            f"개선 가능 {h.n_improvable:>5}대  바꾼 차 {h.n_switched:>5}대")
+
+    sim = run_charging_des(specs, des_arrivals(built.trips, result),
+                           snapshot_every_min=float(cfg.output.snapshot_every_min))
+
+    return (
+        list(sim.charge_events),
+        list(sim.snapshots),
+        result.escape_rows(built.trips, cfg.demand.escape_cost_min),
+        {
+            "ue_iterations": (result.history[-1].iteration, "count"),
+            "ue_final_gap": (result.final_gap, "ratio"),
+        },
+    )
+
+
+def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, log: Log):
+    """S0 이후 — Δt 마다 정책에게 물어보며 하루를 굴린다 (#59).
+
+    **UE 와 같은 것**: 차량 집합(built.trips), 휴게소·충전기, 통행시간(settings.travel),
+    기온 계수, 충전량 규칙, 큐 규칙, 이탈 비용.
+    **다른 것**: 운전자가 보는 정보뿐.
+    """
+
+    stage = cfg.policy.stage
+
+    if stage != "S0":
+        raise ValueError(f"정책이 아직 없다: {stage}")
+
+    policy = S0Policy(S0Settings(
+        buffer_km=cfg.demand.safety_buffer_km,
+        reserve_soc=cfg.demand.low_soc_threshold,
+        target_soc_cap=cfg.vehicles.target_soc_cap,
+        max_stops=cfg.policy.ue.max_stops,
+        # 이탈 비용은 UE 와 **같은 값**이어야 한다. 한쪽만 다르면 이탈 수 차이가
+        # 정책 차이로 보고된다
+        escape_cost_min=cfg.demand.escape_cost_min,
+    ))
+    amount = ChargeAmount(
+        buffer_km=cfg.demand.safety_buffer_km,
+        reserve_soc=cfg.demand.low_soc_threshold,
+        target_soc_cap=cfg.vehicles.target_soc_cap,
+    )
+
+    out = run_corridor(
+        specs, offsets, _sim_evs(built.trips), policy, settings.travel_time(), amount,
+        corridor_id=cfg.corridor_id,
+        dt_min=float(cfg.time.dt_min),
+        horizon_min=float(cfg.time.end_min),
+        temp_c=cfg.environment.temp_c,
+        cold_factor=cpf,
+        range_factor=range_factor,
+        cruise_speed_kmh=cfg.demand.cruise_speed_kmh,
+        escape_cost_min=cfg.demand.escape_cost_min,
+        snapshot_every_min=float(cfg.output.snapshot_every_min),
+    )
+
+    log(f"  Δt {cfg.time.dt_min}분 · decide() 호출 {out.n_decide_calls:,}번 "
+        f"· 답 {out.n_answers:,}건 · 충전 {len(out.charge_events):,}회")
+
+    if out.n_stranded:
+        # 정책이 못 닿는 휴게소를 골랐다. 조용히 넘기면 정책의 버그가 KPI 개선으로 보인다
+        log(f"  ⚠ 길에서 멈춘 차 {out.n_stranded:,}대 — {stage} 가 못 닿는 곳을 골랐다")
+
+    return (
+        list(out.charge_events),
+        list(out.snapshots),
+        list(out.escape_events),
+        {
+            "policy_decide_calls": (out.n_decide_calls, "count"),
+            "policy_stranded": (out.n_stranded, "count"),
+        },
+    )
+
+
 def _record_concentration_kpis(run_id: str, db: Path, runs: Path, log: Log) -> None:
     """쏠림 지표 (docs/UE_equilibrium.md §7). Parquet 가 닫힌 뒤 DuckDB 로 계산한다."""
 
     con = duck_connect(db_path=db, run_ids=[run_id], runs_dir=runs)
+    tables = {r[0] for r in con.sql("SHOW TABLES").fetchall()}
+    n_stranded = 0
 
-    if "charge_event" not in {r[0] for r in con.sql("SHOW TABLES").fetchall()}:
+    if {"charge_event", "escape_event"} <= tables:
+        # **한 번 충전하고 나서 "닿는 곳이 없다" 로 나간 차** (#59).
+        #
+        # UE 에서는 이 수가 **0 이다** — 계획을 통째로 세우므로, 갈 수 있는 계획이
+        # 있으면 그 계획으로 간다. S0 에서는 나온다: 가까운 곳에 먼저 서 버리는 바람에
+        # 그 다음에 닿는 곳이 없어진다. **정책이 차를 몰아넣은 것**이다.
+        #
+        # 그래서 이 몫은 `no_plan` 에 있지만 **충전기 공백의 책임이 아니라 배정의
+        # 책임이다.** 안 가르면 엔진이 고쳐야 할 과녁을 그만큼 작게 잡게 된다
+        # (#54 에서 balked/no_plan 을 가른 것과 같은 이유).
+        n_stranded = con.sql(
+            """
+            SELECT COUNT(*) FROM escape_event e
+            WHERE e.reason = 'no_plan'
+              AND EXISTS (SELECT 1 FROM charge_event c WHERE c.ev_id = e.ev_id)
+            """
+        ).fetchone()[0]
+
+    if "charge_event" not in tables:
         n_slots, ratio_max, worst = 0, 0.0, 0.0
     else:
         hourly = f"({load_sql('station_hourly_wait')})"
@@ -401,10 +572,12 @@ def _record_concentration_kpis(run_id: str, db: Path, runs: Path, log: Log) -> N
                 (run_id, "bottleneck_slots", float(n_slots), "count"),
                 (run_id, "share_ratio_max", float(ratio_max or 0.0), "ratio"),
                 (run_id, "wait_worst_station_min", float(worst or 0.0), "min"),
+                (run_id, "n_escaped_stranded", float(n_stranded), "count"),
             ],
         )
 
-    log(f"병목 슬롯 {n_slots} · 몰림비 {float(ratio_max or 0):.2f}")
+    log(f"병목 슬롯 {n_slots} · 몰림비 {float(ratio_max or 0):.2f}"
+        + (f" · 정책이 몰아넣은 이탈 {n_stranded:,}대" if n_stranded else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +686,7 @@ def run_experiment(
         log(f"[{i}/{len(seeds)}] seed {seed}: 실행")
 
         try:
-            got = run_ue_once(cfg, seed=seed, overwrite=True, db_path=db, runs_dir=runs, root=root,
+            got = run_once(cfg, seed=seed, overwrite=True, db_path=db, runs_dir=runs, root=root,
                               gap_plot=False, log=_quiet)
         except Exception as exc:  # noqa: BLE001 — 무엇이 실패했든 결과를 내면 안 된다
             raise ExperimentFailed(
@@ -594,6 +767,7 @@ KPI_LABELS: dict[str, str] = {
     "dwell_total_h": "총 체류 (시간)",
     "n_ev_charging": "충전 필요 EV (대)",
     "n_charge_visits": "충전 정차 (회)",
+    "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
     "n_ev": "진입 EV (대)",

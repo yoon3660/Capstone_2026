@@ -224,8 +224,8 @@ src/evdt/
   interfaces.py    엔진 ↔ 트윈 계약 (Policy / EVState / WorldView)
   sql/schema.sql   SQLite 마스터 스키마 (10 테이블)             T-02
   io/              db · run_registry · writers · loaders        T-02, T-04
-  world/           디지털 트윈 (CTM + SimPy 충전 큐)            T-14~T-17
-  engine/          배정 엔진 (정책 · 원장 · MILP)               T-18, Sprint 3
+  world/           디지털 트윈 (CTM · 충전 큐 DES · Δt 루프)     T-14~T-17, #59
+  engine/          배정 엔진 (UE 균형 · S0 정책 · 원장 · MILP)   T-18, Sprint 2~3
   viz/             스냅샷 → 렌더러                              T-20
 config/            시나리오 YAML (실험 1개 = 파일 1장)
 data/raw/          API 원본. 절대 수정하지 않는다. git 제외
@@ -245,6 +245,7 @@ docs/ctm.md              CTM 셀 전송 모형 · 통행시간 · cell_state · 
 docs/demand_layers.md    중간 진입·진출 · 기회 충전 · 티핑 포인트 · 실측과 가정 가르기
 docs/dev_log.md          개발 로그 — 무엇을 잘못 알았고 어떻게 알아챘나 (길을 잃으면 여기부터)
 docs/charger_gaps.md     충전기 공백 — 엔진이 못 고치고 증설로 풀 부분
+docs/s0.md               S0 (사다리 첫 칸) · Δt 루프 · 도착 뭉침 지수 · UE 와의 경계
 reference/               못 박아 둔 기준선 KPI. scripts/baseline.py --check 로 비교한다
 docs/fake_data_audit.md  가짜 휴게소가 어디에 영향을 줬는지 전수 검토
 ```
