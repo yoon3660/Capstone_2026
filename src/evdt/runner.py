@@ -345,13 +345,18 @@ def run_ue_once(
                        write_snapshots=cfg.output.write_snapshots)
 
         waits = np.array([e["wait_min"] for e in sim.charge_events]) if sim.charge_events else np.zeros(1)
-        n_escaped = result.n_escaped(built.trips)
-        log(f"코리도 이탈 {n_escaped:,}대 "
-            f"({n_escaped / max(len(built.trips), 1):.1%}) — 시내에서 충전하고 돌아온다")
+        escape_rows = result.escape_rows(built.trips, cfg.demand.escape_cost_min)
+        run.writer.append_many("escape_event", escape_rows)
+        n_escaped = len(escape_rows)
+        n_balked = sum(1 for r in escape_rows if r["reason"] == "balked")
+        log(f"코리도 이탈 {n_escaped:,}대 ({n_escaped / max(len(built.trips), 1):.1%}) "
+            f"— 줄이 길어서 {n_balked:,} · 닿는 휴게소가 없어서 {n_escaped - n_balked:,}")
         run.kpis({
             # 평균 대기만 보면 이 차들이 빠져서 좋아 보인다. 문제가 사라진 게 아니라
             # 고속도로 밖으로 옮겨간 것이므로 항상 같이 본다 (#54)
             "n_escaped": (n_escaped, "count"),
+            # 엔진이 고칠 수 있는 몫만. no_plan 은 증설·SoC 문제라 엔진 성과가 아니다
+            "n_escaped_balked": (n_balked, "count"),
             "ue_iterations": (result.history[-1].iteration, "count"),
             "ue_final_gap": (result.final_gap, "ratio"),
             "n_charge_visits": (len(sim.charge_events), "count"),

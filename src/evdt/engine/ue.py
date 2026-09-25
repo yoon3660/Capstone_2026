@@ -136,6 +136,41 @@ class UEResult:
 
         return sum(1 for t in trips if t.plans[self.choice[t.ev_id]].is_escape)
 
+    def escape_rows(self, trips: Sequence[TripDemand], escape_cost_min: float) -> list[dict]:
+        """이탈한 차를 한 줄씩. `escape_event` 스키마와 같다.
+
+        **이유를 반드시 가른다** (#54). 실측에서 이탈의 91% 가 `no_plan` 이었다 —
+        줄이 길어서가 아니라 **닿는 휴게소가 아예 없어서**다.
+
+            no_plan   엔진이 못 고친다. 충전기를 늘리거나 출발 SoC 모델을 고쳐야 한다 (#55)
+            balked    엔진이 고칠 수 있다. 덜 붐비는 곳으로 돌려보내면 남는다
+
+        둘을 합쳐 놓고 "엔진이 이탈을 줄였다" 고 하면, 고칠 수 없는 몫까지 성과로
+        세게 된다.
+        """
+
+        rows = []
+
+        for trip in trips:
+            if not trip.plans[self.choice[trip.ev_id]].is_escape:
+                continue
+
+            inside = [p for p in trip.plans if not p.is_escape]
+            best = min(inside, key=lambda p: p.stops[0].offset_km) if inside else None
+
+            rows.append({
+                "ev_id": trip.ev_id,
+                "vclass_id": trip.vclass_id,
+                "entry_time_min": trip.entry_min,
+                "entry_offset_km": trip.entry_offset_km,
+                "dest_offset_km": trip.dest_offset_km,
+                "escape_cost_min": escape_cost_min,
+                "reason": "balked" if best else "no_plan",
+                "best_station_id": best.stops[0].station_id if best else "",
+            })
+
+        return rows
+
 
 # ---------------------------------------------------------------------------
 # 한 번 굴리기 — 전원이 계획대로 움직인 결과
