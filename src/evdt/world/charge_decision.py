@@ -142,7 +142,7 @@ def can_reach_destination(
     return available_kwh + 1e-9 >= driving_kwh + reserve_kwh
 
 
-def should_charge(
+def should_charge(  # noqa: PLR0913
     charging_needed: bool,
     current_soc: float,
     target_soc: float,
@@ -151,7 +151,15 @@ def should_charge(
     low_soc_threshold: float,
     arrival_soc_without_charging: float | None = None,
 ) -> bool:
-    """충전 필요성, 도착 예상 SoC, 목표 SoC를 이용해 충전 여부를 결정한다."""
+    """충전 필요성, 도착 예상 SoC, 목표 SoC를 이용해 충전 여부를 결정한다.
+
+    ⚠ **지금 이 함수를 부르는 곳은 자기 테스트뿐이다** (#54). UE 는
+    `engine.ue_demand.enumerate_plans` 에서 `can_reach_destination` 으로 직접
+    판단하므로, `demand.charge_prob` 를 바꿔도 UE 결과는 안 바뀐다.
+
+    지우지 않고 두는 이유: S0 이후 정책은 "지금 화면을 보고 결정" 하므로 이런
+    시점 판단 함수가 필요하다 (#59). 그때 이 자리로 돌아온다.
+    """
 
     if not 0.0 <= current_soc <= 1.0:
         raise ValueError("현재 SoC는 0~1이어야 합니다.")

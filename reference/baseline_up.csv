@@ -1,0 +1,18 @@
+metric,label,mean
+wait_mean_min,평균 대기 (분),19.08501456290564
+wait_p95_min,P95 대기 (분),89.62759801704877
+wait_max_min,최대 대기 (분),119.02160959377586
+wait_worst_station_min,최악 휴게소 평균 대기 (분),72.52190080356232
+bottleneck_slots,병목 슬롯 (칸),68.2
+share_ratio_max,몰림비 (수요몫÷충전기몫 최대),2.000569760084437
+dwell_total_h,총 체류 (시간),4689.238680209344
+n_ev_charging,충전 필요 EV (대),10822.7
+n_charge_visits,충전 정차 (회),9150.4
+ue_final_gap,UE 마지막 gap,0.0050685452745363
+ue_iterations,UE 반복 수,2.0
+n_ev,진입 EV (대),19301.0
+n_ev_no_charge,충전 없이 도착 (대),8478.3
+n_ev_infeasible,3회 정차로도 불가 (대),1451.8
+departure_soc_mean,출발 SoC 평균,0.3428571428571428
+n_escaped,n_escaped,1816.2
+n_escaped_balked,n_escaped_balked,364.4

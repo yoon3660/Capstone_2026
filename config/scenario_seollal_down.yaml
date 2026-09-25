@@ -28,7 +28,9 @@ demand:
   #   5% 는 티핑 포인트(4→5%) 바로 위 — 쏠림은 있고 빈 곳도 있다.
   #   "티핑 포인트라서" 는 근거가 아니다. #67 에서 출처로 바꾼다.
   ev_share: 0.05            # 통과 차량 중 EV 비중
-  charge_prob: 0.95         # Rupnik 규칙: 충전 조건 충족 시 실제 충전할 확률
+  # ⚠ UE 경로에서는 쓰이지 않는다 (#54). should_charge 를 부르는 곳이 없다 —
+  #   값을 바꿔도 결과가 안 바뀐다. S0(#59) 가 쓰게 되면 그때 살아난다
+  charge_prob: 0.95
   safety_buffer_km: 30.0    # Rupnik 규칙의 안전버퍼
   low_soc_threshold: 0.2    # 이 아래면 무조건 충전
   # 목적지 분포: 서울에서 출발한 차 중 각 지점을 지나가는 비율 (scripts/build_demand_profile.py)

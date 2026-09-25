@@ -164,7 +164,13 @@ class DemandConfig:
     volume_profile: str        # 시간대별 교통량 CSV (T-07 산출물)
     demand_multiplier: float
     ev_share: float
-    charge_prob: float         # Rupnik 규칙의 충전확률 (0.95)
+    #: ⚠ **UE 경로에서 쓰이지 않는다** (#54). `world.charge_decision.should_charge` 가
+    #: 이 값을 받는데, 그 함수를 부르는 곳이 자기 테스트뿐이다. UE 는
+    #: `engine.ue_demand.enumerate_plans` 에서 `can_reach_destination` 으로 직접 판단한다.
+    #: 값을 바꿔도 결과가 안 바뀌므로 **여기서 조정하려 하지 말 것.**
+    #: 충전 확률을 넣으려면 `ChargeRule.opportunity_prob`(기회 충전) 쪽이다.
+    #: S0 이후 정책이 should_charge 를 쓰게 되면 그때 되살아난다.
+    charge_prob: float
     safety_buffer_km: float    # Rupnik 규칙의 안전버퍼 (30km)
     low_soc_threshold: float   # 이 SoC 아래면 무조건 충전 (0.2)
     #: 목적지 분포 CSV (offset_km, share = 그 지점을 지나가는 비율). 없으면 전원 코리도 끝까지 간다.
