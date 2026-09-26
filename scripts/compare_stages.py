@@ -53,15 +53,15 @@ matplotlib.use("Agg")
 #: 이 지표들은 "작을수록 좋다". 표의 화살표 방향에 쓴다
 LOWER_IS_BETTER = {
     "wait_mean_min", "wait_p95_min", "wait_max_min", "dwell_total_h",
-    "n_escaped", "n_escaped_balked", "bottleneck_slots", "share_ratio_max",
-    "wait_worst_station_min",
+    "n_escaped", "n_escaped_balked", "n_escaped_stranded", "bottleneck_slots",
+    "share_ratio_max", "wait_worst_station_min",
 }
 
 #: 표에 올릴 지표와 순서. 여기 없는 것은 csv 에만 남는다
 HEADLINE = [
     "wait_mean_min", "wait_p95_min", "wait_max_min", "wait_worst_station_min",
     "dwell_total_h", "bottleneck_slots", "share_ratio_max",
-    "n_escaped", "n_escaped_balked", "n_charge_visits",
+    "n_escaped", "n_escaped_balked", "n_escaped_stranded", "n_charge_visits",
 ]
 
 #: 두 단계가 **반드시 같아야** 하는 지표. 다르면 비교가 성립하지 않는다
@@ -136,10 +136,17 @@ def markdown(table: pd.DataFrame, base_name: str, other_name: str,
     head = (f"# {base_name} vs {other_name} — {scenario} (시드 {n_seeds}개, 95% 신뢰구간)\n\n"
             f"**같은 세계, 같은 차.** 운전자가 보는 정보만 다르다.\n\n"
             f"| 지표 | {base_name} | {other_name} | 변화 | 판정 |\n|---|---:|---:|---:|---|\n")
+    def change(r) -> str:
+        # 기준이 0 이면 배수로 말할 수 없다. UE 의 `n_escaped_stranded` 가 그렇고,
+        # 그 0 은 우연이 아니라 원리다 (docs/s0.md §3.1). "+nan%" 대신 절대 증가로 적는다.
+        if pd.isna(r["change_pct"]):
+            return f"{r[f'{other_name}_mean'] - r[f'{base_name}_mean']:+,.1f}대"
+        return f"{r['change_pct']:+.1f}%"
+
     body = "".join(
         f"| {r['label']} | {r[f'{base_name}_mean']:,.1f} {r[f'{base_name}_ci']} "
         f"| {r[f'{other_name}_mean']:,.1f} {r[f'{other_name}_ci']} "
-        f"| {r['change_pct']:+.1f}% | {r['판정']} |\n"
+        f"| {change(r)} | {r['판정']} |\n"
         for _, r in table.iterrows()
     )
     return head + body + (

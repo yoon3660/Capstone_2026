@@ -767,6 +767,10 @@ KPI_LABELS: dict[str, str] = {
     "dwell_total_h": "총 체류 (시간)",
     "n_ev_charging": "충전 필요 EV (대)",
     "n_charge_visits": "충전 정차 (회)",
+    # 이탈 세 칸은 **항상 같이 읽는다** (#54 · #59). 합계만 보면 엔진이 고칠 수 있는
+    # 몫과 증설로만 풀리는 몫이 뒤섞인다
+    "n_escaped": "이탈 합계 (대)",
+    "n_escaped_balked": "이탈: 줄이 길어서 (대)",
     "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
