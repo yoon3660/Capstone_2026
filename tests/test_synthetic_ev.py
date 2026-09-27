@@ -3,11 +3,16 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 
+import numpy as np
 import pandas as pd
+import pytest
 from pandas.testing import assert_frame_equal
 
 from evdt.config import ScenarioConfig
-from evdt.io.synthetic_ev import generate_evs
+from evdt.io.synthetic_ev import (
+    generate_evs,
+    hourly_ev_counts,
+)
 from evdt.paths import CONFIG_DIR
 
 DEST_OFFSET_KM = 415.0
@@ -27,6 +32,32 @@ def _traffic() -> pd.DataFrame:
             "hour": [0, 1, 2],
             "volume_veh": [1000.0, 2000.0, 3000.0],
         }
+    )
+
+
+def _with_method(
+    cfg: ScenarioConfig,
+    method: str,
+    *,
+    seed: int | None = None,
+) -> ScenarioConfig:
+    """EV 대수 생성 방식과 seed만 바꾼 테스트 config."""
+
+    vehicles = cfg.vehicles
+
+    if seed is not None:
+        vehicles = replace(
+            cfg.vehicles,
+            seed=seed,
+        )
+
+    return replace(
+        cfg,
+        demand=replace(
+            cfg.demand,
+            ev_count_method=method,
+        ),
+        vehicles=vehicles,
     )
 
 
@@ -52,46 +83,277 @@ def _df_hash(df: pd.DataFrame) -> str:
     return hashlib.sha256(values).hexdigest()
 
 
-def test_same_seed_produces_identical_evs() -> None:
-    """같은 시나리오와 seed면 완전히 같은 차량 집합이 생성된다."""
-    first = _generate()
-    second = _generate()
+def _sample_first_hour_counts(
+    method: str,
+    n_seeds: int = 1000,
+) -> np.ndarray:
+    """
+    첫 시간대의 EV 대수를 여러 seed에서 반복 생성한다.
+
+    UE 전체를 반복 실행하는 것이 아니라
+    시간대별 대수 생성 함수만 호출한다.
+    """
+    base_cfg = _config()
+
+    traffic = (
+        _traffic()
+        .iloc[[0]]
+        .reset_index(drop=True)
+    )
+
+    samples: list[int] = []
+
+    for seed in range(n_seeds):
+        cfg = _with_method(
+            base_cfg,
+            method,
+            seed=seed,
+        )
+
+        counts = hourly_ev_counts(
+            traffic,
+            cfg,
+        )
+
+        samples.append(
+            int(counts.loc[0, "n_ev"])
+        )
+
+    return np.asarray(samples)
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "fixed",
+        "poisson",
+        "binomial",
+        "beta_binomial",
+        "poisson_lognormal",
+    ],
+)
+def test_same_seed_produces_identical_evs(
+    method: str,
+) -> None:
+    """같은 method와 seed면 완전히 같은 차량 집합이 생성된다."""
+    cfg = _with_method(
+        _config(),
+        method,
+    )
+
+    first = _generate(cfg=cfg)
+    second = _generate(cfg=cfg)
 
     assert_frame_equal(first, second)
     assert _df_hash(first) == _df_hash(second)
 
 
-def test_hourly_ev_count_matches_volume_times_ev_share() -> None:
-    """시간대별 EV 수가 교통량 × EV 비율과 1% 이내로 일치한다."""
+def test_fixed_hourly_ev_count_matches_expected() -> None:
+    """Fixed 방식은 기대 EV 대수를 반올림한 값과 정확히 일치한다."""
+    cfg = _with_method(
+        _config(),
+        "fixed",
+    )
+
+    traffic = _traffic()
+
+    counts = hourly_ev_counts(
+        traffic,
+        cfg,
+    )
+
+    expected = np.rint(
+        traffic["volume_veh"].to_numpy()
+        * cfg.demand.demand_multiplier
+        * cfg.demand.ev_share
+    ).astype(int)
+
+    np.testing.assert_array_equal(
+        counts["n_ev"].to_numpy(),
+        expected,
+    )
+
+
+def test_poisson_mean_and_variance_match_theory() -> None:
+    """Poisson 방식은 여러 seed에서 평균과 분산이 λ에 가까워야 한다."""
     cfg = _config()
     traffic = _traffic()
 
-    evs = _generate(cfg=cfg, traffic=traffic)
-
-    actual = (
-        evs.assign(
-            hour=(evs["entry_time_min"] // 60).astype(int)
-        )
-        .groupby("hour")
-        .size()
+    samples = _sample_first_hour_counts(
+        "poisson"
     )
 
-    for row in traffic.itertuples(index=False):
-        expected = (
-            row.volume_veh
+    lambda_ = (
+        traffic.loc[0, "volume_veh"]
+        * cfg.demand.demand_multiplier
+        * cfg.demand.ev_share
+    )
+
+    sample_mean = float(np.mean(samples))
+    sample_variance = float(
+        np.var(samples, ddof=1)
+    )
+
+    assert np.isclose(
+        sample_mean,
+        lambda_,
+        rtol=0.05,
+    )
+
+    assert np.isclose(
+        sample_variance,
+        lambda_,
+        rtol=0.15,
+    )
+
+
+def test_binomial_mean_and_variance_match_theory() -> None:
+    """Binomial 방식은 여러 seed에서 평균 np, 분산 np(1-p)에 가까워야 한다."""
+    cfg = _config()
+    traffic = _traffic()
+
+    samples = _sample_first_hour_counts(
+        "binomial"
+    )
+
+    n = int(
+        np.rint(
+            traffic.loc[0, "volume_veh"]
             * cfg.demand.demand_multiplier
-            * cfg.demand.ev_share
         )
+    )
 
-        generated = int(actual.get(row.hour, 0))
+    p = cfg.demand.ev_share
 
-        if expected == 0:
-            assert generated == 0
-            continue
+    expected_mean = n * p
+    expected_variance = n * p * (1.0 - p)
 
-        relative_error = abs(generated - expected) / expected
+    sample_mean = float(np.mean(samples))
+    sample_variance = float(
+        np.var(samples, ddof=1)
+    )
 
-        assert relative_error <= 0.01
+    assert np.isclose(
+        sample_mean,
+        expected_mean,
+        rtol=0.05,
+    )
+
+    assert np.isclose(
+        sample_variance,
+        expected_variance,
+        rtol=0.15,
+    )
+
+def test_beta_binomial_mean_and_variance_match_theory() -> None:
+    """
+    Beta-Binomial 방식은
+    평균 np,
+    분산 np(1-p) * (n + concentration) / (concentration + 1)
+    에 가까워야 한다.
+    """
+    cfg = _config()
+    traffic = _traffic()
+
+    samples = _sample_first_hour_counts(
+        "beta_binomial"
+    )
+
+    n = int(
+        np.rint(
+            traffic.loc[0, "volume_veh"]
+            * cfg.demand.demand_multiplier
+        )
+    )
+
+    p = cfg.demand.ev_share
+    concentration = (
+        cfg.demand.beta_binomial_concentration
+    )
+
+    expected_mean = n * p
+
+    expected_variance = (
+        n
+        * p
+        * (1.0 - p)
+        * (n + concentration)
+        / (concentration + 1.0)
+    )
+
+    sample_mean = float(
+        np.mean(samples)
+    )
+
+    sample_variance = float(
+        np.var(samples, ddof=1)
+    )
+
+    assert np.isclose(
+        sample_mean,
+        expected_mean,
+        rtol=0.05,
+    )
+
+    assert np.isclose(
+        sample_variance,
+        expected_variance,
+        rtol=0.15,
+    )
+
+
+def test_poisson_lognormal_mean_and_variance_match_theory() -> None:
+    """
+    Poisson-Lognormal 방식은 평균 mu를 유지하면서
+    일반 Poisson보다 큰 분산을 가져야 한다.
+
+    Var(N) =
+        mu + mu^2 * (exp(sigma^2) - 1)
+    """
+    cfg = _config()
+    traffic = _traffic()
+
+    samples = _sample_first_hour_counts(
+        "poisson_lognormal"
+    )
+
+    mu = (
+        traffic.loc[0, "volume_veh"]
+        * cfg.demand.demand_multiplier
+        * cfg.demand.ev_share
+    )
+
+    sigma = (
+        cfg.demand.poisson_lognormal_sigma
+    )
+
+    expected_mean = mu
+
+    expected_variance = (
+        mu
+        + mu**2
+        * (np.exp(sigma**2) - 1.0)
+    )
+
+    sample_mean = float(
+        np.mean(samples)
+    )
+
+    sample_variance = float(
+        np.var(samples, ddof=1)
+    )
+
+    assert np.isclose(
+        sample_mean,
+        expected_mean,
+        rtol=0.05,
+    )
+
+    assert np.isclose(
+        sample_variance,
+        expected_variance,
+        rtol=0.15,
+    )
 
 
 def test_initial_soc_is_inside_config_range() -> None:
@@ -108,8 +370,20 @@ def test_initial_soc_is_inside_config_range() -> None:
     ).all()
 
 
-def test_zero_ev_share_generates_zero_evs() -> None:
-    """EV 비율이 0이면 차량을 한 대도 생성하지 않는다."""
+@pytest.mark.parametrize(
+    "method",
+    [
+        "fixed",
+        "poisson",
+        "binomial",
+        "beta_binomial",
+        "poisson_lognormal",
+    ],
+)
+def test_zero_ev_share_generates_zero_evs(
+    method: str,
+) -> None:
+    """EV 비율이 0이면 어떤 생성 방식에서도 차량이 생성되지 않는다."""
     cfg = _config()
 
     zero_cfg = replace(
@@ -117,17 +391,22 @@ def test_zero_ev_share_generates_zero_evs() -> None:
         demand=replace(
             cfg.demand,
             ev_share=0.0,
+            ev_count_method=method,
         ),
     )
 
-    evs = _generate(cfg=zero_cfg)
+    evs = _generate(
+        cfg=zero_cfg,
+    )
 
     assert evs.empty
+
     assert evs.columns.tolist() == [
         "ev_id",
         "vclass_id",
         "entry_time_min",
         "initial_soc",
+        "entry_offset_km",
         "dest_offset_km",
     ]
 
@@ -137,4 +416,7 @@ def test_destination_offset_is_assigned() -> None:
     evs = _generate()
 
     assert not evs.empty
-    assert (evs["dest_offset_km"] == DEST_OFFSET_KM).all()
+    assert (
+        evs["dest_offset_km"]
+        == DEST_OFFSET_KM
+    ).all()

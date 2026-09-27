@@ -22,6 +22,10 @@ demand:
   volume_profile: data/processed/volume_gyeongbu_up_seollal.csv
   demand_multiplier: 1.0
   ev_share: 0.08
+  ev_count_method: fixed    # EV 시간대별 생성 방식(fixed, poisson,binomial) T-53
+  # 실험용 확장 모델 파라미터
+  beta_binomial_concentration: 10000.0
+  poisson_lognormal_sigma: 0.05
   charge_prob: 0.95
   safety_buffer_km: 30.0
   low_soc_threshold: 0.2
