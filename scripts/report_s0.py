@@ -131,11 +131,64 @@ def stations(corridor_id: str) -> pd.DataFrame:
     return st
 
 
+def plot_clumping(st: pd.DataFrame, ps: dict, label: str, path: Path) -> None:
+    """줄 있는 곳 / 빈 곳으로 나눠 UE·S0 뭉침을 나란히 그린다.
+
+    **빈 곳을 같이 그리는 것이 요점이다.** 뭉침이 Δt 격자의 인공물이라면 거기서도
+    올랐어야 한다. 줄 있는 곳에서만 오르는 그림이 "혼잡에 대한 반응" 이라는 증거다.
+    """
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from evdt.viz.plots import _korean_font
+    _korean_font(plt)
+
+    def wait_of(sid: str) -> float:
+        v = ps["UE"].reindex([sid]).iloc[0]["wait"]
+        return 0.0 if pd.isna(v) else float(v)
+
+    rows = []
+    for name, keep in (("줄 있는 곳", lambda w: w >= 5.0), ("빈 곳", lambda w: w < 1.0)):
+        ids = [r.station_id for _, r in st.iterrows() if keep(wait_of(r.station_id))]
+        if not ids:
+            continue
+        rows.append((f"{name}\n({len(ids)}곳)",
+                     float(ps["UE"].reindex(ids)["clump"].mean()),
+                     float(ps["S0"].reindex(ids)["clump"].mean())))
+
+    x = range(len(rows))
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    ax.bar([i - 0.19 for i in x], [r[1] for r in rows], 0.34,
+           color="#2b6cb0", label="UE — 도착했을 때의 대기를 안다")
+    ax.bar([i + 0.19 for i in x], [r[2] for r in rows], 0.34,
+           color="#d62728", label="S0 — 출발할 때의 화면만 본다")
+    for i, r in enumerate(rows):
+        ax.text(i - 0.19, r[1] + 0.04, f"{r[1]:.2f}", ha="center", fontsize=9)
+        ax.text(i + 0.19, r[2] + 0.04, f"{r[2]:.2f}", ha="center", fontsize=9)
+    ax.axhline(1.0, color="#888", ls="--", lw=1)
+    ax.text(0.99, 1.0, " 1.0 = 무작위 도착", fontsize=8, color="#666",
+            transform=ax.get_yaxis_transform(), ha="right", va="bottom")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels([r[0] for r in rows])
+    ax.set_ylabel("도착 뭉침 = 5분당 도착 대수의 분산 ÷ 평균")
+    ax.set_title(f"도착 뭉침은 줄이 있는 곳에서만 오른다 — {label}", fontsize=11)
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3, axis="y")
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="UE vs S0 를 표로 뜯어본다")
     ap.add_argument("--config", default="config/scenario_seollal_down.yaml")
     ap.add_argument("--seeds", required=True)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--plot", type=Path, default=None,
+                    help="도착 뭉침 막대 그림을 이 경로에 저장한다")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -207,6 +260,10 @@ def main() -> int:
         if pd.isna(a) and pd.isna(b):
             continue
         out.append(f"| {h} | {a:,.1f} | {b:,.1f} | {b - a:+,.1f} |")
+
+    if args.plot:
+        plot_clumping(st, ps, cfg.label, args.plot)
+        print(f"저장 {args.plot}")
 
     text = "\n".join(out) + "\n"
     path = args.out or (RUNS_DIR / "compare"
