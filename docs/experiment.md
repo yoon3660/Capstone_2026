@@ -5,6 +5,7 @@
 
 ```bash
 python scripts/run_experiment.py --seeds 1-20
+python scripts/run_experiment.py --seeds 1-20 --stage S0        # 같은 세계, 다른 정책 (#59)
 python scripts/run_experiment.py --seeds 1-20 --soc high --demand-multiplier 3
 python scripts/run_experiment.py --seeds 1-20 --fresh      # 코드를 고친 뒤: DONE run 도 다시
 ```
@@ -35,7 +36,7 @@ python scripts/run_experiment.py --seeds 1-20 --fresh      # 코드를 고친 �
 
 | 완료조건 | 어떻게 |
 |---|---|
-| `run_experiment.py` 가 시나리오 + 시드 목록을 받는다 | `--config`, `--seeds 1-20` (또는 `1,2,5`), `--soc`, `--demand-multiplier` |
+| `run_experiment.py` 가 시나리오 + 시드 목록을 받는다 | `--config`, `--seeds 1-20` (또는 `1,2,5`), `--soc`, `--demand-multiplier`, `--stage` |
 | 시드마다 run 등록, run_id 는 `make_run_id()` | `…__UE__p100__s0001` … `s0020`. 테스트가 run_id 문자열까지 확인 |
 | 시드 20개 이상, KPI 별 평균·95% CI | 20개 미만이면 거부 (`--min-seeds` 로만 낮춤). t 분포 구간 |
 | 히트맵: 가로 시간, 세로 기점거리, 색 = 대기(또는 큐 길이) | `heatmap_wait.png`, `heatmap_queue.png` |
@@ -64,7 +65,14 @@ python scripts/run_experiment.py --seeds 1-20 --fresh      # 코드를 고친 �
 CI 에는 실측 데이터가 없다. "시드 3개 축소판이 끝까지 돈다" 를 테스트하려면 러너가 DB 경로 ·
 runs 폴더 · 수요 파일 위치를 인자로 받고, 테스트가 임포트할 수 있어야 한다. 그래서 #29 의
 `scripts/run_ue.py` 안에 있던 실행 로직을 `src/evdt/runner.py` 로 옮겼다.
-`run_ue.py` · `sweep_ue.py` · `run_experiment.py` 는 이 모듈을 부르는 얇은 명령이다.
+`run_ue.py` · `sweep_ue.py` · `run_experiment.py` · `compare_stages.py` 는 이 모듈을 부르는
+얇은 명령이다.
+
+**`--soc` · `--demand-multiplier` 는 scenario_id 를 바꾸고, `--stage` 는 바꾸지 않는다** (#59).
+앞의 둘은 **세계**를 바꾸므로 서로 덮어쓰면 안 되고, 스테이지는 같은 세계에서 **정책만**
+바뀌므로 같은 이름을 공유해야 히트맵을 나란히 놓을 수 있다. 단계는 run_id 에 들어간다
+(`<scenario>__UE__p100__s0007` / `<scenario>__S0__p100__s0007`).
+두 단계를 한 표·한 그림으로 보려면 `scripts/compare_stages.py --seeds 1-20`.
 
 ## 5. 실제 결과 (경부 하행 · 설 2026 최대일 · −5 °C · 시드 1–20, 로컬 DB 393 km)
 

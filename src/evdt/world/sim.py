@@ -119,6 +119,82 @@ class EVArrival:
     stop_seq: int = 1           # 장거리 차는 여러 휴게소에 선다. 몇 번째 정차인가
 
 
+# ---------------------------------------------------------------------------
+# 휴게소 한 곳의 큐 — 큐 규칙을 부르는 **유일한** 자리 (world 쪽)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StationQueue:
+    """휴게소 한 곳의 충전기 상태와 그 위에서 도는 큐.
+
+    DES(`run_charging_des`) 와 Δt 루프(`world/corridor_sim.py`) 가 **같은 객체**를 쓴다.
+    둘이 각자 queue_rule 을 부르면 "UE 와 S0 가 같은 세계에서 돌았다" 는 전제가 조용히
+    깨진다 — 대기 계산이 두 곳에 생기는 순간 한쪽만 고치는 일이 반드시 생긴다.
+    (tests/test_queue_rule.py::test_queue_rule_has_at_most_two_callers 가 호출자를
+    world/sim.py · engine/ledger.py 둘로 묶어두는 이유도 같다.)
+
+    도착을 **시각 순서대로** 넣어야 한다. 그러면 하루치를 한 번에 `assign` 한 결과와
+    같아진다 (FIFO 에서 한 도착의 결과는 그보다 먼저 온 차들로만 정해진다).
+    """
+
+    station_id: str
+    chargers: tuple[Charger, ...]
+    #: 아직 안 끝난 배정. counts() 가 훑고 지나가며 끝난 것을 버린다
+    _active: list[Assignment] = field(default_factory=list)
+    #: 마지막으로 받은 도착 시각. 거꾸로 들어오면 FIFO 가 깨진다
+    _last_admit_min: float = float("-inf")
+
+    def wait_min(self, now_min: float) -> float:
+        """지금 도착하면 충전을 시작하기까지 기다릴 시간(분). 앱 화면의 숫자다."""
+
+        return wait_if_arriving_now(self.chargers, [], now_min)
+
+    def admit(self, arrivals: Sequence[Arrival]) -> tuple[Assignment, ...]:
+        """도착한 차들을 배정하고 충전기 상태를 넘긴다. 반환은 도착순.
+
+        **도착은 시각 순서대로 들어와야 한다.** 거꾸로 들어오면 이미 넘어간 충전기
+        상태 위에 얹히므로, 그 차가 FIFO 에서 제자리보다 뒤로 밀린다. 하루치를 한 번에
+        `assign` 한 결과와 달라지고 — 조용히 달라진다. 그래서 멈춘다.
+        """
+
+        if arrivals:
+            earliest = min(float(a.arrival_min) for a in arrivals)
+            if earliest < self._last_admit_min - 1e-9:
+                raise ValueError(
+                    f"{self.station_id}: 도착이 거꾸로 들어왔습니다 "
+                    f"({earliest:.4f}분 < 이미 처리한 {self._last_admit_min:.4f}분). "
+                    "FIFO 가 깨지므로 멈춥니다 — 호출자가 도착을 시각 순으로 넣어야 합니다."
+                )
+            self._last_admit_min = max(
+                self._last_admit_min, max(float(a.arrival_min) for a in arrivals))
+
+        assignments = assign(arrivals, self.chargers)
+        self.chargers = chargers_after(self.chargers, assignments)
+        self._active.extend(assignments)
+        return assignments
+
+    def counts(self, now_min: float) -> tuple[int, int]:
+        """(충전 중, 줄 서 있는) 대수. 끝난 배정은 여기서 버린다.
+
+        ⚠ **now_min 은 부를 때마다 같거나 커야 한다.** 끝난 배정을 버리므로 과거를
+        다시 물으면 적게 센다. Δt 루프는 (스냅샷 ≤ t) → (화면 t) → (도착 ≥ t) 순서로
+        불러서 이 조건을 지킨다.
+        """
+
+        self._active = [a for a in self._active if a.end_min > now_min]
+        charging = sum(1 for a in self._active if a.start_min <= now_min)
+        return charging, len(self._active) - charging
+
+    @property
+    def next_free_min(self) -> tuple[float, ...]:
+        return tuple(c.available_from_min for c in self.chargers)
+
+    @property
+    def powers_kw(self) -> tuple[float, ...]:
+        return tuple(c.power_kw for c in self.chargers)
+
+
 @dataclass(frozen=True)
 class SimResult:
     """writers.py 스키마 그대로의 레코드. 호출자가 Parquet 로 쓴다."""
@@ -210,7 +286,7 @@ def station_specs(
 @dataclass
 class _StationState:
     spec: StationSpec
-    chargers: tuple[Charger, ...]
+    queue: StationQueue
     n_waiting: int = 0
     n_charging: int = 0
     n_done: int = 0
@@ -258,29 +334,53 @@ def _charge_event(ev: EVArrival, a: Assignment) -> dict:
     }
 
 
-def _snapshot_rows(state: _StationState, t_min: float) -> list[dict]:
-    """설계 규칙 4 스키마 한 줄씩. 지표마다 한 행이라 컬럼이 늘지 않는다."""
+def station_snapshot_rows(
+    station_id: str,
+    lat: float,
+    lon: float,
+    t_min: float,
+    *,
+    wait_min: float,
+    queue_len: float,
+    chargers_busy: float,
+    chargers_total: float,
+) -> list[dict]:
+    """설계 규칙 4 스키마 한 줄씩. 지표마다 한 행이라 컬럼이 늘지 않는다.
 
-    spec = state.spec
+    DES 와 Δt 루프(corridor_sim)가 **같은 함수**로 찍는다. 스냅샷 스키마가 두 곳에
+    생기면 UE 히트맵과 S0 히트맵이 다른 뜻의 그림이 된다.
+    """
+
     values = {
-        "wait_min": wait_if_arriving_now(state.chargers, [], t_min),
-        "queue_len": float(state.n_waiting),
-        "chargers_busy": float(state.n_charging),
-        "chargers_total": float(len(state.chargers)),
+        "wait_min": float(wait_min),
+        "queue_len": float(queue_len),
+        "chargers_busy": float(chargers_busy),
+        "chargers_total": float(chargers_total),
     }
 
     return [
         {
             "t_min": float(t_min),
             "entity_type": "station",
-            "entity_id": spec.station_id,
-            "lat": spec.lat,
-            "lon": spec.lon,
+            "entity_id": station_id,
+            "lat": float(lat),
+            "lon": float(lon),
             "state": name,
             "value": values[name],
         }
         for name in STATION_SNAPSHOT_STATES
     ]
+
+
+def _snapshot_rows(state: _StationState, t_min: float) -> list[dict]:
+    spec = state.spec
+    return station_snapshot_rows(
+        spec.station_id, spec.lat, spec.lon, t_min,
+        wait_min=state.queue.wait_min(t_min),
+        queue_len=state.n_waiting,
+        chargers_busy=state.n_charging,
+        chargers_total=len(state.queue.chargers),
+    )
 
 
 def _admit(
@@ -295,10 +395,9 @@ def _admit(
     어긋난다. `assign` 은 동시 도착을 ev_id 순으로 고정한다.
     """
 
-    assignments = assign([_to_arrival(ev) for ev in group], state.chargers)
-    state.chargers = chargers_after(state.chargers, assignments)
+    assignments = state.queue.admit([_to_arrival(ev) for ev in group])
 
-    power_by_unit = {c.charger_id: c.power_kw for c in state.chargers}
+    power_by_unit = {c.charger_id: c.power_kw for c in state.queue.chargers}
     ev_by_id = {ev.ev_id: ev for ev in group}
 
     for a in assignments:
@@ -408,7 +507,8 @@ def run_charging_des(
 
     env = simpy.Environment()
     states = [
-        _StationState(spec=spec, chargers=tuple(spec.chargers)) for spec in stations
+        _StationState(spec=spec, queue=StationQueue(spec.station_id, tuple(spec.chargers)))
+        for spec in stations
     ]
 
     by_station: dict[str, list[EVArrival]] = {s.spec.station_id: [] for s in states}

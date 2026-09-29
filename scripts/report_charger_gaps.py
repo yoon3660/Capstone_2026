@@ -19,8 +19,20 @@ from evdt.io.db import get_conn
 from evdt.io.loaders import load_run_table
 from evdt.paths import RUNS_DIR, default_db_path
 
-for direction, run in (("down", "seollal_2026_down_base__replay__UE__p100__s0007"),
-                       ("up", "seollal_2026_up_base__replay__UE__p100__s0007")):
+#: 어느 run 을 볼 것인가. **하드코딩하지 않는다** — scenario_id 가 바뀌면 (#54 의
+#: `__replay__` 처럼) 조용히 빈 표가 나오는 게 아니라 여기서 멈춰야 한다.
+RUNS = {
+    "down": "seollal_2026_down_base__UE__p100__s0007",
+    "up": "seollal_2026_up_base__UE__p100__s0007",
+}
+
+for direction, run in RUNS.items():
+    if not (RUNS_DIR / run / "charge_event.parquet").is_file():
+        raise SystemExit(
+            f"run 이 없습니다: {run}\n"
+            f"  먼저:  python scripts/run_ue.py --config config/scenario_seollal_{direction}.yaml"
+            " --seed 7\n"
+            "  (scenario_id 를 바꿨다면 이 스크립트 위쪽 RUNS 도 같이 고칠 것)")
     with get_conn(default_db_path(), readonly=True) as conn:
         rows = conn.execute(
             "SELECT s.station_id, s.name, s.offset_km, COALESCE(SUM(c.n_units),0) u,"

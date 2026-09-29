@@ -28,7 +28,7 @@ from evdt.engine.ue import UENotConverged  # noqa: E402
 from evdt.io.db import get_conn  # noqa: E402
 from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
-from evdt.runner import load_config, run_ue_once  # noqa: E402
+from evdt.runner import load_config, run_once  # noqa: E402
 
 COLUMNS = {
     "n_ev_charging": "충전필요",
@@ -73,7 +73,7 @@ def main() -> int:
                     continue
 
                 try:
-                    run_ue_once(cfg, seed=seed, overwrite=True)
+                    run_once(cfg, seed=seed, overwrite=True)
                 except UENotConverged as exc:
                     print(f"\n[수렴 실패 → FAILED] {run_id}\n  {exc}")
 
