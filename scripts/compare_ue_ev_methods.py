@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 
 import pandas as pd
-
 from _bootstrap import ROOT  # noqa: F401
 
 from evdt.runner import (
@@ -12,7 +11,6 @@ from evdt.runner import (
     parse_seeds,
     run_experiment,
 )
-
 
 METHODS = (
     "fixed",

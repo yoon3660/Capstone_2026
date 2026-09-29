@@ -4,14 +4,12 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+import _bootstrap  # noqa: F401
 import numpy as np
 import pandas as pd
 
-import _bootstrap  # noqa: F401
-
 from evdt.config import ScenarioConfig
 from evdt.io.synthetic_ev import hourly_ev_counts
-
 
 N_SEEDS = 20
 METHODS = (
