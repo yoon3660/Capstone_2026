@@ -211,7 +211,7 @@ def main() -> None:
                 "lo": cfg.vehicles.soc_beta.lo,
                 "hi": cfg.vehicles.soc_beta.hi,
             },
-            "count_method": "round(volume_veh * demand_multiplier * ev_share)",
+            "count_method": cfg.demand.ev_count_method,
             "arrival_method": "uniform_within_hour_conditioned_on_count",
             "destination_method": "corridor_end_until_tcs_od",
             "dest_offset_km": dest_offset_km,
