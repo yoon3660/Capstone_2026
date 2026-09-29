@@ -15,6 +15,10 @@
 > 다른 값으로 돌린 UE 와 엔진을 비교하면 "엔진이 개선했다" 에 **어느 균형에 떨어졌나**가
 > 섞인다. 지금 기준값은 **0.8%** 이고, 근거는 KPI 가 아니라 **수렴의 질과 비용**이다
 > (반복 5회 · 비용 2.5배). 자세한 내용은 `docs/dev_log.md` §6.13.
+>
+> ⚠ 그 "반복 5회" 는 **#54 이전 수요**(EV 를 3.5배 적게 세던 때)에서 잰 값이다. 지금
+> 수요에서는 시드 20개 평균 **하행 9.8회 · 상행 2.0회** 다 (`reference/baseline_*.csv`
+> 의 `ue_iterations`). gap_tol 을 0.8% 로 고른 근거 자체는 바뀌지 않는다.
 
 `src/evdt/engine/ue.py` · `engine/ue_demand.py` · `engine/ledger.py` · `io/demand_profile.py`
 실행: `scripts/build_demand_profile.py` → `scripts/run_ue.py`
