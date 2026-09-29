@@ -158,6 +158,15 @@ class TimeConfig:
 #: demand.travel_time 이 가질 수 있는 값 (#56)
 TRAVEL_TIME_MODES: frozenset[str] = frozenset({"fixed", "ctm"})
 
+#: demand.ev_count_method 이 가질 수 있는 값 (#53)EV_COUNT_METHODS: tuple[str, ...] = (
+EV_COUNT_METHODS: tuple[str, ...] = (
+    "fixed",
+    "poisson",
+    "binomial",
+    "beta_binomial",
+    "poisson_lognormal",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DemandConfig:
@@ -195,7 +204,19 @@ class DemandConfig:
     #: 0 이면 이탈 선택지가 없다. ⚠ 120분은 잠정값, 근거는 #64
     escape_cost_min: float = 0.0
 
+    #: 시간대별 EV 대수를 생성하는 방법 (#53)
+    #:   fixed     기대값을 반올림하는 기존 방식
+    #:   poisson   Poisson(lambda), lambda = volume × multiplier × ev_share
+    #:   binomial  전체 차량 각각을 EV 확률 ev_share 로 추출
+    ev_count_method: str = "fixed"
 
+    # 실험용 확장 모델 파라미터
+    beta_binomial_concentration: float = 10000.0
+    poisson_lognormal_sigma: float = 0.05
+
+    through_profile: str | None = None
+    cruise_speed_kmh: float = 80.0
+    travel_time: str = "fixed"
 
 @dataclass(frozen=True, slots=True)
 class SocBeta:
@@ -376,6 +397,7 @@ class ScenarioConfig:
             lo=0, lo_exclusive=True,
         )
         ev_share = e.number(e.require(d, "demand", "ev_share"), "demand.ev_share", lo=0.0, hi=1.0)
+        ev_count_method = e.choice(d.get("ev_count_method", "fixed"),"demand.ev_count_method",EV_COUNT_METHODS,)
         charge_prob = e.number(d.get("charge_prob", 0.95), "demand.charge_prob", lo=0.0, hi=1.0)
         safety_buffer_km = e.number(
             d.get("safety_buffer_km", 30.0), "demand.safety_buffer_km", lo=0.0
@@ -398,6 +420,24 @@ class ScenarioConfig:
                   f"{sorted(TRAVEL_TIME_MODES)} 중 하나여야 한다 (받은 값: {travel_time!r})")
         cruise_speed_kmh = e.number(
             d.get("cruise_speed_kmh", 80.0), "demand.cruise_speed_kmh", lo=0.0, lo_exclusive=True
+        )
+        beta_binomial_concentration = e.number(
+            d.get(
+                "beta_binomial_concentration",
+                10000.0,
+            ),
+            "demand.beta_binomial_concentration",
+            lo=0.0,
+            lo_exclusive=True,
+        )
+
+        poisson_lognormal_sigma = e.number(
+            d.get(
+                "poisson_lognormal_sigma",
+                0.05,
+            ),
+            "demand.poisson_lognormal_sigma",
+            lo=0.0,
         )
 
         # vehicles ---------------------------------------------------------
@@ -528,6 +568,7 @@ class ScenarioConfig:
                 volume_profile=volume_profile,             # type: ignore[arg-type]
                 demand_multiplier=demand_multiplier,       # type: ignore[arg-type]
                 ev_share=ev_share,                         # type: ignore[arg-type]
+                ev_count_method=ev_count_method,           # type: ignore[arg-type]
                 charge_prob=charge_prob,                   # type: ignore[arg-type]
                 safety_buffer_km=safety_buffer_km,         # type: ignore[arg-type]
                 low_soc_threshold=low_soc_threshold,       # type: ignore[arg-type]
@@ -535,8 +576,10 @@ class ScenarioConfig:
                 entry_exit_profile=entry_exit_profile,     # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
                 travel_time=travel_time,
-                escape_cost_min=escape_cost_min,             # type: ignore[arg-type]
+                escape_cost_min=escape_cost_min,           # type: ignore[arg-type]
                 layers=layers,
+                beta_binomial_concentration=beta_binomial_concentration,   # type: ignore[arg-type]
+                poisson_lognormal_sigma=poisson_lognormal_sigma,           # type: ignore[arg-type]
             ),
             vehicles=VehiclesConfig(
                 seed=seed,                                 # type: ignore[arg-type]
