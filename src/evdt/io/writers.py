@@ -76,6 +76,22 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("n_candidates", _I32),
         ("is_participant", _BOOL),
     ),
+    # 코리도를 벗어나 시내에서 충전한 차 (#54). 평균 대기만 보면 이 차들이 빠져서
+    # 좋아 보이므로, **어디서 왜 나갔는지**를 남겨야 착시를 막을 수 있다.
+    "escape_event": _schema(
+        ("ev_id", _STR),
+        ("vclass_id", _STR),
+        ("entry_time_min", _F64),
+        ("entry_offset_km", _F64),
+        ("dest_offset_km", _F64),
+        ("escape_cost_min", _F64),
+        # 왜 나갔나. 둘을 반드시 갈라서 본다 (#54)
+        #   'no_plan'  사거리 안에 휴게소가 없다 — **엔진이 못 고친다** (증설·SoC 문제)
+        #   'balked'   갈 수는 있는데 줄이 이탈 비용보다 길다 — **엔진이 고칠 수 있다**
+        ("reason", _STR),
+        # 코리도 안에 남았다면 갔을 곳 (no_plan 이면 빈 문자열)
+        ("best_station_id", _STR),
+    ),
     # CTM 셀 상태 시계열 (Sprint 2부터 채워진다)
     "cell_state": _schema(
         ("t_min", _F64),

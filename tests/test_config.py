@@ -25,7 +25,11 @@ def test_hash_is_stable_and_content_addressed(cfg: ScenarioConfig, tmp_path: Pat
     assert cfg.config_hash == same.config_hash
 
     edited = tmp_path / "edited.yaml"
-    edited.write_text(cfg.raw_yaml.replace("ev_share: 0.08", "ev_share: 0.12"), encoding="utf-8")
+    # 바꿀 자리가 없어지면 "안 바뀌었는데 해시가 같다" 로 조용히 통과한다. 먼저 확인한다
+    changed = cfg.raw_yaml.replace("demand_multiplier: 1.0", "demand_multiplier: 2.0")
+    assert changed != cfg.raw_yaml, "config 에서 바꿀 자리를 못 찾았다 — 테스트를 갱신할 것"
+
+    edited.write_text(changed, encoding="utf-8")
     assert ScenarioConfig.from_yaml(edited).config_hash != cfg.config_hash
 
 

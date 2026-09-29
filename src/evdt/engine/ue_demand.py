@@ -23,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+import numpy as np
+
 from evdt.world.charge_decision import (
     calculate_arrival_soc,
     calculate_target_soc,
@@ -45,7 +47,18 @@ class PlannedStop:
 
 @dataclass(frozen=True)
 class Plan:
+    """충전 계획 하나. **정차가 없는 계획은 "코리도 이탈"** 이다 (#54).
+
+    휴게소 줄이 너무 길면 IC 로 빠져 시내에서 충전하고 돌아온다. 그걸 계획 하나로
+    두면 UE 가 다른 계획과 **같은 잣대로** 고른다 — 따로 예외 처리할 필요가 없고,
+    남들이 빠져나가 줄이 짧아지면 다시 휴게소를 고르는 것도 균형이 알아서 한다.
+    """
+
     stops: tuple[PlannedStop, ...]
+
+    @property
+    def is_escape(self) -> bool:
+        return not self.stops
 
     @property
     def station_ids(self) -> tuple[str, ...]:
@@ -74,6 +87,7 @@ class DemandBuild:
     n_ev: int                 # 진입한 전체 EV
     n_no_charge: int          # 충전 없이 목적지까지 가는 차
     n_infeasible: int         # max_stops 안에서 목적지까지 갈 계획이 없는 차 (결과에서 빠진다)
+    n_opportunity: int = 0    # 필요 없는데 들른 김에 충전하는 차 (#54 기회 충전)
 
 
 @dataclass(frozen=True)
@@ -86,6 +100,53 @@ class ChargeRule:
     target_soc_cap: float
     max_stops: int
 
+    # 기회 충전 (#54) — 필요해서가 아니라 **어차피 휴게소에 들르니** 꽂는 행동.
+    # 명절 고속도로에서 실제로 일어나는 일이고, 우리 관점에서 이건 수요 가정이 아니라
+    # **운전자 행동 모델의 파라미터**다 (설계문서 §1: 행동 모델은 실측과 대조해 고른다).
+    # #64 충전 실측 조사로 보정할 대상이다.
+    #: 고속도로를 벗어나 시내에서 충전하고 돌아오는 데 드는 시간(분) (#54).
+    #: 휴게소 계획이 전부 이보다 비싸면 차는 코리도를 벗어난다.
+    #: 0 이면 이탈 선택지를 주지 않는다 (예전 동작).
+    #:
+    #: ⚠ 120분은 잠정값이다. 근거는 #64 (충전 실측 조사) 에서.
+    #: 이 값이 **대기의 실질적인 상한**이 되므로 결과에 직접 영향을 준다.
+    escape_cost_min: float = 0.0
+    opportunity_prob: float = 0.0
+    #: 도착 예상 SoC 가 이보다 얇을 때만 기회 충전을 고려한다.
+    #: 차종으로 나누지 않는 이유: 배터리가 작은 차는 여유가 얇아 **자연히** 더 걸린다.
+    #: 횟수를 차종별로 강제하면 이미 맞게 도는 물리를 덮어쓰게 된다.
+    opportunity_soc_margin: float = 0.0
+
+
+def _wants_opportunity_charge(ev: Mapping, vclass: Mapping, entry_km: float,
+                              rule: ChargeRule, draw) -> bool:
+    """필요는 없지만 들른 김에 충전할 것인가.
+
+    조건 셋을 모두 만족해야 한다.
+        1. 도착 예상 SoC 가 `opportunity_soc_margin` 보다 얇다
+        2. 난수가 `opportunity_prob` 아래
+        3. (충전이 꼭 필요한 차는 여기서 걸러지지 않는다 — enumerate_plans 가 판단한다)
+
+    배터리가 작은 차는 같은 거리에서 도착 SoC 가 더 얇아 **자연히 더 자주 걸린다.**
+    차종별로 횟수를 강제하지 않는 이유다.
+    """
+
+    if rule.opportunity_prob <= 0.0:
+        return False
+
+    arrival_soc = calculate_arrival_soc(
+        departure_soc=float(ev["initial_soc"]),
+        distance_km=max(float(ev["dest_offset_km"]) - entry_km, 0.0),
+        battery_kwh=float(vclass["battery_kwh"]),
+        consumption_kwh_km=float(vclass["consumption_kwh_km"]),
+        range_factor=rule.range_factor,
+    )
+
+    if arrival_soc >= rule.opportunity_soc_margin:
+        return False
+
+    return bool(draw() < rule.opportunity_prob)
+
 
 def enumerate_plans(
     stations: Sequence[Mapping],
@@ -96,8 +157,14 @@ def enumerate_plans(
     battery_kwh: float,
     consumption_kwh_km: float,
     rule: ChargeRule,
+    opportunity: bool = False,
 ) -> tuple[Plan, ...] | None:
-    """정차 수가 가장 적은 실행 가능한 계획 전부. 충전이 필요 없으면 None, 불가능하면 ()."""
+    """정차 수가 가장 적은 실행 가능한 계획 전부. 충전이 필요 없으면 None, 불가능하면 ().
+
+    opportunity=True 면 **목적지까지 갈 수 있는 차도** 계획을 만든다 (기회 충전).
+    그 경우 충전량은 "가야 할 거리" 가 아니라 `target_soc_cap` 까지다 — 필요해서
+    꽂는 것이 아니라 들른 김에 채우는 것이므로.
+    """
 
     kw = dict(battery_kwh=battery_kwh, consumption_kwh_km=consumption_kwh_km, range_factor=rule.range_factor)
 
@@ -107,7 +174,9 @@ def enumerate_plans(
             buffer_km=rule.buffer_km, arrival_reserve_soc=rule.reserve_soc, **kw,
         )
 
-    if reaches_dest(soc0, entry_offset_km):
+    needs_charge = not reaches_dest(soc0, entry_offset_km)
+
+    if not needs_charge and not opportunity:
         return None
 
     on_route = sorted(
@@ -138,6 +207,12 @@ def enumerate_plans(
                 ),
             )
 
+            if not needs_charge:
+                # 기회 충전: 남은 거리가 아니라 상한까지 채운다. 이게 없으면
+                # soc_out == soc_in 이 되어 0분짜리 충전이 생기고, 충전기를 점유하지도
+                # 대기를 만들지도 않는다 (있으나 마나 한 정차).
+                soc_out = max(soc_out, rule.target_soc_cap)
+
             if soc_out <= soc_in + SOC_EPS:
                 continue  # 넣을 것이 없는 곳은 정차가 아니다
 
@@ -158,7 +233,10 @@ def enumerate_plans(
         if plans:
             return tuple(Plan(p) for p in plans)
 
-    return ()
+    # 기회 충전 차는 원래 충전 없이도 목적지까지 간다. 들를 휴게소가 없으면
+    # "불가능" 이 아니라 그냥 **안 들르는** 것이다. () 로 돌려주면 결과에서
+    # 통째로 빠져나가 진입 EV 가 조용히 줄어든다.
+    return () if needs_charge else None
 
 
 def build_trip_demands(
@@ -170,49 +248,67 @@ def build_trip_demands(
     rule: ChargeRule,
     charge_power_factor: float,
     entry_offset_km: float = 0.0,
+    rng: np.random.Generator | None = None,
 ) -> DemandBuild:
     """synthetic_ev 의 EV 행 → 충전이 필요한 차의 선택지.
 
-    evs 행: ev_id, vclass_id, entry_time_min, initial_soc, dest_offset_km
+    evs 행: ev_id, vclass_id, entry_time_min, initial_soc, dest_offset_km,
+            entry_offset_km (없으면 인자 기본값)
+
+    진입 지점이 **차마다 다르다** (#54). 전에는 전원이 코리도 한쪽 끝에서 출발했는데,
+    실제로는 수원·천안·대전에서 타는 차가 더 많다. 진입 지점이 다르면 갈 수 있는
+    휴게소도 달라지므로, 선택지 자체가 차마다 달라진다.
     """
 
     trips: list[TripDemand] = []
     n_ev = n_no_charge = n_infeasible = 0
+    n_opportunity = 0
+    draw = (rng or np.random.default_rng(0)).random
 
     for ev in evs:
         n_ev += 1
         v = vclasses[str(ev["vclass_id"])]
+        entry_km = float(ev.get("entry_offset_km", entry_offset_km))
+        opportunity = _wants_opportunity_charge(ev, v, entry_km, rule, draw)
+        n_opportunity += int(opportunity)
         plans = enumerate_plans(
             stations,
-            entry_offset_km=entry_offset_km,
+            entry_offset_km=entry_km,
             dest_offset_km=float(ev["dest_offset_km"]),
             soc0=float(ev["initial_soc"]),
             battery_kwh=float(v["battery_kwh"]),
             consumption_kwh_km=float(v["consumption_kwh_km"]),
             rule=rule,
+            opportunity=opportunity,
         )
+
+        escape = (Plan(()),) if rule.escape_cost_min > 0 else ()
 
         if plans is None:
             n_no_charge += 1
             continue
 
         if not plans:
+            # 3회로도 못 가는 차. 예전에는 결과에서 조용히 빠졌는데, 현실에서는
+            # 그 차도 IC 로 나가 충전한다 — 이탈과 같은 일이다.
             n_infeasible += 1
-            continue
+            if not escape:
+                continue
+            plans = ()
 
         trips.append(
             TripDemand(
                 ev_id=str(ev["ev_id"]),
                 vclass_id=str(ev["vclass_id"]),
                 entry_min=float(ev["entry_time_min"]),
-                entry_offset_km=entry_offset_km,
+                entry_offset_km=entry_km,
                 dest_offset_km=float(ev["dest_offset_km"]),
                 battery_kwh=float(v["battery_kwh"]),
                 vmax_kw=float(v["vmax_kw"]),
                 curve=tuple(curves[str(ev["vclass_id"])]),
                 cold_factor=charge_power_factor,
-                plans=plans,
+                plans=plans + escape,
             )
         )
 
-    return DemandBuild(tuple(trips), n_ev, n_no_charge, n_infeasible)
+    return DemandBuild(tuple(trips), n_ev, n_no_charge, n_infeasible, n_opportunity)
