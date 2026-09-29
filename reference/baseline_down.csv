@@ -8,11 +8,12 @@ share_ratio_max,몰림비 (수요몫÷충전기몫 최대),2.110025978049537
 dwell_total_h,총 체류 (시간),4774.001277805782
 n_ev_charging,충전 필요 EV (대),10035.2
 n_charge_visits,충전 정차 (회),9093.3
+n_escaped,이탈 합계 (대),1140.8
+n_escaped_balked,이탈: 줄이 길어서 (대),112.95
+n_escaped_stranded,이탈: 정책이 몰아넣음 (대),0.0
 ue_final_gap,UE 마지막 gap,0.0075941626510678
 ue_iterations,UE 반복 수,9.8
 n_ev,진입 EV (대),18534.0
 n_ev_no_charge,충전 없이 도착 (대),8498.8
 n_ev_infeasible,3회 정차로도 불가 (대),1027.85
 departure_soc_mean,출발 SoC 평균,0.3428571428571428
-n_escaped,n_escaped,1140.8
-n_escaped_balked,n_escaped_balked,112.95
