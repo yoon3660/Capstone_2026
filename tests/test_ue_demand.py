@@ -223,7 +223,7 @@ def test_departure_soc_profiles_are_selectable(cfg: ScenarioConfig):
 
     # 진입 SoC 로 쓸 분포. 대조군 둘 사이에 있다
     holiday = cfg.variant("soc-holiday", {"vehicles.departure_soc": "holiday"})
-    assert holiday.vehicles.soc_beta.mean() == pytest.approx(0.693, abs=0.001)
+    assert holiday.vehicles.soc_beta.mean() == pytest.approx(0.665, abs=0.001)
 
 
 def test_variant_gets_its_own_scenario_and_run_id(cfg: ScenarioConfig):

@@ -68,9 +68,9 @@ vehicles:
     # 민감도 파라미터다 — 근거가 생기면 여기서 갈라 쓴다.
     holiday:
       dist: lognormal
-      mu: -0.3567           # ln(0.70)
-      sigma: 0.25
-      lo: 0.40              # ⚠ 행태 가드레일 (가정). docs/departure_soc.md
+      mu: -0.3567           # ⚠ ln(0.70) 은 절삭 전 중앙값. 실제 중앙값은 65.8%
+      sigma: 0.35           # 모른다는 것을 넓이로 반영했다
+      lo: 0.33              # ⚠ 행태 가드레일 (가정). docs/departure_soc.md
       hi: 1.00
     low:                    # ⚠ 대조군. Rupnik 의 휴게소 도착 SoC (#55 이전 기본값)
       a: 2.0
