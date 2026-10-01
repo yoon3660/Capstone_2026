@@ -63,12 +63,21 @@ vehicles:
   # 출발 SoC — 하행과 같은 두 프로파일 (scenario_seollal_down.yaml 설명 참고)
   departure_soc: low
   soc_profiles:
-    low:
+    # 진입 SoC = 고속도로에 올라올 때 배터리. 하행과 같은 값을 쓴다 (#55).
+    # 상행 진입 SoC 가 하행보다 낮다는 가설은 설계문서 §2 대로 고정 가정이 아니라
+    # 민감도 파라미터다 — 근거가 생기면 여기서 갈라 쓴다.
+    holiday:
+      dist: lognormal
+      mu: -0.3567           # ln(0.70)
+      sigma: 0.25
+      lo: 0.40              # ⚠ 행태 가드레일 (가정). docs/departure_soc.md
+      hi: 1.00
+    low:                    # ⚠ 대조군. Rupnik 의 휴게소 도착 SoC (#55 이전 기본값)
       a: 2.0
       b: 5.0
       lo: 0.10
       hi: 0.95
-    high:
+    high:                   # 대조군
       a: 5.0
       b: 2.0
       lo: 0.30

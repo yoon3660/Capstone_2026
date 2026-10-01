@@ -173,17 +173,18 @@ def test_gap_plot_is_written(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _mean(beta) -> float:
-    return beta.lo + beta.a / (beta.a + beta.b) * (beta.hi - beta.lo)
-
-
 def test_departure_soc_profiles_are_selectable(cfg: ScenarioConfig):
+    """세 프로파일을 이름으로 고를 수 있고, 평균은 분포가 스스로 안다 (#55)."""
     assert cfg.vehicles.departure_soc == "low"
-    assert {p.name for p in cfg.vehicles.soc_profiles} == {"low", "high"}
-    assert _mean(cfg.vehicles.soc_beta) == pytest.approx(0.343, abs=0.001)
+    assert {p.name for p in cfg.vehicles.soc_profiles} == {"holiday", "low", "high"}
+    assert cfg.vehicles.soc_beta.mean() == pytest.approx(0.343, abs=0.001)
 
     high = cfg.variant("soc-high", {"vehicles.departure_soc": "high"})
-    assert _mean(high.vehicles.soc_beta) == pytest.approx(0.764, abs=0.001)
+    assert high.vehicles.soc_beta.mean() == pytest.approx(0.764, abs=0.001)
+
+    # 진입 SoC 로 쓸 분포. 대조군 둘 사이에 있다
+    holiday = cfg.variant("soc-holiday", {"vehicles.departure_soc": "holiday"})
+    assert holiday.vehicles.soc_beta.mean() == pytest.approx(0.693, abs=0.001)
 
 
 def test_variant_gets_its_own_scenario_and_run_id(cfg: ScenarioConfig):

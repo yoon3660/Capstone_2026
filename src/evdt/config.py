@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -123,22 +124,47 @@ class _Errors:
             raise ConfigError(f"config 검증 실패: {self.source}\n{lines}")
 
 
-def _soc_beta(e: _Errors, raw: Any, path: str) -> SocBeta | None:
-    """{a, b, lo, hi} 하나를 검사한다. 출발 SoC ~ lo + Beta(a, b) × (hi − lo)."""
+def _soc_beta(e: _Errors, raw: Any, path: str) -> SocDist | None:
+    """진입 SoC 분포 하나를 검사한다.
+
+        {dist: beta,      a, b, lo, hi}   lo + Beta(a,b) × (hi − lo)   — 기본값
+        {dist: lognormal, mu, sigma, lo, hi}   LogNormal 을 [lo,hi] 로 절삭 (#55)
+
+    `dist` 를 빼면 beta 다 (#55 이전 config 가 그대로 돈다).
+    """
 
     if not isinstance(raw, dict):
-        e.add(path, "a / b / lo / hi 를 담은 매핑이어야 한다")
+        e.add(path, "분포 파라미터를 담은 매핑이어야 한다")
         return None
-    a = e.number(raw.get("a", 2.0), f"{path}.a", lo=0, lo_exclusive=True)
-    b = e.number(raw.get("b", 5.0), f"{path}.b", lo=0, lo_exclusive=True)
-    lo = e.number(raw.get("lo", 0.10), f"{path}.lo", lo=0.0, hi=1.0)
-    hi = e.number(raw.get("hi", 0.95), f"{path}.hi", lo=0.0, hi=1.0)
+
+    kind = str(raw.get("dist", "beta"))
+    if kind not in ("beta", "lognormal"):
+        e.add(f"{path}.dist", f"beta / lognormal 중 하나여야 한다 (받은 값: {kind!r})")
+        return None
+
+    default_lo = 0.10 if kind == "beta" else 0.40     # 로그정규는 행태 가드레일이 기본
+    default_hi = 0.95 if kind == "beta" else 1.00
+    lo = e.number(raw.get("lo", default_lo), f"{path}.lo", lo=0.0, hi=1.0)
+    hi = e.number(raw.get("hi", default_hi), f"{path}.hi", lo=0.0, hi=1.0)
     if lo is not None and hi is not None and hi <= lo:
         e.add(f"{path}.hi", f"lo({lo}) 보다 커야 한다 (받은 값: {hi})")
         return None
-    if None in (a, b, lo, hi):
+
+    if kind == "beta":
+        a = e.number(raw.get("a", 2.0), f"{path}.a", lo=0, lo_exclusive=True)
+        b = e.number(raw.get("b", 5.0), f"{path}.b", lo=0, lo_exclusive=True)
+        if None in (a, b, lo, hi):
+            return None
+        return SocBeta(a, b, lo, hi)  # type: ignore[arg-type]
+
+    for key in ("mu", "sigma"):
+        if raw.get(key) is None:
+            e.add(f"{path}.{key}", "로그정규는 mu 와 sigma 가 필수다")
+    mu = e.number(raw.get("mu"), f"{path}.mu")
+    sigma = e.number(raw.get("sigma"), f"{path}.sigma", lo=0, lo_exclusive=True)
+    if None in (mu, sigma, lo, hi):
         return None
-    return SocBeta(a, b, lo, hi)  # type: ignore[arg-type]
+    return SocLogNormal(mu, sigma, lo, hi)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -218,26 +244,97 @@ class DemandConfig:
     cruise_speed_kmh: float = 80.0
     travel_time: str = "fixed"
 
+def _phi(x: float) -> float:
+    """표준정규 CDF. 절삭 로그정규의 평균을 닫힌 형태로 구하는 데만 쓴다."""
+
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
 @dataclass(frozen=True, slots=True)
 class SocBeta:
+    """진입 SoC ~ lo + Beta(a, b) × (hi − lo).
+
+    ⚠ 기본 프로파일이던 Beta(2,5) 는 Rupnik 의 **휴게소 도착 SoC** 였다. 진입 SoC 로
+    쓰면 안 된다 (#55). 민감도 대조군으로만 남긴다.
+    """
+
     a: float
     b: float
     lo: float
     hi: float
 
+    def mean(self) -> float:
+        return self.lo + self.a / (self.a + self.b) * (self.hi - self.lo)
+
+    def params(self) -> dict[str, float | str]:
+        return {"dist": "beta", "a": self.a, "b": self.b, "lo": self.lo, "hi": self.hi}
+
+    @property
+    def label(self) -> str:
+        return f"Beta({self.a:g},{self.b:g}) on [{self.lo:g},{self.hi:g}]"
+
+
+@dataclass(frozen=True, slots=True)
+class SocLogNormal:
+    """진입 SoC ~ LogNormal(mu, sigma) 를 [lo, hi] 로 **절삭 후 재정규화** (#55).
+
+    고속도로 EV 충전 부하 문헌의 표준 분포다 (Bai et al. 2026 — 고속도로·CTM·혼잡으로
+    우리와 같은 설정). `lo` 는 행태 가드레일이다 — 명절 장거리를 앞두고 그 미만으로
+    고속도로에 올라오지 않는다는 **가정**이지 관측이 아니다.
+
+    `max(soc, lo)` 로 깔지 않고 절삭하는 이유: 깔면 `lo` 지점에 뾰족한 덩어리가 생겨
+    그 자체가 인공물이 된다. 몇 대가 걸렸는지는 `n_soc_floored` KPI 로 남는다.
+    """
+
+    mu: float
+    sigma: float
+    lo: float
+    hi: float
+
+    def mean(self) -> float:
+        """절삭 로그정규의 평균 (닫힌 형태).
+
+        E[X | lo<X<hi] = exp(mu + s²/2) · [Φ(β−s) − Φ(α−s)] / [Φ(β) − Φ(α)]
+        단 α = (ln lo − mu)/s, β = (ln hi − mu)/s.
+        """
+
+        s = self.sigma
+        a = (math.log(self.lo) - self.mu) / s if self.lo > 0 else -40.0
+        b = (math.log(self.hi) - self.mu) / s
+        denom = _phi(b) - _phi(a)
+        if denom <= 1e-12:                       # 절삭 구간에 질량이 사실상 없다
+            return 0.5 * (self.lo + self.hi)
+        return math.exp(self.mu + 0.5 * s * s) * (_phi(b - s) - _phi(a - s)) / denom
+
+    def params(self) -> dict[str, float | str]:
+        return {"dist": "lognormal", "mu": self.mu, "sigma": self.sigma,
+                "lo": self.lo, "hi": self.hi}
+
+    @property
+    def label(self) -> str:
+        return (f"LogNormal(mu={self.mu:g}, sigma={self.sigma:g}) "
+                f"truncated to [{self.lo:g},{self.hi:g}]")
+
+
+#: 진입 SoC 분포. 새 분포를 더하면 여기와 `io/synthetic_ev.sample_initial_soc` 둘 다 고친다.
+SocDist = SocBeta | SocLogNormal
+
 
 @dataclass(frozen=True, slots=True)
 class SocBetaProfile:
-    """출발 SoC 분포 하나에 이름을 붙인 것 (vehicles.soc_profiles)."""
+    """진입 SoC 분포 하나에 이름을 붙인 것 (vehicles.soc_profiles).
+
+    이름은 Beta 만 있던 때의 것이다. 지금은 `dist` 로 분포 종류를 고른다 (#55).
+    """
 
     name: str
-    beta: SocBeta
+    beta: SocDist
 
 
 @dataclass(frozen=True, slots=True)
 class VehiclesConfig:
     seed: int
-    soc_beta: SocBeta          # 이번 실행이 쓰는 출발 SoC 분포 (프로파일을 골랐으면 그 값)
+    soc_beta: SocDist          # 이번 실행이 쓰는 진입 SoC 분포 (프로파일을 골랐으면 그 값)
     target_soc_cap: float      # 목표 SoC 상한 0.8 (§2.3)
     departure_soc: str | None = None                   # 고른 프로파일 이름 (없으면 soc_beta 직접 지정)
     soc_profiles: tuple[SocBetaProfile, ...] = ()      # 고를 수 있는 프로파일 전부

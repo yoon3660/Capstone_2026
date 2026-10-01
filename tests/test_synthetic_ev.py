@@ -420,3 +420,73 @@ def test_destination_offset_is_assigned() -> None:
         evs["dest_offset_km"]
         == DEST_OFFSET_KM
     ).all()
+
+# ---------------------------------------------------------------------------
+# 진입 SoC 분포 (#55)
+#
+# 진입 SoC 는 **아무도 관측하지 않는 양**이라 가정할 수밖에 없다. 그래서 여기서 지키는
+# 것은 "값이 맞나" 가 아니라 **분포가 선언한 대로 나오나** 와 **가드레일이 조용히
+# 분포를 대체하지 않나** 두 가지다.
+# ---------------------------------------------------------------------------
+import math  # noqa: E402
+
+from evdt.config import SocBeta, SocLogNormal  # noqa: E402
+from evdt.io.synthetic_ev import sample_initial_soc  # noqa: E402
+
+HOLIDAY = SocLogNormal(mu=math.log(0.70), sigma=0.25, lo=0.40, hi=1.00)
+
+
+def test_lognormal_soc_stays_inside_the_truncation_window() -> None:
+    """절삭 구간 밖은 한 대도 나오지 않는다 — 바닥이 곧 하한이다."""
+    s, _ = sample_initial_soc(HOLIDAY, np.random.default_rng(7), 50_000)
+
+    assert s.min() >= HOLIDAY.lo
+    assert s.max() <= HOLIDAY.hi
+
+
+def test_lognormal_analytic_mean_matches_the_samples() -> None:
+    """절삭 로그정규 평균의 닫힌 형태가 맞다.
+
+    `departure_soc_mean` KPI 가 이 값을 쓴다. 틀리면 기준선이 조용히 어긋난다.
+    """
+    s, _ = sample_initial_soc(HOLIDAY, np.random.default_rng(11), 200_000)
+
+    assert HOLIDAY.mean() == pytest.approx(float(s.mean()), abs=0.003)
+
+
+def test_the_floor_is_a_tripwire_not_the_distribution() -> None:
+    """바닥에 걸리는 차가 꼬리 수준이어야 한다.
+
+    **이것이 이 티켓의 핵심 안전장치다.** 바닥이 많은 차를 건드리면 "로그정규를 썼다"
+    는 말이 의미를 잃는다 — 분포가 아니라 바닥이 결과를 정하게 된다. 그때는 바닥이
+    아니라 **mu 를 다시 봐야 한다**.
+    """
+    _, floored = sample_initial_soc(HOLIDAY, np.random.default_rng(13), 100_000)
+
+    assert floored / 100_000 < 0.05
+
+
+def test_beta_profile_reports_no_floored_cars() -> None:
+    """Beta 는 lo 에서 시작하는 분포라 절삭이 없다. 가드레일 수는 0 이어야 한다."""
+    _, floored = sample_initial_soc(SocBeta(2.0, 5.0, 0.10, 0.95),
+                                    np.random.default_rng(17), 10_000)
+
+    assert floored == 0
+
+
+def test_same_seed_gives_the_same_soc() -> None:
+    """같은 시드 → 같은 SoC. 역변환이라 뽑는 난수 개수도 n 으로 고정된다."""
+    a, _ = sample_initial_soc(HOLIDAY, np.random.default_rng(3), 1_000)
+    b, _ = sample_initial_soc(HOLIDAY, np.random.default_rng(3), 1_000)
+
+    assert np.array_equal(a, b)
+
+
+def test_lognormal_profile_loads_from_the_scenario_file() -> None:
+    """config 에 선언한 holiday 프로파일이 로그정규로 읽힌다 (양방향)."""
+    for name in ("scenario_seollal_down.yaml", "scenario_seollal_up.yaml"):
+        cfg = ScenarioConfig.from_yaml(CONFIG_DIR / name)
+        holiday = next(p.beta for p in cfg.vehicles.soc_profiles if p.name == "holiday")
+
+        assert isinstance(holiday, SocLogNormal)
+        assert holiday.lo == 0.40

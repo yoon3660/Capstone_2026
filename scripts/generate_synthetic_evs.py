@@ -205,12 +205,7 @@ def main() -> None:
             "demand_multiplier": cfg.demand.demand_multiplier,
             "ev_share": cfg.demand.ev_share,
             "seed": cfg.vehicles.seed,
-            "soc_beta": {
-                "a": cfg.vehicles.soc_beta.a,
-                "b": cfg.vehicles.soc_beta.b,
-                "lo": cfg.vehicles.soc_beta.lo,
-                "hi": cfg.vehicles.soc_beta.hi,
-            },
+            "departure_soc": cfg.vehicles.soc_beta.params(),
             "count_method": cfg.demand.ev_count_method,
             "arrival_method": "uniform_within_hour_conditioned_on_count",
             "destination_method": "corridor_end_until_tcs_od",

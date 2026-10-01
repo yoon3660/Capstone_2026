@@ -123,8 +123,9 @@ def with_seed(cfg: ScenarioConfig, seed: int) -> ScenarioConfig:
 
 
 def departure_soc_mean(cfg: ScenarioConfig) -> float:
-    b = cfg.vehicles.soc_beta
-    return b.lo + b.a / (b.a + b.b) * (b.hi - b.lo)
+    """진입 SoC 분포의 평균. 분포 종류와 무관하다 (#55)."""
+
+    return cfg.vehicles.soc_beta.mean()
 
 
 # ---------------------------------------------------------------------------
