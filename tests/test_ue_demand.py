@@ -10,7 +10,12 @@ import pytest
 import yaml
 
 from evdt.config import ConfigError, ScenarioConfig
-from evdt.engine.ue_demand import ChargeRule, build_trip_demands, enumerate_plans
+from evdt.engine.ue_demand import (
+    ChargeRule,
+    build_trip_demands,
+    entry_soc_floor,
+    enumerate_plans,
+)
 from evdt.io.demand_profile import (
     entry_hourly_volume,
     entry_zone,
@@ -85,9 +90,43 @@ def test_build_counts_every_car_once():
         {"v": ((0.0, 1.0, 150.0),)}, rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2), charge_power_factor=0.6,
     )
 
-    assert (built.n_ev, built.n_no_charge, built.n_infeasible) == (3, 1, 1)
-    assert [t.ev_id for t in built.trips] == ["b"]
+    # c 는 SoC 0.10 으로 진입해 예전에는 infeasible 로 **조용히 빠졌다**. 지금은 진입
+    # 가드레일이 50 km 휴게소에 닿을 만큼(0.16) 올려 주고, 올렸다는 사실을 센다 (#55).
+    assert (built.n_ev, built.n_no_charge, built.n_infeasible) == (3, 1, 0)
+    assert (built.n_entry_lifted, round(built.soc_lift_total, 4)) == (1, 0.06)
+    assert [t.ev_id for t in built.trips] == ["b", "c"]
     assert built.trips[0].cold_factor == 0.6
+
+
+def test_entry_guardrail_lifts_only_what_cannot_reach_anything():
+    """바닥은 **위치마다 다르다** — 다음 휴게소가 멀수록 높아진다 (#55).
+
+    행태 바닥(config 의 lo)만으로는 안 되는 이유가 이것이다. 바닥은 어디서 탔는지를
+    모르는데, 휴게소 간격은 구간마다 52.5 km 까지 벌어진다.
+    """
+    kw = dict(dest_offset_km=390.0, battery_kwh=100.0, consumption_kwh_km=0.2,
+              rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2))
+
+    # 0 km 진입: 다음 휴게소가 50 km → (50+30)×0.2/100 = 0.16
+    assert entry_soc_floor(STATIONS, entry_offset_km=0.0, **kw) == pytest.approx(0.16)
+    # 60 km 진입: 다음 휴게소가 150 km 로 90 km 떨어져 있다 → 0.24
+    assert entry_soc_floor(STATIONS, entry_offset_km=60.0, **kw) == pytest.approx(0.24)
+    # 앞에 휴게소가 없으면 목적지까지 가는 데 필요한 값으로 떨어진다
+    assert entry_soc_floor(STATIONS, entry_offset_km=360.0, **kw) == pytest.approx(0.2)
+
+
+def test_entry_guardrail_leaves_a_well_charged_car_alone():
+    """충분히 채우고 들어온 차는 건드리지 않는다. 가드레일은 꼬리에만 닿는다."""
+    evs = [{"ev_id": "full", "vclass_id": "v", "entry_time_min": 0.0,
+            "initial_soc": 0.70, "dest_offset_km": 390.0}]
+    built = build_trip_demands(
+        evs, STATIONS, {"v": {"battery_kwh": 100.0, "vmax_kw": 150.0, "consumption_kwh_km": 0.2}},
+        {"v": ((0.0, 1.0, 150.0),)}, rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2),
+        charge_power_factor=0.6,
+    )
+
+    assert built.n_entry_lifted == 0
+    assert built.trips[0].soc0 == pytest.approx(0.70)
 
 
 # ---------------------------------------------------------------------------
