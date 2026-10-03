@@ -10,6 +10,8 @@ data/raw/*
 !data/raw/.gitkeep
 !data/raw/README.md
 
+data/raw_backup/
+
 data/processed/*
 !data/processed/.gitkeep
 !data/processed/README.md
