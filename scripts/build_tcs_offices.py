@@ -36,15 +36,13 @@ from urllib.request import urlopen
 import _bootstrap  # noqa: F401
 import pandas as pd  # noqa: E402
 
+from evdt.io.charger_ingest import load_ex_api_key, normalize_station_name  # noqa: E402
 from evdt.io.route import (
     EXPECTED_ROUTE_KM,
-    ROUTE_LENGTH_TOL_KM
+    ROUTE_LENGTH_TOL_KM,
+    GyeongbuRoute,  # noqa: E402
 )
-
-from evdt.io.charger_ingest import (load_ex_api_key, normalize_station_name)  # noqa: E402
-from evdt.io.route import GyeongbuRoute  # noqa: E402
 from evdt.paths import DATA_PROCESSED_DIR, DATA_RAW_DIR  # noqa: E402
-
 
 EX_UNIT_API_URL = (
     "https://data.ex.co.kr/openapi/locationinfo/locationinfoUnit"

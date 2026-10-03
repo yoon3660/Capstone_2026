@@ -23,14 +23,13 @@
 
 from __future__ import annotations
 
-import sys
 import re
+import sys
 
 import _bootstrap  # noqa: F401
 import pandas as pd  # noqa: E402
 
 from evdt.paths import DATA_PROCESSED_DIR  # noqa: E402
-
 
 OFFICES_PATH = (
     DATA_PROCESSED_DIR

@@ -38,7 +38,6 @@ import pandas as pd  # noqa: E402
 
 from evdt.paths import DATA_PROCESSED_DIR, DATA_RAW_DIR  # noqa: E402
 
-
 RAW_DIR = DATA_RAW_DIR / "tcs_od"
 
 INPUTS = {

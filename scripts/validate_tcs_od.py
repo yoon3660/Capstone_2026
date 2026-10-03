@@ -27,7 +27,6 @@ import pandas as pd  # noqa: E402
 
 from evdt.paths import DATA_PROCESSED_DIR  # noqa: E402
 
-
 OD_PATH = (
     DATA_PROCESSED_DIR
     / "tcs_od_gyeongbu.parquet"
