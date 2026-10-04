@@ -1,0 +1,151 @@
+# ===========================================================================
+#  ⚠⚠  이 파일의 결과는 **사용자 평형(UE)이 아니다**  ⚠⚠
+#
+#  gap_tol 을 5% 로 풀었고, 그러면 **첫 sweep 에 통과한다** (반복 1회).
+#  전원이 한 번씩 고르고 끝났다는 뜻이지 "아무도 바꾸고 싶지 않은 상태" 가 아니다.
+#  #29 가 3% 를 버린 이유가 정확히 이것이다 — 그보다 더 느슨하다.
+#
+#  쓸 곳    히트맵·시각화. "조율이 없으면 이렇게 된다" 를 **보여주는** 용도
+#  쓸 수 없는 곳  엔진 비교의 기준선. 바닥이 균형이 아니면
+#                 "엔진이 균형보다 낫다" 를 주장할 수 없다
+#
+#  엔진 비교는 scenario_seollal_up_adoption.yaml (11회 수렴) 에서 한다.
+#
+#  왜 이 파일이 필요한가 — 0.8% 로는 이 수요에서 수렴하지 않는다. gap 이 2.3~3.1%
+#  에서 추세 없이 진동한다. 그 사이의 값은 없다: 3% 로 잡아도 첫 sweep 통과이거나
+#  진동이다. 그래서 "보여주는 그림" 과 "비교하는 기준선" 을 **다른 파일로 갈랐다**.
+#
+#  ⚠ 균형이 **존재하지 않는다**는 뜻은 아니다. 우리가 쓰는 최적반응 반복 하나가
+#    가라앉지 않는다는 것뿐이다 (docs/where_we_are.md §6).
+# ==========================================================================
+# ===========================================================================
+#  설 연휴 귀경 피크 · 경부선 상행  —  UE 베이스라인
+#
+#  하행과의 차이는 corridor / direction / 교통량 프로파일뿐이다.
+#  "상행 출발 SoC 가 하행보다 낮을 수 있다" 는 고정 가정이 아니라
+#  민감도 파라미터다 (§2.3). 기본값은 하행과 동일하게 두고,
+#  민감도 실험에서 출발 SoC 프로파일(low / high)을 바꿔 본다 (--soc high).
+# ===========================================================================
+
+scenario_id: seollal_2026_up_congested
+label: "설 연휴 귀성 피크 (경부선 상행) — 혼잡 시나리오 (⚠ 균형 아님)"
+corridor_id: gyeongbu_up
+direction: UP
+day_type: SEOLLAL_PEAK
+
+time:
+  start_min: 0
+  end_min: 1440
+  # Δt. **S0 이후 스테이지가 정책에게 물어보는 주기**이자 앱 화면의 갱신 주기다 (#59).
+  # 결정 시점이 [t, t+Δt) 인 차는 t 의 화면을 본다 — 즉 이 값이 **정보의 나이 상한**이다.
+  # UE 는 재계획을 안 하므로 로깅 주기로만 쓴다.
+  dt_min: 5
+
+demand:
+  # 재현 기간 — 무대를 갈아끼우는 스위치 (src/evdt/replay.py)
+  #   scripts/build_replay.py --period <기간> --direction <방향>
+  period: seollal2026
+  volume_profile: data/processed/volume_gyeongbu_up_seollal.csv
+  demand_multiplier: 1.0
+  # ⚠ 잠정값이다. 근거 확정은 #67 (3차 스프린트).
+  #   8% 면 가동률 90%·포화 8/19 로 이미 포화라 엔진이 옮길 자리가 없다.
+  #   5% 는 티핑 포인트(4→5%) 바로 위 — 쏠림은 있고 빈 곳도 있다.
+  #   "티핑 포인트라서" 는 근거가 아니다. #67 에서 출처로 바꾼다.
+  ev_share: 0.05            # 통과 차량 중 EV 비중
+  # EV 시간대별 생성 방식 (fixed | poisson | binomial | beta_binomial | poisson_lognormal), #53
+  ev_count_method: fixed
+  # 실험용 확장 모델 파라미터 (#53)
+  beta_binomial_concentration: 10000.0
+  poisson_lognormal_sigma: 0.05
+  # ⚠ **죽은 값이다. 바꿔도 결과가 안 바뀐다** (#54 · #59 에서 확인).
+  #   should_charge 를 부르는 곳이 없고, S0 도 쓰지 않는다 — 확률로 충전 여부를 뽑으면
+  #   UE 와 S0 가 **다른 차량 집합**을 상대하게 되어 비교가 성립하지 않는다.
+  #   충전 여부는 수요를 만들 때 한 번만 정한다 (engine/ue_demand.build_trip_demands).
+  charge_prob: 0.95
+  # 실측 위에 **가정으로 얹는 것**은 전부 여기로만 들어온다 (#54).
+  #   - 모르는 kind 는 로딩 시점에 거부한다
+  #   - 레이어는 모두 가정이다. 실측은 레이어가 아니라 바탕이다
+  #   - 이름 한 줄이 실행 파라미터와 **모든 그림 부제**에 찍힌다
+  # 비어 있으면 그림 부제가 '가정 레이어 없음' 이 된다 = 순수 재현.
+  #   예: - {kind: ev_adoption, ev_share: 0.25}
+  layers:
+    # ⚠ 재현이 아니라 시나리오다. 하행과 **같은 값**을 쓴다 — 방향별로 다른
+    #    가정을 쓰면 양방향 비교가 가정 차이인지 무대 차이인지 구분되지 않는다.
+    - {kind: ev_adoption, ev_share: 0.15}
+    - {kind: opportunity_charge, prob: 0.20, soc_margin: 0.5}
+  safety_buffer_km: 30.0
+  low_soc_threshold: 0.2
+  # 목적지 분포: 부산(구서) 쪽에서 출발한 차 중 각 지점을 지나가는 비율
+  #   scripts/build_demand_profile.py --direction UP
+  through_profile: data/processed/through_gyeongbu_up_seollal.csv
+  # 중간 진입·진출 (#54). 있으면 through_profile 대신 이걸 쓴다
+  #   scripts/build_entry_exit_profile.py --direction UP
+  entry_exit_profile: data/processed/entry_exit_gyeongbu_up_seollal.csv
+  cruise_speed_kmh: 80.0
+  # 휴게소 줄이 이보다 길면 IC 로 빠져 시내에서 충전하고 돌아온다 (#54)
+  #   KPI n_escaped 로 남는다. 엔진이 이 수를 줄이는 것도 개선이다
+  #   ⚠ 120분은 잠정값. 근거는 #64 (충전 실측 조사)
+  escape_cost_min: 120.0
+  # 통행시간을 무엇으로 재나 (#56): fixed = 위 고정 속도 · ctm = CTM 셀 속도
+  travel_time: fixed
+
+vehicles:
+  seed: 7
+  # 출발 SoC — 하행과 같은 두 프로파일 (scenario_seollal_down.yaml 설명 참고)
+  # 진입 SoC 분포. 근거와 반대 근거는 docs/departure_soc.md (#55).
+  # ⚠ low 는 Rupnik 의 **휴게소 도착 SoC** 를 진입 SoC 로 쓰던 #55 이전 기본값이다.
+  departure_soc: holiday
+  soc_profiles:
+    # 진입 SoC = 고속도로에 올라올 때 배터리. 하행과 같은 값을 쓴다 (#55).
+    # 상행 진입 SoC 가 하행보다 낮다는 가설은 설계문서 §2 대로 고정 가정이 아니라
+    # 민감도 파라미터다 — 근거가 생기면 여기서 갈라 쓴다.
+    holiday:
+      dist: lognormal
+      mu: -0.3567           # ⚠ ln(0.70) 은 절삭 전 중앙값. 실제 중앙값은 65.8%
+      sigma: 0.35           # 모른다는 것을 넓이로 반영했다
+      lo: 0.33              # ⚠ 행태 가드레일 (가정). docs/departure_soc.md
+      hi: 1.00
+    low:                    # ⚠ 대조군. Rupnik 의 휴게소 도착 SoC (#55 이전 기본값)
+      a: 2.0
+      b: 5.0
+      lo: 0.10
+      hi: 0.95
+    high:                   # 대조군
+      a: 5.0
+      b: 2.0
+      lo: 0.30
+      hi: 0.95
+  target_soc_cap: 0.8
+
+environment:
+  temp_c: -5.0
+
+policy:
+  stage: UE
+  participation: 1.0
+  params: {}
+  ue:
+    max_iter: 50
+    # 3% 는 첫 sweep 에 통과해 "균형" 이라 부를 수 없었다 (반복 1회).
+    # 0.8% 면 반복 5회 — 최적반응을 여러 번 돌았다고 말할 수 있고 비용이 2.5배다.
+    #   ⚠ 이 횟수는 #54 **이전** 수요에서 잰 것이다. 지금은 시드 20개 평균
+    #     하행 9.8회 · 상행 2.0회 (reference/baseline_*.csv 의 ue_iterations).
+    # 0.7% 는 12회, 0.6% 는 28회로 급해지는데 KPI 는 나아지지 않는다.
+    #
+    # ⚠ KPI 로 고른 값이 아니다. 이탈 선택지가 생기면서 **균형해가 여럿**이 됐고
+    #   (누가 나가느냐에 따라 달라진다) 0.5~1.0% 사이 평균 대기가 19.7~21.4분으로
+    #   방향 없이 흔들린다. 그 폭(±0.85분)이 시드 산포(±0.95분)와 비슷하다.
+    #   그래서 **엔진과 비교할 때는 양쪽을 같은 gap_tol 로 고정해야 한다.**
+    gap_tol: 0.05
+    min_gain_min: 1.0
+    # 한 차가 설 수 있는 최대 충전 정차 수. **S0 도 이 값을 쓴다** (#59) — 한쪽만
+    # 다르면 그 차이가 정책 차이로 보고된다. 키가 `ue` 아래 있는 것은 내력일 뿐이다.
+    max_stops: 3
+
+queue:
+  discipline: FIFO
+  charger_select: MAX_POWER_IDLE
+
+output:
+  write_snapshots: true
+  snapshot_every_min: 5
