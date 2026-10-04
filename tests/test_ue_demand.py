@@ -24,6 +24,7 @@ from evdt.io.demand_profile import (
     sample_dest_offsets,
     through_share,
 )
+from evdt.paths import CONFIG_DIR
 from evdt.viz.plots import plot_ue_gap
 
 RULE = ChargeRule(range_factor=1.0, buffer_km=30.0, reserve_soc=0.2, target_soc_cap=0.8, max_stops=3)
@@ -542,3 +543,39 @@ def test_ev_share_axis_goes_through_a_named_layer_not_the_measured_slot():
     assert [layer.ev_share for layer in scen.demand.layers] == [0.25]
     assert "EV 보급률 25%" in scen.demand_label
     assert scen.scenario_id.endswith("__ev25")
+
+
+# ---------------------------------------------------------------------------
+# 세 시나리오 (#55)
+#
+# 재현 · 균형 시나리오 · 혼잡 시나리오. 셋을 가르는 것은 **gap_tol 과 레이어**이고,
+# 혼잡 시나리오는 균형이 아니다 — 그 사실이 조용히 묻히면 엔진 비교의 바닥이 무너진다.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("name", "gap_tol", "layers", "is_equilibrium"),
+    [
+        ("scenario_seollal_down.yaml", 0.008, 0, True),
+        ("scenario_seollal_down_adoption.yaml", 0.008, 2, True),
+        ("scenario_seollal_down_congested.yaml", 0.05, 2, False),
+    ],
+)
+def test_the_three_scenarios_differ_only_where_they_should(
+    name, gap_tol, layers, is_equilibrium
+):
+    cfg = ScenarioConfig.from_yaml(CONFIG_DIR / name)
+
+    assert cfg.policy.ue.gap_tol == pytest.approx(gap_tol)
+    assert len(cfg.demand.layers) == layers
+    # 실측 슬롯은 셋 다 같다. 다른 것은 **얹은 가정**뿐이다
+    assert cfg.demand.ev_share == pytest.approx(0.05)
+    assert cfg.vehicles.departure_soc == "holiday"
+    # 균형이 아닌 쪽은 scenario_id 와 label 로 먼저 드러나야 한다
+    assert ("congested" in cfg.scenario_id) is not is_equilibrium
+
+
+def test_the_congested_scenario_says_so_in_its_own_file():
+    """경고가 주석에 **있어야** 한다. 이 파일을 복사해 가는 사람이 먼저 읽는다."""
+    text = (CONFIG_DIR / "scenario_seollal_down_congested.yaml").read_text(encoding="utf-8")
+
+    assert "사용자 평형(UE)이 아니다" in text
+    assert "scenario_seollal_down_adoption.yaml" in text      # 비교는 어디서 하는지
