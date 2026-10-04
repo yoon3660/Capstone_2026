@@ -91,6 +91,7 @@ def load_config(
     *,
     soc: str | None = None,
     demand_multiplier: float | None = None,
+    ev_share: float | None = None,
     stage: str | None = None,
     root: Path = PROJECT_ROOT,
 ) -> ScenarioConfig:
@@ -113,6 +114,17 @@ def load_config(
     if demand_multiplier is not None:
         tags.append(f"dm{demand_multiplier:g}")
         overrides["demand.demand_multiplier"] = float(demand_multiplier)
+
+    # EV 비중은 **EV 만** 늘린다. 수요 배율(dm)은 배경 교통량까지 같이 올리므로,
+    # "EV 가 늘면 어떻게 되나" 를 묻는 축으로는 이쪽이 맞다 (#55 · #67).
+    #
+    # ⚠ `demand.ev_share` 를 직접 덮어쓰지 않는다. 그 자리는 **실측**이고, 얹는 것은
+    #   반드시 이름 붙은 레이어로만 얹는다 (#54, `demand_layers.py`). 레이어로 넣어야
+    #   `demand_label` 에 "EV 보급률 25%" 가 찍히고 **모든 그림 부제에 따라 붙는다**.
+    #   직접 덮어쓰면 재현과 가정이 구분되지 않는다 — 그걸 막으려고 만든 장치다.
+    if ev_share is not None:
+        tags.append(f"ev{ev_share * 100:g}")
+        overrides["demand.layers"] = [{"kind": "ev_adoption", "ev_share": float(ev_share)}]
 
     out = cfg.variant("__".join(tags), overrides) if tags else cfg
     return with_stage(out, stage) if stage is not None else out

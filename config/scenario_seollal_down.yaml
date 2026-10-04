@@ -41,6 +41,13 @@ demand:
   #   UE 와 S0 가 **다른 차량 집합**을 상대하게 되어 비교가 성립하지 않는다.
   #   충전 여부는 수요를 만들 때 한 번만 정한다 (engine/ue_demand.build_trip_demands).
   charge_prob: 0.95
+  # 실측 위에 **가정으로 얹는 것**은 전부 여기로만 들어온다 (#54).
+  #   - 모르는 kind 는 로딩 시점에 거부한다
+  #   - 레이어는 모두 가정이다. 실측은 레이어가 아니라 바탕이다
+  #   - 이름 한 줄이 실행 파라미터와 **모든 그림 부제**에 찍힌다
+  # 비어 있으면 그림 부제가 '가정 레이어 없음' 이 된다 = 순수 재현.
+  #   예: - {kind: ev_adoption, ev_share: 0.25}
+  layers: []
   safety_buffer_km: 30.0    # Rupnik 규칙의 안전버퍼
   low_soc_threshold: 0.2    # 이 아래면 무조건 충전
   # 목적지 분포: 서울에서 출발한 차 중 각 지점을 지나가는 비율 (scripts/build_demand_profile.py)

@@ -521,3 +521,24 @@ def test_sweep_ignores_cells_that_did_not_finish(check_same_world):
     ])
 
     check_same_world(table)
+
+
+def test_ev_share_axis_goes_through_a_named_layer_not_the_measured_slot():
+    """EV 비중 민감도는 **실측 슬롯을 덮어쓰지 않는다** (#54 · #55).
+
+    `demand.ev_share` 는 실측 자리다. 얹는 것은 이름 붙은 레이어로만 얹어야
+    `demand_label` 에 남고 **모든 그림 부제에 따라 붙는다**. 직접 덮어쓰면 몇 주 뒤에
+    "이 그림이 재현이었나 가정이었나" 를 아무도 모르게 된다 — 그걸 막으려고 만든 장치다.
+    """
+    from evdt.runner import load_config
+
+    base = load_config("config/scenario_seollal_down.yaml")
+    assert base.demand.layers == ()
+    assert "가정 레이어 없음" in base.demand_label   # 순수 재현이라고 **명시**된다
+
+    scen = load_config("config/scenario_seollal_down.yaml", ev_share=0.25)
+
+    assert scen.demand.ev_share == base.demand.ev_share   # 실측은 그대로
+    assert [layer.ev_share for layer in scen.demand.layers] == [0.25]
+    assert "EV 보급률 25%" in scen.demand_label
+    assert scen.scenario_id.endswith("__ev25")

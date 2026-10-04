@@ -49,6 +49,7 @@ def check_same_world(table: pd.DataFrame) -> None:
     출발 SoC 프로파일은 **세계가 아니라 차의 상태**를 바꾼다. 그래서 수요 배율이 같으면
     진입 EV 수가 프로파일·시드와 무관하게 같아야 한다 (`ev_count_method: fixed`).
     다르면 칸끼리 **다른 세계**를 비교하고 있는 것이고, 그 표는 아무 말도 할 수 없다.
+    수요 배율과 EV 비중은 세계를 바꾸므로, **그 조합이 같은 칸끼리만** 본다.
 
     실제로 걸린 적이 있다 (#55). DB 에 남아 있던 **#54 이전 run**(진입 EV 8,361)이
     `--overwrite` 없이 "이미 DONE" 으로 건너뛰어져 두 칸만 옛 세계였다. 평균 대기
@@ -61,13 +62,18 @@ def check_same_world(table: pd.DataFrame) -> None:
     if done.empty or "진입EV" not in done:
         return
 
-    bad = {dm: sorted(g["진입EV"].dropna().unique())
-           for dm, g in done.groupby("dm") if g["진입EV"].nunique(dropna=True) > 1}
+    axes = [c for c in ("dm", "ev%") if c in done]
+    bad = {key: sorted(g["진입EV"].dropna().unique())
+           for key, g in done.groupby(axes) if g["진입EV"].nunique(dropna=True) > 1}
     if not bad:
         return
 
-    lines = [f"  수요 배율 ×{dm:g}: 진입 EV 가 {', '.join(f'{v:,.0f}' for v in vals)} 로 갈린다"
-             for dm, vals in bad.items()]
+    def _name(key) -> str:
+        vals = key if isinstance(key, tuple) else (key,)
+        return " · ".join(f"{a}={v:g}" for a, v in zip(axes, vals, strict=True))
+
+    lines = [f"  {_name(key)}: 진입 EV 가 {', '.join(f'{v:,.0f}' for v in vals)} 로 갈린다"
+             for key, vals in bad.items()]
     raise SystemExit(
         "\n[중단] 같은 수요 배율인데 칸마다 진입 EV 가 다르다 — 다른 세계를 비교하려 했다.\n"
         + "\n".join(lines)
@@ -87,6 +93,8 @@ def main() -> int:
     ap.add_argument("--config", default="config/scenario_seollal_down.yaml")
     ap.add_argument("--soc", nargs="+", default=["low", "high"], help="출발 SoC 프로파일 이름들")
     ap.add_argument("--dm", nargs="+", type=float, default=[1.0, 2.0, 3.0], help="수요 배율들")
+    ap.add_argument("--ev-share", nargs="+", type=float, default=[None],
+                    help="EV 비중들 (예: 0.05 0.10 0.15). 빼면 config 값 그대로")
     ap.add_argument("--seeds", nargs="+", type=int, default=None, help="기본: config 의 시드 하나")
     ap.add_argument("--overwrite", action="store_true", help="이미 있는 칸도 다시 돌린다")
     args = ap.parse_args()
@@ -96,20 +104,22 @@ def main() -> int:
 
     for soc in args.soc:
         for dm in args.dm:
-            cfg = load_config(args.config, soc=soc, demand_multiplier=dm)
-            for seed in args.seeds or [cfg.vehicles.seed]:
-                run_id = make_run_id(cfg.scenario_id, cfg.policy.stage, seed, cfg.policy.participation)
-                cell = {"soc": soc, "dm": dm, "seed": seed, "run_id": run_id}
-                cells.append(cell)
+            for ev in args.ev_share:
+                cfg = load_config(args.config, soc=soc, demand_multiplier=dm, ev_share=ev)
+                for seed in args.seeds or [cfg.vehicles.seed]:
+                    run_id = make_run_id(cfg.scenario_id, cfg.policy.stage, seed,
+                                         cfg.policy.participation)
+                    cells.append({"soc": soc, "dm": dm, "ev%": cfg.demand.ev_share * 100,
+                                  "seed": seed, "run_id": run_id})
 
-                if _status(db, run_id) == "DONE" and not args.overwrite:
-                    print(f"\n[건너뜀] {run_id} (이미 DONE)")
-                    continue
+                    if _status(db, run_id) == "DONE" and not args.overwrite:
+                        print(f"\n[건너뜀] {run_id} (이미 DONE)")
+                        continue
 
-                try:
-                    run_once(cfg, seed=seed, overwrite=True)
-                except UENotConverged as exc:
-                    print(f"\n[수렴 실패 → FAILED] {run_id}\n  {exc}")
+                    try:
+                        run_once(cfg, seed=seed, overwrite=True)
+                    except UENotConverged as exc:
+                        print(f"\n[수렴 실패 → FAILED] {run_id}\n  {exc}")
 
     with get_conn(db, readonly=True) as conn:
         kpi = pd.read_sql_query(
