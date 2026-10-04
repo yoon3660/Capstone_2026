@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -214,16 +215,16 @@ def test_gap_plot_is_written(tmp_path):
 
 def test_departure_soc_profiles_are_selectable(cfg: ScenarioConfig):
     """세 프로파일을 이름으로 고를 수 있고, 평균은 분포가 스스로 안다 (#55)."""
-    assert cfg.vehicles.departure_soc == "low"
+    # 기본은 holiday 다 (#55). low 와 high 는 민감도 대조군으로만 남는다.
+    assert cfg.vehicles.departure_soc == "holiday"
     assert {p.name for p in cfg.vehicles.soc_profiles} == {"holiday", "low", "high"}
-    assert cfg.vehicles.soc_beta.mean() == pytest.approx(0.343, abs=0.001)
+    assert cfg.vehicles.soc_beta.mean() == pytest.approx(0.665, abs=0.001)
+
+    low = cfg.variant("soc-low", {"vehicles.departure_soc": "low"})
+    assert low.vehicles.soc_beta.mean() == pytest.approx(0.343, abs=0.001)
 
     high = cfg.variant("soc-high", {"vehicles.departure_soc": "high"})
     assert high.vehicles.soc_beta.mean() == pytest.approx(0.764, abs=0.001)
-
-    # 진입 SoC 로 쓸 분포. 대조군 둘 사이에 있다
-    holiday = cfg.variant("soc-holiday", {"vehicles.departure_soc": "holiday"})
-    assert holiday.vehicles.soc_beta.mean() == pytest.approx(0.665, abs=0.001)
 
 
 def test_variant_gets_its_own_scenario_and_run_id(cfg: ScenarioConfig):
@@ -234,7 +235,7 @@ def test_variant_gets_its_own_scenario_and_run_id(cfg: ScenarioConfig):
     assert v.demand.demand_multiplier == 2.0
     assert v.config_hash != cfg.config_hash
     assert "departure_soc: high" in v.raw_yaml        # 실제로 쓴 설정이 기록에 남는다
-    assert cfg.vehicles.departure_soc == "low"         # 원본은 그대로
+    assert cfg.vehicles.departure_soc == "holiday"     # 원본은 그대로
 
 
 def test_variant_rejects_unknown_key_and_profile(cfg: ScenarioConfig):
@@ -468,3 +469,55 @@ def test_a_car_that_truly_cannot_make_it_is_still_infeasible():
                                rule=rule, charge_power_factor=1.0)
 
     assert built.n_infeasible == 1
+
+
+# ---------------------------------------------------------------------------
+# 격자 비교의 세계 확인 (#55)
+#
+# 출발 SoC 는 **차의 상태**를 바꾸지 세계를 바꾸지 않는다. 같은 수요 배율 칸끼리
+# 진입 EV 가 다르면 다른 세계를 비교하는 것이고, 그 표는 아무 말도 할 수 없다.
+# 실제로 옛 run 이 "이미 DONE" 으로 건너뛰어져 두 칸만 옛 세계였던 적이 있다.
+# ---------------------------------------------------------------------------
+def _sweep_table(rows):
+    import pandas as pd
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def check_same_world(monkeypatch):
+    """scripts/ 는 패키지가 아니라 sys.path 에 없다 (test_geometry 와 같은 방식)."""
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from sweep_ue import check_same_world as fn
+    return fn
+
+
+def test_sweep_stops_when_a_cell_came_from_another_world(check_same_world):
+    table = _sweep_table([
+        {"soc": "low", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+        {"soc": "low", "dm": 1.0, "진입EV": 8361.0, "상태": "DONE"},   # #54 이전 run
+        {"soc": "holiday", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+    ])
+
+    with pytest.raises(SystemExit, match="다른 세계"):
+        check_same_world(table)
+
+
+def test_sweep_allows_entry_counts_to_differ_across_demand_multipliers(check_same_world):
+    """수요 배율이 다르면 진입 EV 가 **달라야** 한다 — 그건 의도된 세계 변경이다."""
+    table = _sweep_table([
+        {"soc": "holiday", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+        {"soc": "holiday", "dm": 2.0, "진입EV": 37068.0, "상태": "DONE"},
+        {"soc": "low", "dm": 2.0, "진입EV": 37068.0, "상태": "DONE"},
+    ])
+
+    check_same_world(table)      # 터지지 않는다
+
+
+def test_sweep_ignores_cells_that_did_not_finish(check_same_world):
+    """FAILED 칸은 KPI 가 없으니 세계 확인에서 뺀다. 거기서 멈추면 안 된다."""
+    table = _sweep_table([
+        {"soc": "low", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+        {"soc": "low", "dm": 1.0, "진입EV": float("nan"), "상태": "FAILED"},
+    ])
+
+    check_same_world(table)

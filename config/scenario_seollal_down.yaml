@@ -61,7 +61,9 @@ vehicles:
   # 출발 SoC (서울 진입 시점) ~ lo + Beta(a, b) × (hi − lo).  실험 스위치: low | high
   #   python scripts/run_ue.py --soc high      (config 를 고치지 않고 바꿔 돌린다)
   # 이 값이 쏠림의 크기를 거의 다 정한다 (docs/UE_equilibrium.md §5).
-  departure_soc: low
+  # 진입 SoC 분포. 근거와 반대 근거는 docs/departure_soc.md (#55).
+  # ⚠ low 는 Rupnik 의 **휴게소 도착 SoC** 를 진입 SoC 로 쓰던 #55 이전 기본값이다.
+  departure_soc: holiday
   soc_profiles:
     # ── 진입 SoC = 고속도로에 **올라올 때** 배터리. 휴게소 도착 SoC 가 아니다 (#55) ──
     holiday:                # 평균 66.5% · 중앙값 65.8% · p5 40.3%. docs/departure_soc.md

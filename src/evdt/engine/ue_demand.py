@@ -98,6 +98,7 @@ class DemandBuild:
     n_opportunity: int = 0    # 필요 없는데 들른 김에 충전하는 차 (#54 기회 충전)
     n_entry_lifted: int = 0   # 진입 가드레일에 걸려 SoC 가 올라간 차 (#55)
     soc_lift_total: float = 0.0   # 올린 SoC 의 합. 평균은 호출자가 n_entry_lifted 로 나눈다
+    n_soc_floored: int = 0    # 행태 바닥(분포의 lo)에 걸린 차. 생성기가 세서 넘겨준다 (#55)
 
 
 @dataclass(frozen=True)

@@ -61,7 +61,9 @@ demand:
 vehicles:
   seed: 7
   # 출발 SoC — 하행과 같은 두 프로파일 (scenario_seollal_down.yaml 설명 참고)
-  departure_soc: low
+  # 진입 SoC 분포. 근거와 반대 근거는 docs/departure_soc.md (#55).
+  # ⚠ low 는 Rupnik 의 **휴게소 도착 SoC** 를 진입 SoC 로 쓰던 #55 이전 기본값이다.
+  departure_soc: holiday
   soc_profiles:
     # 진입 SoC = 고속도로에 올라올 때 배터리. 하행과 같은 값을 쓴다 (#55).
     # 상행 진입 SoC 가 하행보다 낮다는 가설은 설계문서 §2 대로 고정 가정이 아니라

@@ -207,6 +207,9 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         charge_power_factor=charge_power_factor,
         rng=np.random.default_rng([cfg.vehicles.seed, OPPORTUNITY_STREAM]),
     )
+    # 행태 바닥은 생성기가 걸고, 도달 가능성은 build_trip_demands 가 건다 (#55).
+    # 둘을 한 군데 모아 두어야 KPI 셋을 같이 읽을 수 있다
+    built = dataclasses.replace(built, n_soc_floored=int(evs.attrs.get("n_soc_floored", 0)))
     return built, range_factor, charge_power_factor
 
 
@@ -390,6 +393,15 @@ def run_once(
             "n_ev_no_charge": (built.n_no_charge, "count"),
             "n_ev_infeasible": (built.n_infeasible, "count"),
             "departure_soc_mean": (soc_mean, "ratio"),
+            # 진입 SoC 가드레일이 몇 대를 건드렸나 (#55). 조용히 올리면 진입 SoC 분포가
+            # 선언한 것과 달라지고 그걸 아무도 모르게 된다. **이 수가 크면 가드레일이
+            # 잘 도는 게 아니라 분포가 틀린 것이다** — docs/departure_soc.md §5.
+            "n_soc_floored": (built.n_soc_floored, "count"),
+            "n_entry_lifted": (built.n_entry_lifted, "count"),
+            "soc_lift_mean": (
+                built.soc_lift_total / built.n_entry_lifted if built.n_entry_lifted else 0.0,
+                "ratio",
+            ),
         })
 
         # 수렴 못 하면 gap 이력을 남기고 예외 → RunContext 가 run 을 FAILED 로 기록한다
@@ -778,7 +790,12 @@ KPI_LABELS: dict[str, str] = {
     "n_ev": "진입 EV (대)",
     "n_ev_no_charge": "충전 없이 도착 (대)",
     "n_ev_infeasible": "3회 정차로도 불가 (대)",
-    "departure_soc_mean": "출발 SoC 평균",
+    "departure_soc_mean": "진입 SoC 평균",
+    # 가드레일 셋은 **같이 읽는다** (#55). 분포가 맞으면 셋 다 작아야 한다 —
+    # 커지면 바닥이 아니라 분포(mu·sigma)를 다시 봐야 한다는 신호다
+    "n_soc_floored": "가드레일: 행태 바닥에 걸림 (대)",
+    "n_entry_lifted": "가드레일: 닿을 곳이 없어 올림 (대)",
+    "soc_lift_mean": "가드레일: 평균 올린 SoC",
 }
 
 

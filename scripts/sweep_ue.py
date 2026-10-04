@@ -31,6 +31,7 @@ from evdt.paths import default_db_path  # noqa: E402
 from evdt.runner import load_config, run_once  # noqa: E402
 
 COLUMNS = {
+    "n_ev": "진입EV",
     "n_ev_charging": "충전필요",
     "ue_iterations": "반복",
     "ue_final_gap": "gap",
@@ -40,6 +41,39 @@ COLUMNS = {
     "share_ratio_max": "몰림비",
     "bottleneck_slots": "병목슬롯",
 }
+
+
+def check_same_world(table: pd.DataFrame) -> None:
+    """같은 수요 배율 칸끼리 **같은 차 집합**을 상대했는지 본다.
+
+    출발 SoC 프로파일은 **세계가 아니라 차의 상태**를 바꾼다. 그래서 수요 배율이 같으면
+    진입 EV 수가 프로파일·시드와 무관하게 같아야 한다 (`ev_count_method: fixed`).
+    다르면 칸끼리 **다른 세계**를 비교하고 있는 것이고, 그 표는 아무 말도 할 수 없다.
+
+    실제로 걸린 적이 있다 (#55). DB 에 남아 있던 **#54 이전 run**(진입 EV 8,361)이
+    `--overwrite` 없이 "이미 DONE" 으로 건너뛰어져 두 칸만 옛 세계였다. 평균 대기
+    신뢰구간이 [1, 83] 로 터져서야 알아챘다.
+
+    같은 방어가 `compare_stages.py` 에는 있었는데 여기에는 없었다.
+    """
+
+    done = table[table["상태"] == "DONE"]
+    if done.empty or "진입EV" not in done:
+        return
+
+    bad = {dm: sorted(g["진입EV"].dropna().unique())
+           for dm, g in done.groupby("dm") if g["진입EV"].nunique(dropna=True) > 1}
+    if not bad:
+        return
+
+    lines = [f"  수요 배율 ×{dm:g}: 진입 EV 가 {', '.join(f'{v:,.0f}' for v in vals)} 로 갈린다"
+             for dm, vals in bad.items()]
+    raise SystemExit(
+        "\n[중단] 같은 수요 배율인데 칸마다 진입 EV 가 다르다 — 다른 세계를 비교하려 했다.\n"
+        + "\n".join(lines)
+        + "\n\n  출발 SoC 는 차의 상태만 바꾼다. 진입 EV 가 달라지는 것은 **옛 코드로 돈 run** 이\n"
+          "  DB 에 남아 건너뛰어졌다는 뜻이다. --overwrite 로 다시 돌려라."
+    )
 
 
 def _status(db, run_id: str) -> str | None:
@@ -91,6 +125,9 @@ def main() -> int:
     table = pd.DataFrame(cells).set_index("run_id").join(wide.reindex(columns=list(COLUMNS)))
     table["상태"] = [status.get(r, "-") for r in table.index]
     table = table.rename(columns=COLUMNS).reset_index(drop=True)
+
+    # 표를 보여주기 **전에** 같은 세계인지 확인한다. 틀린 표는 안 내는 게 낫다
+    check_same_world(table)
 
     for col in ("평균대기", "P95대기", "최악휴게소"):
         table[col] = table[col].round(1)
