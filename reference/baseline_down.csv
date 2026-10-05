@@ -1,19 +1,23 @@
 metric,label,mean
-wait_mean_min,평균 대기 (분),20.47764586427698
-wait_p95_min,P95 대기 (분),74.27455973041747
-wait_max_min,최대 대기 (분),105.56666462289137
-wait_worst_station_min,최악 휴게소 평균 대기 (분),62.0731685818691
-bottleneck_slots,병목 슬롯 (칸),89.3
-share_ratio_max,몰림비 (수요몫÷충전기몫 최대),2.110025978049537
-dwell_total_h,총 체류 (시간),4774.001277805782
-n_ev_charging,충전 필요 EV (대),10035.2
-n_charge_visits,충전 정차 (회),9093.3
-n_escaped,이탈 합계 (대),1140.8
-n_escaped_balked,이탈: 줄이 길어서 (대),112.95
+wait_mean_min,평균 대기 (분),0.0026275100483046
+wait_p95_min,P95 대기 (분),0.0
+wait_max_min,최대 대기 (분),1.8364920015598103
+wait_worst_station_min,최악 휴게소 평균 대기 (분),0.031543943624766
+bottleneck_slots,병목 슬롯 (칸),0.0
+share_ratio_max,몰림비 (수요몫÷충전기몫 최대),4.468080404416579
+dwell_total_h,총 체류 (시간),298.2255760029515
+n_ev_charging,충전 필요 EV (대),1841.65
+n_charge_visits,충전 정차 (회),1907.5
+n_escaped,이탈 합계 (대),0.2
+n_escaped_balked,이탈: 줄이 길어서 (대),0.15
 n_escaped_stranded,이탈: 정책이 몰아넣음 (대),0.0
-ue_final_gap,UE 마지막 gap,0.0075941626510678
-ue_iterations,UE 반복 수,9.8
+ue_final_gap,UE 마지막 gap,0.0029540170890807
+ue_iterations,UE 반복 수,0.75
+ue_first_sweep_pass,⚠ 첫 sweep 통과 (균형 아님),1.0
 n_ev,진입 EV (대),18534.0
-n_ev_no_charge,충전 없이 도착 (대),8498.8
-n_ev_infeasible,3회 정차로도 불가 (대),1027.85
-departure_soc_mean,출발 SoC 평균,0.3428571428571428
+n_ev_no_charge,충전 없이 도착 (대),16692.35
+n_ev_infeasible,3회 정차로도 불가 (대),0.05
+departure_soc_mean,진입 SoC 평균,0.6652733778454742
+n_soc_floored,가드레일: 행태 바닥에 걸림 (대),294.0
+n_entry_lifted,가드레일: 닿을 곳이 없어 올림 (대),0.2
+soc_lift_mean,가드레일: 평균 올린 SoC,0.0022637255235502

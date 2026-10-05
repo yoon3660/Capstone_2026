@@ -480,14 +480,26 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
     sim = run_charging_des(specs, des_arrivals(built.trips, result),
                            snapshot_every_min=float(cfg.output.snapshot_every_min))
 
-    # 첫 sweep 에 통과하면 **균형이라 부를 수 없다** (#29 가 3% 를 버린 이유다).
-    # 전원이 한 번씩 고르고 끝났다는 뜻이라, "아무도 바꾸고 싶지 않은 상태" 가 아니라
-    # "아직 아무도 다시 안 봤을 뿐" 이다. 조용히 지나가면 엔진 비교의 바닥이 무너진다.
+    # 첫 sweep 에 통과하면 **균형이라 부를 수 없을 수 있다** (#29 가 3% 를 버린 이유다).
+    #
+    # ⚠ 다만 통과에는 **두 가지**가 있고, 최종 gap 이 둘을 가른다 (#55).
+    #   (가) gap 이 tol 에 **간신히** 들어왔다 → gap_tol 이 느슨한 것이다. 전원이 한 번씩
+    #        고르고 끝났을 뿐 "아무도 바꾸고 싶지 않은 상태" 가 아니다. 엔진 비교 불가
+    #   (나) gap 이 tol 보다 **한참 아래**다 → 애초에 바꿀 이유가 없을 만큼 한산하다.
+    #        재현 기준선(충전 필요 1,842대)이 여기다. 균형이 맞다
+    # 숫자만 보고 (가)로 읽으면 멀쩡한 기준선을 버린다.
+    final_gap, tol = result.final_gap, settings.gap_tol
     first_sweep = int(result.history[-1].iteration <= 1)
     if first_sweep:
+        tight = final_gap < tol * 0.5
         log("")
-        log("  ⚠ UE 가 **첫 sweep 에 통과**했다 (반복 1회). gap_tol 이 이 수요에 너무 느슨하다.")
-        log("    이 결과는 균형이 아니라 '한 번 훑은 상태' 다 — 엔진 비교의 기준선으로 쓰지 말 것.")
+        log(f"  ⚠ UE 가 첫 sweep 에 통과했다 (반복 1회, gap {final_gap:.2%} / tol {tol:.1%}).")
+        if tight:
+            log("    gap 이 tol 보다 한참 아래다 — **바꿀 이유가 없을 만큼 한산한** 것이지")
+            log("    gap_tol 이 느슨한 것이 아니다. 기준선으로 써도 된다.")
+        else:
+            log("    gap 이 tol 에 간신히 들어왔다 — 균형이 아니라 '한 번 훑은 상태' 다.")
+            log("    **엔진 비교의 기준선으로 쓰지 말 것.**")
 
     return (
         list(sim.charge_events),
@@ -809,8 +821,9 @@ KPI_LABELS: dict[str, str] = {
     "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
-    # 1 이면 균형이 아니다 — 전원이 한 번씩 고르고 끝났다 (#29 · #55).
-    "ue_first_sweep_pass": "⚠ 첫 sweep 통과 (균형 아님)",
+    # 1 이면 반복 1회로 끝났다. **ue_final_gap 과 같이 읽는다** (#55) — gap 이 tol 에
+    # 간신히 들어왔으면 균형이 아니고, 한참 아래면 그냥 한산한 것이다
+    "ue_first_sweep_pass": "⚠ 첫 sweep 통과 (gap 과 같이 볼 것)",
     "n_ev": "진입 EV (대)",
     "n_ev_no_charge": "충전 없이 도착 (대)",
     "n_ev_infeasible": "3회 정차로도 불가 (대)",
