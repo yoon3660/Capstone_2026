@@ -31,7 +31,7 @@ from evdt.world.charge_decision import (
     can_reach_destination,
     can_reach_station_with_buffer,
 )
-from evdt.world.charging import CurveSegment
+from evdt.world.charging import CurveSegment, energy_for_distance_kwh
 
 #: SoC 비교 허용 오차 (charge_decision 과 같다)
 SOC_EPS = 1e-9
@@ -96,6 +96,9 @@ class DemandBuild:
     n_no_charge: int          # 충전 없이 목적지까지 가는 차
     n_infeasible: int         # max_stops 안에서 목적지까지 갈 계획이 없는 차 (결과에서 빠진다)
     n_opportunity: int = 0    # 필요 없는데 들른 김에 충전하는 차 (#54 기회 충전)
+    n_entry_lifted: int = 0   # 진입 가드레일에 걸려 SoC 가 올라간 차 (#55)
+    soc_lift_total: float = 0.0   # 올린 SoC 의 합. 평균은 호출자가 n_entry_lifted 로 나눈다
+    n_soc_floored: int = 0    # 행태 바닥(분포의 lo)에 걸린 차. 생성기가 세서 넘겨준다 (#55)
 
 
 @dataclass(frozen=True)
@@ -247,6 +250,49 @@ def enumerate_plans(
     return () if needs_charge else None
 
 
+def entry_soc_floor(
+    stations: Sequence[Mapping],
+    *,
+    entry_offset_km: float,
+    dest_offset_km: float,
+    battery_kwh: float,
+    consumption_kwh_km: float,
+    rule: ChargeRule,
+) -> float:
+    """진입 가드레일 — 이 지점에서 고속도로를 타려면 최소 몇 %는 있어야 하나 (#55).
+
+    **행태 바닥(config 의 `lo`)만으로는 부족하다.** 바닥은 위치를 모르기 때문이다.
+    평사휴게소는 앞 휴게소와 52.5 km 떨어져 있어서, 260 km 지점에 바닥값으로 진입한
+    차도 거기까지 못 간다. 현실에서는 그 상태로 고속도로를 타지 않는다 — 진입 전에
+    충전하거나 아예 안 탄다.
+
+    그래서 **목적지까지 가거나, 적어도 바로 다음 휴게소까지는 버퍼를 남기고 갈 수
+    있어야** 한다는 조건을 둔다. 돌려주는 값은 그 둘 중 **싼 쪽**에 필요한 SoC 다.
+
+    닿을 휴게소가 아예 없으면(코리도 끝자락) 목적지까지 가는 데 필요한 SoC 를
+    돌려준다 — 그마저 안 되면 애초에 그 통행이 성립하지 않는다.
+    """
+
+    def soc_for(distance_km: float) -> float:
+        need = energy_for_distance_kwh(
+            max(distance_km, 0.0) + rule.buffer_km, consumption_kwh_km, rule.range_factor
+        )
+        return min(need / battery_kwh, 1.0)
+
+    # 목적지까지 직접 가는 데 필요한 SoC (도착 시 남길 양도 포함)
+    to_dest = soc_for(dest_offset_km - entry_offset_km)
+    to_dest = min(max(to_dest, rule.reserve_soc), 1.0)
+
+    nxt = next(
+        (float(s["offset_km"]) for s in stations
+         if entry_offset_km < float(s["offset_km"]) < dest_offset_km),
+        None,
+    )
+    if nxt is None:
+        return to_dest
+    return min(to_dest, soc_for(nxt - entry_offset_km))
+
+
 def build_trip_demands(
     evs: Iterable[Mapping],
     stations: Sequence[Mapping],
@@ -271,19 +317,37 @@ def build_trip_demands(
     trips: list[TripDemand] = []
     n_ev = n_no_charge = n_infeasible = 0
     n_opportunity = 0
+    n_entry_lifted = 0
+    soc_lift_total = 0.0
     draw = (rng or np.random.default_rng(0)).random
 
     for ev in evs:
         n_ev += 1
         v = vclasses[str(ev["vclass_id"])]
         entry_km = float(ev.get("entry_offset_km", entry_offset_km))
+        dest_km = float(ev["dest_offset_km"])
+
+        # 진입 가드레일 (#55). 행태 바닥은 위치를 모르므로 여기서 한 번 더 건다.
+        # 올린 차는 **반드시 세어서 KPI 로 남긴다** — 조용히 올리면 진입 SoC 분포가
+        # 선언한 것과 달라지고, 그걸 아무도 모르게 된다.
+        soc0 = float(ev["initial_soc"])
+        floor = entry_soc_floor(
+            stations, entry_offset_km=entry_km, dest_offset_km=dest_km,
+            battery_kwh=float(v["battery_kwh"]),
+            consumption_kwh_km=float(v["consumption_kwh_km"]), rule=rule,
+        )
+        if soc0 + SOC_EPS < floor:
+            n_entry_lifted += 1
+            soc_lift_total += floor - soc0
+            soc0 = floor
+
         opportunity = _wants_opportunity_charge(ev, v, entry_km, rule, draw)
         n_opportunity += int(opportunity)
         plans = enumerate_plans(
             stations,
             entry_offset_km=entry_km,
-            dest_offset_km=float(ev["dest_offset_km"]),
-            soc0=float(ev["initial_soc"]),
+            dest_offset_km=dest_km,
+            soc0=soc0,
             battery_kwh=float(v["battery_kwh"]),
             consumption_kwh_km=float(v["consumption_kwh_km"]),
             rule=rule,
@@ -310,16 +374,19 @@ def build_trip_demands(
                 vclass_id=str(ev["vclass_id"]),
                 entry_min=float(ev["entry_time_min"]),
                 entry_offset_km=entry_km,
-                dest_offset_km=float(ev["dest_offset_km"]),
+                dest_offset_km=dest_km,
                 battery_kwh=float(v["battery_kwh"]),
                 vmax_kw=float(v["vmax_kw"]),
                 curve=tuple(curves[str(ev["vclass_id"])]),
                 cold_factor=charge_power_factor,
                 plans=plans + escape,
-                soc0=float(ev["initial_soc"]),
+                # 가드레일을 거친 값이어야 한다. 원본을 쓰면 계획은 올린 SoC 로 세우고
+                # 시뮬레이션은 원래 SoC 로 달리게 되어 둘이 어긋난다.
+                soc0=soc0,
                 consumption_kwh_km=float(v["consumption_kwh_km"]),
                 wants_opportunity_charge=opportunity,
             )
         )
 
-    return DemandBuild(tuple(trips), n_ev, n_no_charge, n_infeasible, n_opportunity)
+    return DemandBuild(tuple(trips), n_ev, n_no_charge, n_infeasible, n_opportunity,
+                       n_entry_lifted, soc_lift_total)

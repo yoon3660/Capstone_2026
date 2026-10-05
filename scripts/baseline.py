@@ -42,7 +42,12 @@ from evdt.runner import parse_seeds, run_experiment  # noqa: E402
 REFERENCE = ROOT / "reference"
 
 #: 기준선에 쓰는 설정. **가정 레이어는 얹지 않는다** — 기준선은 재현 그 자체다.
-BASELINE = {"departure_soc": "low"}
+#:
+#: ⚠ 전에는 여기에 `{"departure_soc": "low"}` 가 박혀 있었다. #55 가 기본 프로파일을
+#:   `holiday` 로 바꾼 뒤에도 기준선만 `low` 를 계속 쓰고 있었다 — `low` 는 Rupnik 의
+#:   **휴게소 도착 SoC** 를 진입 SoC 로 쓰던 값이라, 기준선이 "재현" 이 아니라 "옛 오류의
+#:   재현" 이 되고 있었다. 지금은 **시나리오 파일의 기본값을 그대로 따른다.**
+BASELINE: dict = {}
 
 #: 차이가 이보다 크면 표시한다. 시드 20개의 신뢰구간 폭 정도로 잡았다
 MOVED_PCT = 3.0

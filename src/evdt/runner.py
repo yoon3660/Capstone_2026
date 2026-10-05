@@ -91,6 +91,7 @@ def load_config(
     *,
     soc: str | None = None,
     demand_multiplier: float | None = None,
+    ev_share: float | None = None,
     stage: str | None = None,
     root: Path = PROJECT_ROOT,
 ) -> ScenarioConfig:
@@ -114,6 +115,17 @@ def load_config(
         tags.append(f"dm{demand_multiplier:g}")
         overrides["demand.demand_multiplier"] = float(demand_multiplier)
 
+    # EV 비중은 **EV 만** 늘린다. 수요 배율(dm)은 배경 교통량까지 같이 올리므로,
+    # "EV 가 늘면 어떻게 되나" 를 묻는 축으로는 이쪽이 맞다 (#55 · #67).
+    #
+    # ⚠ `demand.ev_share` 를 직접 덮어쓰지 않는다. 그 자리는 **실측**이고, 얹는 것은
+    #   반드시 이름 붙은 레이어로만 얹는다 (#54, `demand_layers.py`). 레이어로 넣어야
+    #   `demand_label` 에 "EV 보급률 25%" 가 찍히고 **모든 그림 부제에 따라 붙는다**.
+    #   직접 덮어쓰면 재현과 가정이 구분되지 않는다 — 그걸 막으려고 만든 장치다.
+    if ev_share is not None:
+        tags.append(f"ev{ev_share * 100:g}")
+        overrides["demand.layers"] = [{"kind": "ev_adoption", "ev_share": float(ev_share)}]
+
     out = cfg.variant("__".join(tags), overrides) if tags else cfg
     return with_stage(out, stage) if stage is not None else out
 
@@ -123,8 +135,9 @@ def with_seed(cfg: ScenarioConfig, seed: int) -> ScenarioConfig:
 
 
 def departure_soc_mean(cfg: ScenarioConfig) -> float:
-    b = cfg.vehicles.soc_beta
-    return b.lo + b.a / (b.a + b.b) * (b.hi - b.lo)
+    """진입 SoC 분포의 평균. 분포 종류와 무관하다 (#55)."""
+
+    return cfg.vehicles.soc_beta.mean()
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +219,9 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         charge_power_factor=charge_power_factor,
         rng=np.random.default_rng([cfg.vehicles.seed, OPPORTUNITY_STREAM]),
     )
+    # 행태 바닥은 생성기가 걸고, 도달 가능성은 build_trip_demands 가 건다 (#55).
+    # 둘을 한 군데 모아 두어야 KPI 셋을 같이 읽을 수 있다
+    built = dataclasses.replace(built, n_soc_floored=int(evs.attrs.get("n_soc_floored", 0)))
     return built, range_factor, charge_power_factor
 
 
@@ -389,6 +405,15 @@ def run_once(
             "n_ev_no_charge": (built.n_no_charge, "count"),
             "n_ev_infeasible": (built.n_infeasible, "count"),
             "departure_soc_mean": (soc_mean, "ratio"),
+            # 진입 SoC 가드레일이 몇 대를 건드렸나 (#55). 조용히 올리면 진입 SoC 분포가
+            # 선언한 것과 달라지고 그걸 아무도 모르게 된다. **이 수가 크면 가드레일이
+            # 잘 도는 게 아니라 분포가 틀린 것이다** — docs/departure_soc.md §5.
+            "n_soc_floored": (built.n_soc_floored, "count"),
+            "n_entry_lifted": (built.n_entry_lifted, "count"),
+            "soc_lift_mean": (
+                built.soc_lift_total / built.n_entry_lifted if built.n_entry_lifted else 0.0,
+                "ratio",
+            ),
         })
 
         # 수렴 못 하면 gap 이력을 남기고 예외 → RunContext 가 run 을 FAILED 로 기록한다
@@ -455,6 +480,27 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
     sim = run_charging_des(specs, des_arrivals(built.trips, result),
                            snapshot_every_min=float(cfg.output.snapshot_every_min))
 
+    # 첫 sweep 에 통과하면 **균형이라 부를 수 없을 수 있다** (#29 가 3% 를 버린 이유다).
+    #
+    # ⚠ 다만 통과에는 **두 가지**가 있고, 최종 gap 이 둘을 가른다 (#55).
+    #   (가) gap 이 tol 에 **간신히** 들어왔다 → gap_tol 이 느슨한 것이다. 전원이 한 번씩
+    #        고르고 끝났을 뿐 "아무도 바꾸고 싶지 않은 상태" 가 아니다. 엔진 비교 불가
+    #   (나) gap 이 tol 보다 **한참 아래**다 → 애초에 바꿀 이유가 없을 만큼 한산하다.
+    #        재현 기준선(충전 필요 1,842대)이 여기다. 균형이 맞다
+    # 숫자만 보고 (가)로 읽으면 멀쩡한 기준선을 버린다.
+    final_gap, tol = result.final_gap, settings.gap_tol
+    first_sweep = int(result.history[-1].iteration <= 1)
+    if first_sweep:
+        tight = final_gap < tol * 0.5
+        log("")
+        log(f"  ⚠ UE 가 첫 sweep 에 통과했다 (반복 1회, gap {final_gap:.2%} / tol {tol:.1%}).")
+        if tight:
+            log("    gap 이 tol 보다 한참 아래다 — **바꿀 이유가 없을 만큼 한산한** 것이지")
+            log("    gap_tol 이 느슨한 것이 아니다. 기준선으로 써도 된다.")
+        else:
+            log("    gap 이 tol 에 간신히 들어왔다 — 균형이 아니라 '한 번 훑은 상태' 다.")
+            log("    **엔진 비교의 기준선으로 쓰지 말 것.**")
+
     return (
         list(sim.charge_events),
         list(sim.snapshots),
@@ -462,6 +508,7 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
         {
             "ue_iterations": (result.history[-1].iteration, "count"),
             "ue_final_gap": (result.final_gap, "ratio"),
+            "ue_first_sweep_pass": (first_sweep, "count"),
         },
     )
 
@@ -774,10 +821,18 @@ KPI_LABELS: dict[str, str] = {
     "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
+    # 1 이면 반복 1회로 끝났다. **ue_final_gap 과 같이 읽는다** (#55) — gap 이 tol 에
+    # 간신히 들어왔으면 균형이 아니고, 한참 아래면 그냥 한산한 것이다
+    "ue_first_sweep_pass": "⚠ 첫 sweep 통과 (gap 과 같이 볼 것)",
     "n_ev": "진입 EV (대)",
     "n_ev_no_charge": "충전 없이 도착 (대)",
     "n_ev_infeasible": "3회 정차로도 불가 (대)",
-    "departure_soc_mean": "출발 SoC 평균",
+    "departure_soc_mean": "진입 SoC 평균",
+    # 가드레일 셋은 **같이 읽는다** (#55). 분포가 맞으면 셋 다 작아야 한다 —
+    # 커지면 바닥이 아니라 분포(mu·sigma)를 다시 봐야 한다는 신호다
+    "n_soc_floored": "가드레일: 행태 바닥에 걸림 (대)",
+    "n_entry_lifted": "가드레일: 닿을 곳이 없어 올림 (대)",
+    "soc_lift_mean": "가드레일: 평균 올린 SoC",
 }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,7 +11,12 @@ import pytest
 import yaml
 
 from evdt.config import ConfigError, ScenarioConfig
-from evdt.engine.ue_demand import ChargeRule, build_trip_demands, enumerate_plans
+from evdt.engine.ue_demand import (
+    ChargeRule,
+    build_trip_demands,
+    entry_soc_floor,
+    enumerate_plans,
+)
 from evdt.io.demand_profile import (
     entry_hourly_volume,
     entry_zone,
@@ -18,6 +24,7 @@ from evdt.io.demand_profile import (
     sample_dest_offsets,
     through_share,
 )
+from evdt.paths import CONFIG_DIR
 from evdt.viz.plots import plot_ue_gap
 
 RULE = ChargeRule(range_factor=1.0, buffer_km=30.0, reserve_soc=0.2, target_soc_cap=0.8, max_stops=3)
@@ -85,9 +92,43 @@ def test_build_counts_every_car_once():
         {"v": ((0.0, 1.0, 150.0),)}, rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2), charge_power_factor=0.6,
     )
 
-    assert (built.n_ev, built.n_no_charge, built.n_infeasible) == (3, 1, 1)
-    assert [t.ev_id for t in built.trips] == ["b"]
+    # c 는 SoC 0.10 으로 진입해 예전에는 infeasible 로 **조용히 빠졌다**. 지금은 진입
+    # 가드레일이 50 km 휴게소에 닿을 만큼(0.16) 올려 주고, 올렸다는 사실을 센다 (#55).
+    assert (built.n_ev, built.n_no_charge, built.n_infeasible) == (3, 1, 0)
+    assert (built.n_entry_lifted, round(built.soc_lift_total, 4)) == (1, 0.06)
+    assert [t.ev_id for t in built.trips] == ["b", "c"]
     assert built.trips[0].cold_factor == 0.6
+
+
+def test_entry_guardrail_lifts_only_what_cannot_reach_anything():
+    """바닥은 **위치마다 다르다** — 다음 휴게소가 멀수록 높아진다 (#55).
+
+    행태 바닥(config 의 lo)만으로는 안 되는 이유가 이것이다. 바닥은 어디서 탔는지를
+    모르는데, 휴게소 간격은 구간마다 52.5 km 까지 벌어진다.
+    """
+    kw = dict(dest_offset_km=390.0, battery_kwh=100.0, consumption_kwh_km=0.2,
+              rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2))
+
+    # 0 km 진입: 다음 휴게소가 50 km → (50+30)×0.2/100 = 0.16
+    assert entry_soc_floor(STATIONS, entry_offset_km=0.0, **kw) == pytest.approx(0.16)
+    # 60 km 진입: 다음 휴게소가 150 km 로 90 km 떨어져 있다 → 0.24
+    assert entry_soc_floor(STATIONS, entry_offset_km=60.0, **kw) == pytest.approx(0.24)
+    # 앞에 휴게소가 없으면 목적지까지 가는 데 필요한 값으로 떨어진다
+    assert entry_soc_floor(STATIONS, entry_offset_km=360.0, **kw) == pytest.approx(0.2)
+
+
+def test_entry_guardrail_leaves_a_well_charged_car_alone():
+    """충분히 채우고 들어온 차는 건드리지 않는다. 가드레일은 꼬리에만 닿는다."""
+    evs = [{"ev_id": "full", "vclass_id": "v", "entry_time_min": 0.0,
+            "initial_soc": 0.70, "dest_offset_km": 390.0}]
+    built = build_trip_demands(
+        evs, STATIONS, {"v": {"battery_kwh": 100.0, "vmax_kw": 150.0, "consumption_kwh_km": 0.2}},
+        {"v": ((0.0, 1.0, 150.0),)}, rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2),
+        charge_power_factor=0.6,
+    )
+
+    assert built.n_entry_lifted == 0
+    assert built.trips[0].soc0 == pytest.approx(0.70)
 
 
 # ---------------------------------------------------------------------------
@@ -173,17 +214,18 @@ def test_gap_plot_is_written(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _mean(beta) -> float:
-    return beta.lo + beta.a / (beta.a + beta.b) * (beta.hi - beta.lo)
-
-
 def test_departure_soc_profiles_are_selectable(cfg: ScenarioConfig):
-    assert cfg.vehicles.departure_soc == "low"
-    assert {p.name for p in cfg.vehicles.soc_profiles} == {"low", "high"}
-    assert _mean(cfg.vehicles.soc_beta) == pytest.approx(0.343, abs=0.001)
+    """세 프로파일을 이름으로 고를 수 있고, 평균은 분포가 스스로 안다 (#55)."""
+    # 기본은 holiday 다 (#55). low 와 high 는 민감도 대조군으로만 남는다.
+    assert cfg.vehicles.departure_soc == "holiday"
+    assert {p.name for p in cfg.vehicles.soc_profiles} == {"holiday", "low", "high"}
+    assert cfg.vehicles.soc_beta.mean() == pytest.approx(0.665, abs=0.001)
+
+    low = cfg.variant("soc-low", {"vehicles.departure_soc": "low"})
+    assert low.vehicles.soc_beta.mean() == pytest.approx(0.343, abs=0.001)
 
     high = cfg.variant("soc-high", {"vehicles.departure_soc": "high"})
-    assert _mean(high.vehicles.soc_beta) == pytest.approx(0.764, abs=0.001)
+    assert high.vehicles.soc_beta.mean() == pytest.approx(0.764, abs=0.001)
 
 
 def test_variant_gets_its_own_scenario_and_run_id(cfg: ScenarioConfig):
@@ -194,7 +236,7 @@ def test_variant_gets_its_own_scenario_and_run_id(cfg: ScenarioConfig):
     assert v.demand.demand_multiplier == 2.0
     assert v.config_hash != cfg.config_hash
     assert "departure_soc: high" in v.raw_yaml        # 실제로 쓴 설정이 기록에 남는다
-    assert cfg.vehicles.departure_soc == "low"         # 원본은 그대로
+    assert cfg.vehicles.departure_soc == "holiday"     # 원본은 그대로
 
 
 def test_variant_rejects_unknown_key_and_profile(cfg: ScenarioConfig):
@@ -428,3 +470,112 @@ def test_a_car_that_truly_cannot_make_it_is_still_infeasible():
                                rule=rule, charge_power_factor=1.0)
 
     assert built.n_infeasible == 1
+
+
+# ---------------------------------------------------------------------------
+# 격자 비교의 세계 확인 (#55)
+#
+# 출발 SoC 는 **차의 상태**를 바꾸지 세계를 바꾸지 않는다. 같은 수요 배율 칸끼리
+# 진입 EV 가 다르면 다른 세계를 비교하는 것이고, 그 표는 아무 말도 할 수 없다.
+# 실제로 옛 run 이 "이미 DONE" 으로 건너뛰어져 두 칸만 옛 세계였던 적이 있다.
+# ---------------------------------------------------------------------------
+def _sweep_table(rows):
+    import pandas as pd
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def check_same_world(monkeypatch):
+    """scripts/ 는 패키지가 아니라 sys.path 에 없다 (test_geometry 와 같은 방식)."""
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from sweep_ue import check_same_world as fn
+    return fn
+
+
+def test_sweep_stops_when_a_cell_came_from_another_world(check_same_world):
+    table = _sweep_table([
+        {"soc": "low", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+        {"soc": "low", "dm": 1.0, "진입EV": 8361.0, "상태": "DONE"},   # #54 이전 run
+        {"soc": "holiday", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+    ])
+
+    with pytest.raises(SystemExit, match="다른 세계"):
+        check_same_world(table)
+
+
+def test_sweep_allows_entry_counts_to_differ_across_demand_multipliers(check_same_world):
+    """수요 배율이 다르면 진입 EV 가 **달라야** 한다 — 그건 의도된 세계 변경이다."""
+    table = _sweep_table([
+        {"soc": "holiday", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+        {"soc": "holiday", "dm": 2.0, "진입EV": 37068.0, "상태": "DONE"},
+        {"soc": "low", "dm": 2.0, "진입EV": 37068.0, "상태": "DONE"},
+    ])
+
+    check_same_world(table)      # 터지지 않는다
+
+
+def test_sweep_ignores_cells_that_did_not_finish(check_same_world):
+    """FAILED 칸은 KPI 가 없으니 세계 확인에서 뺀다. 거기서 멈추면 안 된다."""
+    table = _sweep_table([
+        {"soc": "low", "dm": 1.0, "진입EV": 18534.0, "상태": "DONE"},
+        {"soc": "low", "dm": 1.0, "진입EV": float("nan"), "상태": "FAILED"},
+    ])
+
+    check_same_world(table)
+
+
+def test_ev_share_axis_goes_through_a_named_layer_not_the_measured_slot():
+    """EV 비중 민감도는 **실측 슬롯을 덮어쓰지 않는다** (#54 · #55).
+
+    `demand.ev_share` 는 실측 자리다. 얹는 것은 이름 붙은 레이어로만 얹어야
+    `demand_label` 에 남고 **모든 그림 부제에 따라 붙는다**. 직접 덮어쓰면 몇 주 뒤에
+    "이 그림이 재현이었나 가정이었나" 를 아무도 모르게 된다 — 그걸 막으려고 만든 장치다.
+    """
+    from evdt.runner import load_config
+
+    base = load_config("config/scenario_seollal_down.yaml")
+    assert base.demand.layers == ()
+    assert "가정 레이어 없음" in base.demand_label   # 순수 재현이라고 **명시**된다
+
+    scen = load_config("config/scenario_seollal_down.yaml", ev_share=0.25)
+
+    assert scen.demand.ev_share == base.demand.ev_share   # 실측은 그대로
+    assert [layer.ev_share for layer in scen.demand.layers] == [0.25]
+    assert "EV 보급률 25%" in scen.demand_label
+    assert scen.scenario_id.endswith("__ev25")
+
+
+# ---------------------------------------------------------------------------
+# 세 시나리오 (#55)
+#
+# 재현 · 균형 시나리오 · 혼잡 시나리오. 셋을 가르는 것은 **gap_tol 과 레이어**이고,
+# 혼잡 시나리오는 균형이 아니다 — 그 사실이 조용히 묻히면 엔진 비교의 바닥이 무너진다.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("name", "gap_tol", "layers", "is_equilibrium"),
+    [
+        ("scenario_seollal_down.yaml", 0.008, 0, True),
+        ("scenario_seollal_down_adoption.yaml", 0.008, 2, True),
+        ("scenario_seollal_down_congested.yaml", 0.05, 2, False),
+    ],
+)
+def test_the_three_scenarios_differ_only_where_they_should(
+    name, gap_tol, layers, is_equilibrium
+):
+    cfg = ScenarioConfig.from_yaml(CONFIG_DIR / name)
+
+    assert cfg.policy.ue.gap_tol == pytest.approx(gap_tol)
+    assert len(cfg.demand.layers) == layers
+    # 실측 슬롯은 셋 다 같다. 다른 것은 **얹은 가정**뿐이다
+    assert cfg.demand.ev_share == pytest.approx(0.05)
+    assert cfg.vehicles.departure_soc == "holiday"
+    # 균형이 아닌 쪽은 scenario_id 와 label 로 먼저 드러나야 한다
+    assert ("congested" in cfg.scenario_id) is not is_equilibrium
+
+
+def test_the_congested_scenario_says_so_in_its_own_file():
+    """경고가 주석에 **있어야** 한다. 이 파일을 복사해 가는 사람이 먼저 읽는다."""
+    text = (CONFIG_DIR / "scenario_seollal_down_congested.yaml").read_text(encoding="utf-8")
+
+    assert "사용자 평형(UE)이 아니다" in text
+    assert "scenario_seollal_down_adoption.yaml" in text      # 비교는 어디서 하는지
