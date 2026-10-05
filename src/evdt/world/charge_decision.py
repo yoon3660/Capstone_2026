@@ -59,8 +59,23 @@ def calculate_target_soc(
     buffer_km: float,
     target_soc_cap: float = 0.8,
     arrival_reserve_soc: float = 0.0,
+    habit_soc: float = 0.0,
 ) -> float:
-    """목적지까지 필요한 에너지와 안전 여유로 목표 SoC를 계산한다."""
+    """목적지까지 필요한 에너지와 안전 여유로 목표 SoC를 계산한다.
+
+    `habit_soc` — **사람은 "필요한 만큼" 만 채우지 않는다** (#82).
+
+    이 값을 넣기 전 우리 모델은 목적지까지 갈 만큼만 채웠고, 그 결과 충전 종료 SoC 가
+    평균 52.9% 였다. 국내 실측은 **85%** 다 (김범일·안근원·신희철 2022, 대한교통학회지
+    40(5) — EV Magazine 2021 이용실태 설문 기준 "잔량 30% 에서 85% 까지"). 충전시간이
+    평균 9.1분밖에 안 나왔고, **그만큼 대기가 과소평가됐다.**
+
+    그래서 목표를 "필요량 + 여유" 와 `habit_soc` 중 **큰 쪽**으로 둔다. 상한
+    (`target_soc_cap`)은 그대로 천장이다 — 급속충전은 80% 를 넘기면 급격히 느려져서
+    실제로 거기서 끊는 사람이 많다.
+
+    0.0 이면 이전 동작 그대로다 (필요한 만큼만).
+    """
 
     if battery_kwh <= 0:
         raise ValueError("배터리 용량은 0보다 커야 합니다.")
@@ -73,6 +88,9 @@ def calculate_target_soc(
 
     if not 0 <= arrival_reserve_soc <= 1:
         raise ValueError("도착 시 최소 SoC는 0~1이어야 합니다.")
+
+    if not 0 <= habit_soc <= 1:
+        raise ValueError("습관 목표 SoC는 0~1이어야 합니다.")
 
     # 목적지까지 필요한 에너지
     required_kwh = energy_for_distance_kwh(
@@ -94,7 +112,8 @@ def calculate_target_soc(
     # 30km 버퍼와 도착 시 최소 SoC 중 더 큰 안전 여유를 적용
     safety_reserve_soc = max(buffer_soc, arrival_reserve_soc)
 
-    return min(required_soc + safety_reserve_soc, target_soc_cap)
+    # 필요량과 습관 중 **큰 쪽**. 상한은 그대로 천장이다 (#82)
+    return min(max(required_soc + safety_reserve_soc, habit_soc), target_soc_cap)
 
 
 def can_reach_destination(

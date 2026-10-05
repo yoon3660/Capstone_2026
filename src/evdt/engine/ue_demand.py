@@ -121,6 +121,9 @@ class ChargeRule:
     #:
     #: ⚠ 120분은 잠정값이다. 근거는 #64 (충전 실측 조사) 에서.
     #: 이 값이 **대기의 실질적인 상한**이 되므로 결과에 직접 영향을 준다.
+    #: 사람은 "필요한 만큼" 만 채우지 않는다 (#82). 국내 실측 85% (김범일 외 2022).
+    #: 0.0 이면 필요한 만큼만 — #82 이전 동작이고 기본값이다.
+    habit_soc: float = 0.0
     escape_cost_min: float = 0.0
     opportunity_prob: float = 0.0
     #: 도착 예상 SoC 가 이보다 얇을 때만 기회 충전을 고려한다.
@@ -214,7 +217,8 @@ def enumerate_plans(
                 soc_in,
                 calculate_target_soc(
                     distance_to_dest_km=dest_offset_km - s_off, buffer_km=rule.buffer_km,
-                    target_soc_cap=rule.target_soc_cap, arrival_reserve_soc=rule.reserve_soc, **kw,
+                    target_soc_cap=rule.target_soc_cap, arrival_reserve_soc=rule.reserve_soc,
+                    habit_soc=rule.habit_soc, **kw,
                 ),
             )
 
