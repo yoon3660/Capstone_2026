@@ -42,10 +42,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+# ⚠ `queue_rule` 을 직접 임포트하지 않는다. 큐 계산이 필요한 엔진 코드는 **원장을
+# 거친다** — 호출자가 늘면 규칙이 갈라진다
+# (tests/test_queue_rule.py::test_queue_rule_has_at_most_two_callers).
+from evdt.engine.ledger import Arrival
 from evdt.engine.s0 import ESCAPE_NO_PLAN, NO_CHARGE, S0Policy, S0Settings, balked_at
 from evdt.interfaces import EVState, WorldView
 from evdt.world.charge_decision import calculate_arrival_soc, can_reach_station_with_buffer
-from evdt.world.queue_rule import Arrival
 
 #: SoC 비교 허용 오차 (s0 과 같다)
 SOC_EPS = 1e-9
