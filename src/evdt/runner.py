@@ -207,6 +207,7 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         target_soc_cap=cfg.vehicles.target_soc_cap,
         max_stops=cfg.policy.ue.max_stops,
         escape_cost_min=cfg.demand.escape_cost_min,
+        escape_cost_sigma=cfg.demand.escape_cost_sigma,
         opportunity_prob=opp_prob,
         opportunity_soc_margin=opp_margin,
     )
@@ -318,6 +319,7 @@ def _sim_evs(trips: Sequence) -> list[SimEV]:
             consumption_kwh_km=t.consumption_kwh_km, vmax_kw=t.vmax_kw,
             curve=t.curve, cold_factor=t.cold_factor,
             wants_opportunity_charge=t.wants_opportunity_charge,
+            escape_cost_min=t.escape_cost_min,
         )
         for t in trips
     ]
