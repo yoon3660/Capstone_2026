@@ -116,12 +116,48 @@ def ours(config: str, seed: int) -> pd.Series:
     return pd.Series(dest - entry, name="ours")
 
 
-def measured(path: Path) -> pd.Series | None:
+def od_subset(config: str) -> tuple[str, str]:
+    """이 시나리오와 **같은 기간·같은 방향**의 OD 만 쓴다 (#97).
+
+    전부 합쳐 쓰면 **설 연휴 시나리오를 설 + 평시를 섞은 것과 비교**한다. 그러면
+    상행과 하행의 "실측" 열이 똑같은 숫자로 나오는데, 그게 틀렸다는 신호였다.
+
+    실제로 재 보면 기간은 영향이 있고 방향은 거의 없다 — 그래도 둘 다 거른다.
+    "거의 없다" 는 지금 자료에서 그렇다는 것이고, 바뀌면 조용히 틀리기 때문이다.
+
+        설   평균 37.3km (DOWN 37.2 · UP 37.5)   <190km 98.1%
+        평시 평균 33.6km                          <190km 98.8%
+    """
+
+    name = Path(config).stem
+    period = "normal" if "base" in name or "weekend" in name else "holiday"
+    direction = "UP" if "_up" in name else "DOWN"
+    return period, direction
+
+
+def measured(path: Path, period: str, direction: str) -> pd.Series | None:
     """실측 TCS OD 의 통행거리. 없으면 None."""
 
     if not path.exists():
         return None
     od = pd.read_parquet(path)
+
+    # 기간·방향을 거른다. 열이 없으면 거르지 않고 **그 사실을 말한다**
+    for col, want in (("period", period), ("direction", direction)):
+        if col not in od.columns:
+            print(f"  ⚠ OD 에 {col} 열이 없어 {col} 를 거르지 못했다 — 전체를 쓴다")
+            continue
+        have = set(od[col].astype(str).unique())
+        if want not in have:
+            raise SystemExit(
+                f"\n[중단] OD 의 {col} 에 {want!r} 가 없다. 있는 값: {sorted(have)}\n"
+                "  od_subset() 의 시나리오→OD 대응을 확인하라 (#97)."
+            )
+        od = od[od[col].astype(str) == want]
+
+    if od.empty:
+        raise SystemExit(f"\n[중단] {period}·{direction} 에 해당하는 OD 행이 없다.")
+
     cols = {c.lower(): c for c in od.columns}
     start = next((cols[c] for c in cols if "start" in c and "offset" in c), None)
     end = next((cols[c] for c in cols if "end" in c and "offset" in c), None)
@@ -157,9 +193,11 @@ def main() -> int:
     mine = ours(args.config, args.seed)
     a = describe(mine)
 
+    period, direction = od_subset(args.config)
     print(f"\n{args.config}  seed={args.seed}  통행 {len(mine):,}건")
+    print(f"실측 OD 부분집합: period={period} · direction={direction}  (#97)")
     print("\n=== 통행거리 (km) ===")
-    real = measured(args.od)
+    real = measured(args.od, period, direction)
 
     if real is None:
         for k, v in a.items():
