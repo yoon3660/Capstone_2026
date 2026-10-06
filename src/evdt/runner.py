@@ -31,7 +31,9 @@ import yaml
 
 from evdt.config import ScenarioConfig
 from evdt.demand_layers import effective_ev_share, opportunity_charge
+from evdt.engine.reservation import ReservationLedger
 from evdt.engine.s0 import S0Policy, S0Settings
+from evdt.engine.s1 import S1Policy, S1Settings
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
@@ -277,7 +279,7 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
-RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0")
+RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1")
 
 
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
@@ -525,18 +527,25 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
 
     stage = cfg.policy.stage
 
-    if stage != "S0":
+    if stage not in ("S0", "S1"):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
-    policy = S0Policy(S0Settings(
-        buffer_km=cfg.demand.safety_buffer_km,
-        reserve_soc=cfg.demand.low_soc_threshold,
-        target_soc_cap=cfg.vehicles.target_soc_cap,
-        max_stops=cfg.policy.ue.max_stops,
-        # 이탈 비용은 UE 와 **같은 값**이어야 한다. 한쪽만 다르면 이탈 수 차이가
-        # 정책 차이로 보고된다
-        escape_cost_min=cfg.demand.escape_cost_min,
-    ))
+    # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
+    kw = {
+        "buffer_km": cfg.demand.safety_buffer_km,
+        "reserve_soc": cfg.demand.low_soc_threshold,
+        "target_soc_cap": cfg.vehicles.target_soc_cap,
+        "max_stops": cfg.policy.ue.max_stops,
+        "escape_cost_min": cfg.demand.escape_cost_min,
+    }
+    # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
+    # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
+    ledger = None
+    if stage == "S1":
+        policy = S1Policy(S1Settings(**kw))
+        ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
+    else:
+        policy = S0Policy(S0Settings(**kw))
     amount = ChargeAmount(
         buffer_km=cfg.demand.safety_buffer_km,
         reserve_soc=cfg.demand.low_soc_threshold,
@@ -554,6 +563,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
         cruise_speed_kmh=cfg.demand.cruise_speed_kmh,
         escape_cost_min=cfg.demand.escape_cost_min,
         snapshot_every_min=float(cfg.output.snapshot_every_min),
+        ledger=ledger,
     )
 
     log(f"  Δt {cfg.time.dt_min}분 · decide() 호출 {out.n_decide_calls:,}번 "
