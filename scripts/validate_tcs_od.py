@@ -27,6 +27,16 @@ import pandas as pd  # noqa: E402
 
 from evdt.paths import DATA_PROCESSED_DIR  # noqa: E402
 
+#: traffic 과 OD 의 period 라벨이 다르다. 여기서 맞춘다 (#97).
+#:   traffic_gyeongbu.parquet : seollal2026 · base202603   (수집 라벨)
+#:   tcs_od_gyeongbu.parquet  : holiday     · normal       (분석 라벨)
+#: 예전엔 "202602"/"202603" 으로 바꾸려 했는데 **양쪽 어디에도 없는 값**이라
+#: 조인이 전부 NaN 이 되고도 조용히 끝났다.
+PERIOD_ALIAS = {
+    "seollal2026": "holiday",
+    "base202603": "normal",
+}
+
 OD_PATH = (
     DATA_PROCESSED_DIR
     / "tcs_od_gyeongbu.parquet"
@@ -144,13 +154,20 @@ def main() -> int:
     traffic["period"] = (
         traffic["period"]
         .astype(str)
-        .replace(
-            {
-                "202602": "holiday",
-                "202603": "normal",
-            }
-        )
+        .replace(PERIOD_ALIAS)
     )
+
+    # 라벨을 못 맞췄으면 **여기서 멈춘다.** 아래로 내려가면 NaN 만 남는다 (#97)
+    od_periods = set(od["period"].astype(str).unique())
+    tr_periods = set(traffic["period"].unique())
+
+    if not (od_periods & tr_periods):
+        raise SystemExit(
+            "\n[중단] traffic 과 OD 의 period 가 하나도 겹치지 않는다.\n"
+            f"  OD      : {sorted(od_periods)}\n"
+            f"  traffic : {sorted(tr_periods)}\n"
+            "  PERIOD_ALIAS 를 실제 값으로 고칠 것 (#97)."
+        )
 
     # 코드형 통일
     od["start_office_code"] = (
@@ -279,6 +296,15 @@ def main() -> int:
         f"{len(valid):,} / "
         f"{len(result):,}"
     )
+
+    # ⚠ 0 행을 검증하고 "저장 완료" 를 찍으면 아무도 못 잡는다 (#97).
+    #   검증할 게 없으면 **저장하지 않고 실패한다.**
+    if valid.empty:
+        raise SystemExit(
+            "\n[중단] 검증 가능한 행이 없다 — 조인이 전부 비었다.\n"
+            "  period·date·direction·conzone_id 네 키 중 무엇이 어긋났는지 확인하라.\n"
+            "  결과 파일은 저장하지 않는다."
+        )
 
     print(
         "\ncoverage 요약:"
