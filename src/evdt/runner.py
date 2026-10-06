@@ -95,6 +95,7 @@ def load_config(
     soc: str | None = None,
     demand_multiplier: float | None = None,
     ev_share: float | None = None,
+    od: str | None = None,
     stage: str | None = None,
     root: Path = PROJECT_ROOT,
 ) -> ScenarioConfig:
@@ -129,6 +130,13 @@ def load_config(
         tags.append(f"ev{ev_share * 100:g}")
         overrides["demand.layers"] = [{"kind": "ev_adoption", "ev_share": float(ev_share)}]
 
+    # 실측 OD 목적지 (#99). **세계를 바꾸므로 반드시 이름이 바뀌어야 한다** — 안 바뀌면
+    # 옛 수요 run 과 OD 수요 run 이 같은 run_id 를 갖고, #101 의 비교가 같은 run 을
+    # 자기 자신과 비교한다. 한 곳에서만 태그를 붙여야 스크립트마다 갈라지지 않는다
+    if od is not None:
+        tags.append("od")
+        overrides["demand.od_profile"] = str(od)
+
     out = cfg.variant("__".join(tags), overrides) if tags else cfg
     return with_stage(out, stage) if stage is not None else out
 
@@ -141,6 +149,64 @@ def departure_soc_mean(cfg: ScenarioConfig) -> float:
     """진입 SoC 분포의 평균. 분포 종류와 무관하다 (#55)."""
 
     return cfg.vehicles.soc_beta.mean()
+
+
+def run_params(cfg: ScenarioConfig) -> dict:
+    """run 표에 남기는 값. **run_id 가 구분하지 못하는 것**을 여기에 적는다.
+
+    `run_id` 는 (scenario_id, stage, 참여율, seed) 뿐이라, **같은 이름으로 다른 세계를
+    돌릴 수 있다.** 실제로 그랬다 — #55 가 yaml 기본 `departure_soc` 를 low → holiday
+    로 바꿨는데 `run_id` 는 그대로여서, 9월에 돌린 `soc=low` 결과(충전 필요 10,129대)가
+    10월에도 "재현 기준선"(1,854대)인 척 계속 제공됐다.
+
+    그래서 재사용하기 전에 `stale_reason` 으로 이 값들을 대조한다.
+    """
+
+    return {
+        "departure_soc": cfg.vehicles.departure_soc,
+        "departure_soc_mean": round(departure_soc_mean(cfg), 4),
+        "demand_multiplier": cfg.demand.demand_multiplier,
+        # 실측 위에 무엇이 얹혔나 (#54). 결과를 다시 볼 때 가장 먼저 봐야 하는 값이다
+        "demand_layers": cfg.demand_label,
+        # 목적지를 어디서 뽑았나 (#99). scenario_id 에도 __od 로 들어가지만,
+        # 기록에 남겨야 옛 run 을 재사용할 때 눈으로 확인할 수 있다
+        "od_profile": cfg.demand.od_profile,
+    }
+
+
+def stale_reason(stored: dict, cfg: ScenarioConfig) -> str | None:
+    """이미 DONE 인 run 을 지금 config 로 재사용해도 되나. 안 되면 그 이유.
+
+    **기록에 있는 키만 본다.** 옛 run 에는 나중에 추가된 키가 없는데, 없다고 전부
+    다시 돌리면 쓸 수 있는 결과까지 버린다. 기록된 값이 다르면 그건 확실한 불일치다.
+    """
+
+    want = run_params(cfg)
+    diffs = [f"{k}: 기록 {stored[k]!r} ≠ 지금 {want[k]!r}"
+             for k in want if k in stored and stored[k] != want[k]]
+    return " · ".join(diffs) if diffs else None
+
+
+def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig) -> tuple[bool, str]:
+    """이미 있는 run 을 그대로 써도 되나. 돌려주는 것은 (써도 되나, 이유).
+
+    ⚠ **DONE 인 것만으로는 부족하다.** `check_same_world` 는 진입 EV 수만 보는데,
+    진입 EV 가 같으면서 세계가 다를 수 있다 — #55 가 yaml 기본 `departure_soc` 를
+    low → holiday 로 바꿨을 때가 그랬다. 진입 EV 는 18,534 로 같고 **충전 필요만
+    10,129 → 1,854** 로 달랐다. 그래서 그 방어로는 안 걸린다.
+    """
+
+    with get_conn(db, readonly=True) as conn:
+        row = conn.execute(
+            "SELECT status, params_json FROM run WHERE run_id = ?", (run_id,)).fetchone()
+
+    if row is None:
+        return False, "없음"
+    if row[0] != "DONE":
+        return False, str(row[0])
+
+    why = stale_reason(json.loads(row[1] or "{}"), cfg)
+    return (False, f"설정이 다르다 — {why}") if why else (True, "DONE")
 
 
 # ---------------------------------------------------------------------------
@@ -421,13 +487,7 @@ def run_once(
         travel=None if ctm is None else ctm.speed_field,
         escape_cost_min=cfg.demand.escape_cost_min,
     )
-    params = {
-        "departure_soc": cfg.vehicles.departure_soc,
-        "departure_soc_mean": round(soc_mean, 4),
-        "demand_multiplier": cfg.demand.demand_multiplier,
-        # 실측 위에 무엇이 얹혔나 (#54). 결과를 다시 볼 때 가장 먼저 봐야 하는 값이다
-        "demand_layers": cfg.demand_label,
-    }
+    params = run_params(cfg)
 
     with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, runs_dir=runs,
                          overwrite=overwrite, params=params) as run:
