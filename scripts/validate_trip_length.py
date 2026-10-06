@@ -49,6 +49,7 @@ from evdt.io.entry_exit import (  # noqa: E402
     sample_entry_offsets,
     sample_exit_offsets,
 )
+from evdt.io.od_profile import load_od_profile, od_subset_for  # noqa: E402
 from evdt.io.stations import read_station_chargers  # noqa: E402
 from evdt.io.synthetic_ev import generate_evs  # noqa: E402
 from evdt.io.vehicles import load_from_db  # noqa: E402
@@ -101,11 +102,33 @@ def ours(config: str, seed: int) -> pd.Series:
         hours = ((evs["entry_time_min"] // 60).astype(int) % 24).to_numpy()
         entry = np.zeros(len(evs))
         dest = np.zeros(len(evs))
+
+        # ⚠ runner 와 **같은 분기**여야 한다. 한쪽만 OD 를 쓰면 검증이 모델이 아닌
+        # 것을 재게 된다 — #97 이 바로 그 실패였다
+        od = None
+        if cfg.demand.od_profile:
+            p, dr = od_subset_for(cfg)
+            od = load_od_profile(PROJECT_ROOT / cfg.demand.od_profile, p, dr)
+            print(f"  목적지: 실측 OD  period={p} · direction={dr}  (#99)")
+        else:
+            print("  목적지: exit_share 위험률 모델 (od_profile 없음)")
+
+        # 맞추기 **전**의 진입 지점. 맞춘 값으로 재면 거리가 0 으로 나온다
+        raw_entry = np.zeros(len(evs))
+
         for hour in np.unique(hours):
             pick = hours == hour
             here = sample_entry_offsets(int(pick.sum()), int(hour), points, rng)
-            entry[pick] = here
-            dest[pick] = sample_exit_offsets(here, int(hour), profile, rng, corridor_end_km=end_km)
+            raw_entry[pick] = here
+            if od is None:
+                entry[pick] = here
+                dest[pick] = sample_exit_offsets(here, int(hour), profile, rng,
+                                                 corridor_end_km=end_km)
+            else:
+                entry[pick], dest[pick] = od.sample(here, rng)
+
+        if od is not None:
+            print("  " + od.describe_snap(raw_entry))
     else:
         entry = np.zeros(len(evs))
         dest = np.full(len(evs), end_km)

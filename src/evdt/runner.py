@@ -47,6 +47,7 @@ from evdt.io.entry_exit import (
 )
 from evdt.io.event_log import load_sql, log_sim_result
 from evdt.io.loaders import duck_connect, load_run_table
+from evdt.io.od_profile import load_od_profile, od_subset_for
 from evdt.io.run_registry import RunContext, make_run_id
 from evdt.io.stations import read_station_chargers
 from evdt.io.synthetic_ev import generate_evs
@@ -148,7 +149,8 @@ def departure_soc_mean(cfg: ScenarioConfig) -> float:
 
 
 def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corridor_end_km: float,
-                 *, root: Path = PROJECT_ROOT) -> tuple[DemandBuild, float, float]:
+                 *, root: Path = PROJECT_ROOT,
+                 log: Log = print) -> tuple[DemandBuild, float, float]:
     """교통량 프로파일 → EV → 충전 계획 선택지."""
 
     missing = cfg.missing_inputs(root)
@@ -183,16 +185,41 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
     evs = generate_evs(volume, cfg, dest_offset_km=corridor_end_km)
 
     if points is not None:
-        # 목적지는 실측 진출 비율로 하류를 훑으며 뽑는다
+        # 진입 지점과 시각은 **언제나 VDS** 가 준다. 목적지만 두 방식이 있다 (#99)
         hours = ((evs["entry_time_min"] // 60).astype(int) % 24).to_numpy()
         entry = np.zeros(len(evs))
         dest = np.zeros(len(evs))
+
+        # 실측 OD 가 있으면 P(목적지 | 기점) 에서 뽑는다. 없으면 지금까지의
+        # 위험률 모델 — 그쪽은 **목적지가 진입 지점과 무관**하다고 가정하고,
+        # 실측으로 재 보니 서울 진입차의 p50 이 16.8 → 63.1 km 였다 (#99)
+        od = None
+        if cfg.demand.od_profile:
+            od_period, od_direction = od_subset_for(cfg)
+            od = load_od_profile(root / cfg.demand.od_profile, od_period, od_direction)
+            log(f"  실측 OD 목적지: period={od_period} · direction={od_direction}  (#99)")
+
+        # ⚠ 맞추기 **전**의 진입 지점을 따로 모은다. 맞춘 값으로 거리를 재면 0 이
+        # 나와서 "조용히 맞추지 않겠다" 던 보고가 거짓 안심이 된다
+        raw_entry = np.zeros(len(evs))
+
         for hour in np.unique(hours):
             pick = hours == hour
             here = sample_entry_offsets(int(pick.sum()), int(hour), points, rng)
-            entry[pick] = here
-            dest[pick] = sample_exit_offsets(here, int(hour), profile, rng,
-                                             corridor_end_km=corridor_end_km)
+            raw_entry[pick] = here
+            if od is None:
+                entry[pick] = here
+                dest[pick] = sample_exit_offsets(here, int(hour), profile, rng,
+                                                 corridor_end_km=corridor_end_km)
+            else:
+                # 진입 위치를 OD 기점에 맞춘다 — 코리도 0 km(양재)와 서울TG(12.941)는
+                # 같은 진입을 다르게 부르는 것이다. 맞춰야 통행거리가 실측과 같은 자로
+                # 재진다. 멀면 od_profile 쪽에서 그 자리에서 터진다
+                entry[pick], dest[pick] = od.sample(here, rng)
+
+        if od is not None:
+            log("  " + od.describe_snap(raw_entry))
+
         evs["entry_offset_km"] = entry
         evs["dest_offset_km"] = dest
     elif cfg.demand.through_profile:
@@ -372,7 +399,8 @@ def run_once(
     stations = [r for r in station_rows if r["station_id"] in chargers]
     offsets = {r["station_id"]: float(r["offset_km"]) for r in stations}
 
-    built, range_factor, cpf = build_demand(cfg, stations, vclasses, curves, temps, corridor_end_km, root=root)
+    built, range_factor, cpf = build_demand(cfg, stations, vclasses, curves, temps,
+                                            corridor_end_km, root=root, log=log)
     soc_mean = departure_soc_mean(cfg)
 
     log(f"\n{cfg.scenario_id}  seed={cfg.vehicles.seed}  기온 {cfg.environment.temp_c}°C "

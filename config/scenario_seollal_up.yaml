@@ -57,6 +57,11 @@ demand:
   # 중간 진입·진출 (#54). 있으면 through_profile 대신 이걸 쓴다
   #   scripts/build_entry_exit_profile.py --direction UP
   entry_exit_profile: data/processed/entry_exit_gyeongbu_up_seollal.csv
+  # 실측 OD 로 **목적지만** 바꿔 끼운다 (#99). null 이면 exit_share 위험률 모델 그대로다.
+  #   켜면 P(목적지 | 기점) 에서 뽑는다 — 위험률 모델은 "목적지가 진입 지점과 무관"
+  #   하다고 가정하는데, 실측으로 재 보니 서울 진입차 p50 이 16.8 → 63.1 km 였다.
+  # ⚠ 진입 **시각**은 여전히 VDS 가 준다 — OD 는 일자별 집계라 hour 가 없다.
+  od_profile: null
   cruise_speed_kmh: 80.0
   # 휴게소 줄이 이보다 길면 IC 로 빠져 시내에서 충전하고 돌아온다 (#54)
   #   KPI n_escaped 로 남는다. 엔진이 이 수를 줄이는 것도 개선이다
