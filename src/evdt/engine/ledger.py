@@ -44,6 +44,12 @@ class StationLedger:
     def __len__(self) -> int:
         return len(self._keys)
 
+    @property
+    def arrivals(self) -> tuple[Arrival, ...]:
+        """도착 시각 순. ETA 를 바꾸려면 원래 충전 요구를 알아야 한다 (#83)."""
+
+        return tuple(self._arrivals)
+
     # -- 바꾸기 ---------------------------------------------------------------
     def commit(self, arr: Arrival) -> None:
         if arr.ev_id in self._key_of:

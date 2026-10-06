@@ -40,6 +40,10 @@ class EVState:
     vmax_kw: float
     dest_offset_km: float
     is_participant: bool      # False 면 배정을 무시하고 UE 처럼 행동한다
+    #: 이 차가 코리도를 벗어나는 데 드는 시간(분) (#78). 차마다 다르다.
+    #: **UE 의 TripDemand.escape_cost_min 과 같은 값이어야 한다** — 갈라지면
+    #: 이탈 수 차이가 정책 차이로 보고된다.
+    escape_cost_min: float = 0.0
     #: 전비(kWh/km). **정책이 "어디까지 갈 수 있나" 를 스스로 계산하려면 반드시 필요하다** (#59).
     #: 이 값이 없으면 시뮬레이터가 대신 닿는 휴게소를 걸러서 넘겨야 하는데, 그건
     #: 시뮬레이터가 충전 판단(= 행동 모델)을 하는 것이라 설계 규칙 2를 깬다.

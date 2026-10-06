@@ -85,6 +85,11 @@ class TripDemand:
     # S0 쪽에서 따로 만들면 모집단이 갈라지고, 그 차이가 정책 차이로 보고된다.
     soc0: float = 0.0
     consumption_kwh_km: float = 0.0
+    #: 이 차가 코리도를 벗어나는 데 드는 시간(분) (#78). **차마다 다르다** —
+    #: 전원이 똑같은 값을 쓰면 그 값 근처에 질량이 몰려 "나갈까 말까" 경계에 선 차가
+    #: 수천 대가 되고, 작은 차이로 집단이 뒤집혀 최적반응이 가라앉지 않는다.
+    #: 0 이면 호출자가 준 전역값을 쓴다 (#78 이전 동작).
+    escape_cost_min: float = 0.0
     #: 필요 없는데 들른 김에 충전하는 차인가 (#54). 추첨은 수요를 만들 때 한 번만 한다
     wants_opportunity_charge: bool = False
 
@@ -125,6 +130,10 @@ class ChargeRule:
     #: 0.0 이면 필요한 만큼만 — #82 이전 동작이고 기본값이다.
     habit_soc: float = 0.0
     escape_cost_min: float = 0.0
+    #: 이탈 비용의 산포 (로그정규의 sigma) (#78). 0 이면 전원이 같은 값을 쓴다.
+    #: **전원이 같으면 그 값 근처에 질량이 몰려 최적반응이 가라앉지 않는다** —
+    #: 집이 근처라 금방 나가는 사람과 끝까지 기다리는 사람이 실제로 공존한다.
+    escape_cost_sigma: float = 0.0
     opportunity_prob: float = 0.0
     #: 도착 예상 SoC 가 이보다 얇을 때만 기회 충전을 고려한다.
     #: 차종으로 나누지 않는 이유: 배터리가 작은 차는 여유가 얇아 **자연히** 더 걸린다.
@@ -323,9 +332,22 @@ def build_trip_demands(
     n_opportunity = 0
     n_entry_lifted = 0
     soc_lift_total = 0.0
-    draw = (rng or np.random.default_rng(0)).random
+    gen = rng or np.random.default_rng(0)
+    draw = gen.random
+    # 이탈 비용을 차마다 뽑으려면 대수를 알아야 한다. `evs` 는 Iterable 이라 한 번 고정한다
+    evs = list(evs)
 
-    for ev in evs:
+    # 이탈 비용은 **차마다 다르다** (#78). 전원이 같은 값이면 그 값 근처에 질량이
+    # 몰려 "나갈까 말까" 경계에 선 차가 수천 대가 되고, 집단이 뒤집히며 진동한다.
+    # 중앙값은 rule.escape_cost_min 이고 sigma 가 0 이면 전원이 그 값이다.
+    if rule.escape_cost_min > 0 and rule.escape_cost_sigma > 0:
+        escape_costs = gen.lognormal(
+            np.log(rule.escape_cost_min), rule.escape_cost_sigma, size=len(evs)
+        )
+    else:
+        escape_costs = np.full(len(evs), rule.escape_cost_min, dtype=float)
+
+    for i, ev in enumerate(evs):
         n_ev += 1
         v = vclasses[str(ev["vclass_id"])]
         entry_km = float(ev.get("entry_offset_km", entry_offset_km))
@@ -388,6 +410,7 @@ def build_trip_demands(
                 # 시뮬레이션은 원래 SoC 로 달리게 되어 둘이 어긋난다.
                 soc0=soc0,
                 consumption_kwh_km=float(v["consumption_kwh_km"]),
+                escape_cost_min=float(escape_costs[i]),
                 wants_opportunity_charge=opportunity,
             )
         )

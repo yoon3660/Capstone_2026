@@ -127,6 +127,9 @@ class SimEV:
     curve: tuple[CurveSegment, ...]
     cold_factor: float = 1.0
     wants_opportunity_charge: bool = False
+    #: 이 차의 이탈 비용 (#78). **TripDemand 에서 그대로 와야 한다** — 여기서 다시
+    #: 뽑으면 UE 와 S0 가 다른 값을 쓰고 그 차이가 정책 차이로 보고된다.
+    escape_cost_min: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -210,6 +213,7 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
     cruise_speed_kmh: float,
     escape_cost_min: float = 0.0,
     snapshot_every_min: float = DEFAULT_SNAPSHOT_EVERY_MIN,
+    ledger: object | None = None,
 ) -> CorridorResult:
     """Δt 루프를 돌린다. 같은 입력·같은 정책이면 같은 결과다 (난수를 쓰지 않는다).
 
@@ -295,6 +299,10 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                 temp_c=temp_c,
                 cold_factor=cold_factor,
                 range_factor=range_factor,
+                # 원장은 **호출자가 만들어 준다.** 시뮬레이터는 이게 무엇인지 모르고
+                # 나르기만 한다 — 알면 "어느 단계가 도는지" 를 아는 셈이고 설계 규칙 2가
+                # 깨진다. 안 주면 None 이고, 필요한 정책은 require_ledger() 에서 터진다
+                ledger=ledger,
             )
             answers = policy.decide(
                 [
@@ -307,6 +315,9 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                         consumption_kwh_km=c.ev.consumption_kwh_km,
                         wants_opportunity_charge=c.ev.wants_opportunity_charge,
                         stops_done=c.stops_done, curve=c.ev.curve,
+                        # 이탈 비용은 차마다 다르다 (#78). UE 가 쓰는 값과 **같은
+                        # 값**이 와야 한다 — 갈라지면 이탈 차이가 정책 차이로 보인다
+                        escape_cost_min=c.ev.escape_cost_min,
                     )
                     for c in asking
                 ],

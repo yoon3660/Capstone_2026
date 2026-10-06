@@ -166,7 +166,9 @@ class S0Policy:
         if not best_id:
             return ESCAPE_NO_PLAN
 
-        if self.settings.escape_cost_min > 0 and best_cost > self.settings.escape_cost_min:
+        # 차마다 다르다 (#78). EVState 에 없으면 설정값 (옛 동작)
+        escape_cost = ev.escape_cost_min or self.settings.escape_cost_min
+        if escape_cost > 0 and best_cost > escape_cost:
             # 가장 나은 곳도 시내 다녀오는 것보다 비싸다 (#54). 남았다면 갔을 곳을 적는다
             return balked_at(best_id)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -579,3 +580,58 @@ def test_the_congested_scenario_says_so_in_its_own_file():
 
     assert "사용자 평형(UE)이 아니다" in text
     assert "scenario_seollal_down_adoption.yaml" in text      # 비교는 어디서 하는지
+
+
+# ---------------------------------------------------------------------------
+# 이탈 비용은 차마다 다르다 (#78)
+#
+# 전원이 같은 값을 쓰면 그 값 근처에 질량이 몰려 "나갈까 말까" 경계에 선 차가 수천
+# 대가 되고, 작은 차이로 집단이 뒤집혀 최적반응이 가라앉지 않는다.
+# ---------------------------------------------------------------------------
+def _built(sigma: float, n: int = 400, seed: int = 7):
+    evs = [{"ev_id": f"e{i}", "vclass_id": "v", "entry_time_min": float(i % 60),
+            "initial_soc": 0.25, "dest_offset_km": 390.0} for i in range(n)]
+    return build_trip_demands(
+        evs, STATIONS, {"v": {"battery_kwh": 100.0, "vmax_kw": 150.0, "consumption_kwh_km": 0.2}},
+        {"v": ((0.0, 1.0, 150.0),)},
+        rule=ChargeRule(1.0, 30.0, 0.2, 0.8, max_stops=2,
+                        escape_cost_min=120.0, escape_cost_sigma=sigma),
+        charge_power_factor=0.6, rng=np.random.default_rng(seed),
+    )
+
+
+def test_zero_sigma_gives_every_car_the_same_escape_cost():
+    """기본값이다. #78 이전과 정확히 같게 돈다."""
+    costs = {t.escape_cost_min for t in _built(0.0).trips}
+
+    assert costs == {120.0}
+
+
+def test_a_spread_puts_cars_on_both_sides_of_the_old_knife_edge():
+    """고정값이던 120분 **양쪽**에 차가 있어야 한다 — 그게 진동을 푸는 이유다."""
+    costs = np.array([t.escape_cost_min for t in _built(0.4).trips])
+
+    assert (costs < 120.0).any() and (costs > 120.0).any()
+    assert float(np.median(costs)) == pytest.approx(120.0, rel=0.15)
+    # 로그정규라 오른쪽으로 꼬리가 길다 — "한참 더 걸리는 사람" 이 소수 있다
+    assert float(costs.max()) > float(np.median(costs)) * 1.5
+
+
+def test_the_spread_is_reproducible():
+    """같은 시드 → 같은 비용. 비교가 성립하려면 이게 지켜져야 한다."""
+    a = [t.escape_cost_min for t in _built(0.4, seed=3).trips]
+    b = [t.escape_cost_min for t in _built(0.4, seed=3).trips]
+
+    assert a == b
+
+
+def test_the_solver_reads_the_cars_own_cost_not_the_global_one():
+    """솔버가 차별 값을 본다. 안 그러면 분포를 넣어도 아무 일이 안 일어난다."""
+    from evdt.engine.ue import escape_cost_of
+
+    trip = _built(0.4).trips[0]
+    assert escape_cost_of(trip, 999.0) == pytest.approx(trip.escape_cost_min)
+
+    # 0 이면 전역값으로 떨어진다 — TripDemand 를 직접 만드는 옛 코드가 그대로 돈다
+    plain = _built(0.0).trips[0]
+    assert escape_cost_of(dataclasses.replace(plain, escape_cost_min=0.0), 99.0) == 99.0

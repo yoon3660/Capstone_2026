@@ -164,7 +164,7 @@ class UEResult:
                 "entry_time_min": trip.entry_min,
                 "entry_offset_km": trip.entry_offset_km,
                 "dest_offset_km": trip.dest_offset_km,
-                "escape_cost_min": escape_cost_min,
+                "escape_cost_min": escape_cost_of(trip, escape_cost_min),
                 "reason": "balked" if best else "no_plan",
                 "best_station_id": best.stops[0].station_id if best else "",
             })
@@ -253,6 +253,23 @@ def _roll(
     return ledgers, visits
 
 
+def escape_cost_of(trip: TripDemand, fallback: float) -> float:
+    """이 차의 이탈 비용 (#78).
+
+    **차마다 다르다.** 전원이 똑같은 값을 쓰면 그 값 근처에 질량이 몰려서, "나갈까
+    말까" 경계에 선 차가 수천 대가 된다. 그 차들은 작은 차이로 선택이 뒤집히고,
+    집단으로 진동해 최적반응이 가라앉지 않는다 — `escape_cost_min 60` 에서 20시드 중
+    10개가 수렴에 실패한 이유다 (gap 이 5.3~6.4% 에서 추세 없이 흔들렸다).
+
+    #55 에서 진입 SoC 를 고정값에서 분포로 바꾼 것과 같은 수술이다.
+
+    0 이면 호출자가 준 전역값을 쓴다 — 옛 테스트와 `TripDemand` 를 직접 만드는
+    코드가 그대로 돈다.
+    """
+
+    return trip.escape_cost_min if trip.escape_cost_min > 0 else fallback
+
+
 def _plan_cost(
     trip: TripDemand,
     plan: Plan,
@@ -270,7 +287,7 @@ def _plan_cost(
 
     if plan.is_escape:
         # 코리도를 벗어난다. 휴게소를 쓰지 않으니 원장에 아무것도 남기지 않는다.
-        return escape_cost_min, []
+        return escape_cost_of(trip, escape_cost_min), []
 
     t = _first_arrival_min(trip, plan, travel)
     total = 0.0
@@ -327,7 +344,7 @@ def evaluate(
     # 이탈한 차는 정차가 없어 visits 에 안 나온다. 비용은 이탈 비용이다.
     for trip in trips:
         if trip.plans[choice[trip.ev_id]].is_escape:
-            current[trip.ev_id] = escape_cost_min
+            current[trip.ev_id] = escape_cost_of(trip, escape_cost_min)
 
     best_cost: dict[str, float] = {}
     best_plan: dict[str, int] = {}
