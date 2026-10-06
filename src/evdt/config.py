@@ -217,6 +217,11 @@ class DemandConfig:
     #: 차마다 진입 지점이 달라지고, 목적지는 실측 진출 비율로 뽑는다.
     #: scripts/build_entry_exit_profile.py 가 만든다.
     entry_exit_profile: str | None = None
+    #: 실측 TCS OD parquet (#99). 있으면 **목적지만** 여기서 뽑는다 —
+    #: entry_exit_profile 의 exit_share 위험률 모델 대신 P(목적지 | 기점) 을 쓴다.
+    #: ⚠ **진입 시각은 여전히 VDS 가 준다.** OD 는 일자별이라 hour 가 없다.
+    #:   없으면 지금까지의 방식 그대로다 (옛 실험 재현).
+    od_profile: str | None = None
     #: 휴게소 사이 주행 속도 (km/h). travel_time == "fixed" 일 때만 쓴다
     cruise_speed_kmh: float = 80.0
     #: 실측 위에 얹은 가정 레이어 (#54). 비어 있으면 2026 재현 그대로
@@ -513,6 +518,17 @@ class ScenarioConfig:
         entry_exit_profile = d.get("entry_exit_profile")
         if entry_exit_profile is not None:
             entry_exit_profile = e.text(entry_exit_profile, "demand.entry_exit_profile")
+        od_profile = d.get("od_profile")
+        if od_profile is not None:
+            od_profile = e.text(od_profile, "demand.od_profile")
+            # OD 는 진입 지점별 목적지를 준다. 진입 지점이 차마다 달라야 쓸 수 있다 —
+            # entry_exit_profile 이 없으면 전원이 코리도 시작점에서 타므로 기점이 하나다
+            if entry_exit_profile is None:
+                e.add(
+                    "demand.od_profile",
+                    "entry_exit_profile 과 같이 써야 한다 — 진입 지점이 차마다 달라야 "
+                    f"기점별 목적지가 의미를 가진다 (받은 값: {od_profile})",
+                )
         layers = parse_layers(d.get("layers"), e)
         escape_cost_min = e.number(
             d.get("escape_cost_min", 0.0), "demand.escape_cost_min", lo=0.0)
@@ -679,6 +695,7 @@ class ScenarioConfig:
                 low_soc_threshold=low_soc_threshold,       # type: ignore[arg-type]
                 through_profile=through_profile,           # type: ignore[arg-type]
                 entry_exit_profile=entry_exit_profile,     # type: ignore[arg-type]
+                od_profile=od_profile,                     # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
                 travel_time=travel_time,
                 escape_cost_min=escape_cost_min,           # type: ignore[arg-type]
@@ -719,6 +736,8 @@ class ScenarioConfig:
             candidates.append(self.demand.through_profile)
         if self.demand.entry_exit_profile:
             candidates.append(self.demand.entry_exit_profile)
+        if self.demand.od_profile:
+            candidates.append(self.demand.od_profile)
         return [c for c in candidates if not (base / c).is_file() and not Path(c).is_file()]
 
     # -- DB 연동 -------------------------------------------------------------
