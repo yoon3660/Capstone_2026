@@ -24,6 +24,7 @@ import argparse
 import pandas as pd
 from _bootstrap import ROOT  # noqa: E402,F401
 
+from evdt.demand_layers import effective_ev_share  # noqa: E402
 from evdt.engine.ue import UENotConverged  # noqa: E402
 from evdt.io.db import get_conn  # noqa: E402
 from evdt.io.run_registry import make_run_id  # noqa: E402
@@ -108,7 +109,14 @@ def main() -> int:
                 for seed in args.seeds or [cfg.vehicles.seed]:
                     run_id = make_run_id(cfg.scenario_id, cfg.policy.stage, seed,
                                          cfg.policy.participation)
-                    cells.append({"soc": soc, "dm": dm, "ev%": cfg.demand.ev_share * 100,
+                    # ⚠ `cfg.demand.ev_share` 가 아니라 **레이어까지 반영한 값**이어야
+                    # 한다. #54 이후 EV 비중은 `demand.ev_share` 를 덮어쓰지 않고
+                    # ev_adoption 레이어로 얹히므로, 그 자리는 **항상 실측 5%** 다.
+                    # 그걸 라벨로 쓰면 모든 칸이 ev%=5 로 묶이고, check_same_world 가
+                    # 서로 다른 수요를 한 그룹으로 보고 오탐을 낸다 (#101)
+                    cells.append({"soc": soc, "dm": dm,
+                                  "ev%": effective_ev_share(cfg.demand.layers,
+                                                            cfg.demand.ev_share) * 100,
                                   "seed": seed, "run_id": run_id})
 
                     ok, why = reusable_run(db, run_id, cfg)
