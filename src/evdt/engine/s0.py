@@ -63,6 +63,9 @@ class S0Settings:
     reserve_soc: float
     target_soc_cap: float
     max_stops: int
+    #: 사람은 "필요한 만큼" 만 채우지 않는다 (#82). **ChargeRule.habit_soc 와 같아야 한다**
+    #: — 갈라지면 UE 와 S0 가 다른 충전량을 쓰고 그 차이가 정책의 차이로 보고된다.
+    habit_soc: float = 0.0
     #: 휴게소 계획이 전부 이보다 비싸면 코리도를 벗어난다 (#54). 0 이면 이탈이 없다
     escape_cost_min: float = 0.0
 
@@ -103,6 +106,7 @@ class S0Policy:
             buffer_km=self.settings.buffer_km,
             target_soc_cap=self.settings.target_soc_cap,
             arrival_reserve_soc=self.settings.reserve_soc,
+            habit_soc=self.settings.habit_soc,
         )
         return max(soc_in, need, self.settings.target_soc_cap if opportunity else 0.0)
 

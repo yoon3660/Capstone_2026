@@ -207,6 +207,7 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         buffer_km=cfg.demand.safety_buffer_km,
         reserve_soc=cfg.demand.low_soc_threshold,
         target_soc_cap=cfg.vehicles.target_soc_cap,
+        habit_soc=cfg.vehicles.habit_soc,
         max_stops=cfg.policy.ue.max_stops,
         escape_cost_min=cfg.demand.escape_cost_min,
         escape_cost_sigma=cfg.demand.escape_cost_sigma,
@@ -535,6 +536,9 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
         "buffer_km": cfg.demand.safety_buffer_km,
         "reserve_soc": cfg.demand.low_soc_threshold,
         "target_soc_cap": cfg.vehicles.target_soc_cap,
+        # 습관 충전은 **UE·S0·S1 이 같은 값**을 써야 한다 (#82). 한쪽만 다르면
+        # 충전량이 갈라지고 그 차이가 정책 차이로 보고된다
+        "habit_soc": cfg.vehicles.habit_soc,
         "max_stops": cfg.policy.ue.max_stops,
         "escape_cost_min": cfg.demand.escape_cost_min,
     }
@@ -550,6 +554,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
         buffer_km=cfg.demand.safety_buffer_km,
         reserve_soc=cfg.demand.low_soc_threshold,
         target_soc_cap=cfg.vehicles.target_soc_cap,
+        habit_soc=cfg.vehicles.habit_soc,
     )
 
     out = run_corridor(

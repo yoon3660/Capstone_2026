@@ -88,6 +88,8 @@ class ChargeAmount:
     buffer_km: float
     reserve_soc: float
     target_soc_cap: float
+    #: 습관 목표 SoC (#82). ChargeRule.habit_soc 와 같은 값이어야 한다
+    habit_soc: float = 0.0
 
     def soc_out(self, *, soc_in: float, offset_km: float, dest_offset_km: float,
                 battery_kwh: float, consumption_kwh_km: float, range_factor: float,
@@ -97,7 +99,7 @@ class ChargeAmount:
             range_factor=range_factor,
             distance_to_dest_km=max(dest_offset_km - offset_km, 0.0),
             buffer_km=self.buffer_km, target_soc_cap=self.target_soc_cap,
-            arrival_reserve_soc=self.reserve_soc,
+            arrival_reserve_soc=self.reserve_soc, habit_soc=self.habit_soc,
         )
         # 기회 충전은 "가야 할 거리" 가 아니라 상한까지 채운다 — 필요해서가 아니라
         # 들른 김에 꽂는 것이므로 (ue_demand.enumerate_plans 와 같다)

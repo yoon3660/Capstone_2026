@@ -338,6 +338,9 @@ class VehiclesConfig:
     seed: int
     soc_beta: SocDist          # 이번 실행이 쓰는 진입 SoC 분포 (프로파일을 골랐으면 그 값)
     target_soc_cap: float      # 목표 SoC 상한 0.8 (§2.3)
+    #: 습관 목표 SoC (#82). 사람은 "필요한 만큼" 만 채우지 않는다 — 국내 실측 85%.
+    #: 0.0 이면 필요한 만큼만 (#82 이전 동작). 상한보다 크면 상한이 이긴다.
+    habit_soc: float = 0.0
     departure_soc: str | None = None                   # 고른 프로파일 이름 (없으면 soc_beta 직접 지정)
     soc_profiles: tuple[SocBetaProfile, ...] = ()      # 고를 수 있는 프로파일 전부
 
@@ -574,6 +577,7 @@ class ScenarioConfig:
         target_soc_cap = e.number(
             v.get("target_soc_cap", 0.8), "vehicles.target_soc_cap", lo=0.0, hi=1.0, lo_exclusive=True
         )
+        habit_soc = e.number(v.get("habit_soc", 0.0), "vehicles.habit_soc", lo=0.0, hi=1.0)
 
         # environment ------------------------------------------------------
         env = e.section(data, "environment")
@@ -687,6 +691,7 @@ class ScenarioConfig:
                 seed=seed,                                 # type: ignore[arg-type]
                 soc_beta=selected,                         # type: ignore[arg-type]
                 target_soc_cap=target_soc_cap,             # type: ignore[arg-type]
+                habit_soc=habit_soc,                       # type: ignore[arg-type]
                 departure_soc=departure_soc,
                 soc_profiles=tuple(soc_profiles),
             ),
