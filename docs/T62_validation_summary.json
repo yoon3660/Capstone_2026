@@ -1,0 +1,1630 @@
+{
+  "status": "approximate prototype; exact daily constraints infeasible in all 40 conditions",
+  "tables": {
+    "conservation_checks": [
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "measured_pairs": 8610,
+        "max_sum_error": 0.0,
+        "hourly_rows": 532560
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "measured_pairs": 8610,
+        "max_sum_error": 0.0,
+        "hourly_rows": 538800
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "measured_pairs": 8610,
+        "max_sum_error": 0.0,
+        "hourly_rows": 532536
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "measured_pairs": 8610,
+        "max_sum_error": 0.0,
+        "hourly_rows": 538776
+      }
+    ],
+    "feasibility_summary": [
+      {
+        "date": "2026-02-13",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 13034.0
+      },
+      {
+        "date": "2026-02-13",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 1487.0
+      },
+      {
+        "date": "2026-02-14",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 11598.5
+      },
+      {
+        "date": "2026-02-14",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 1807.6666666667
+      },
+      {
+        "date": "2026-02-15",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 11115.0
+      },
+      {
+        "date": "2026-02-15",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 46.5
+      },
+      {
+        "date": "2026-02-16",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8257.5
+      },
+      {
+        "date": "2026-02-16",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 835.6666666667
+      },
+      {
+        "date": "2026-02-17",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8967.0
+      },
+      {
+        "date": "2026-02-17",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 156.5
+      },
+      {
+        "date": "2026-02-18",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 7154.0
+      },
+      {
+        "date": "2026-02-18",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 114.5
+      },
+      {
+        "date": "2026-02-19",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8376.5
+      },
+      {
+        "date": "2026-02-19",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 112.5
+      },
+      {
+        "date": "2026-02-20",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8957.5
+      },
+      {
+        "date": "2026-02-20",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 53,
+        "candidate_pairs": 1374,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 94.0
+      },
+      {
+        "date": "2026-02-21",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 53,
+        "candidate_pairs": 1351,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8331.0
+      },
+      {
+        "date": "2026-02-21",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 51,
+        "candidate_pairs": 1371,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 133.5
+      },
+      {
+        "date": "2026-02-22",
+        "direction": "DOWN",
+        "period": 202602,
+        "complete_zones": 55,
+        "candidate_pairs": 1354,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 6970.0
+      },
+      {
+        "date": "2026-02-22",
+        "direction": "UP",
+        "period": 202602,
+        "complete_zones": 53,
+        "candidate_pairs": 1374,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 69.5
+      },
+      {
+        "date": "2026-03-06",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 7469.5
+      },
+      {
+        "date": "2026-03-06",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 723.0
+      },
+      {
+        "date": "2026-03-07",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 56,
+        "candidate_pairs": 1357,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 7788.5
+      },
+      {
+        "date": "2026-03-07",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 56,
+        "candidate_pairs": 1383,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 83.5
+      },
+      {
+        "date": "2026-03-08",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 56,
+        "candidate_pairs": 1354,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 6467.5
+      },
+      {
+        "date": "2026-03-08",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 60.5
+      },
+      {
+        "date": "2026-03-09",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 55,
+        "candidate_pairs": 1354,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 7917.5
+      },
+      {
+        "date": "2026-03-09",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 51,
+        "candidate_pairs": 1371,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 95.0
+      },
+      {
+        "date": "2026-03-10",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 7769.0
+      },
+      {
+        "date": "2026-03-10",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 63.0
+      },
+      {
+        "date": "2026-03-11",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 56,
+        "candidate_pairs": 1354,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8115.0
+      },
+      {
+        "date": "2026-03-11",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 56,
+        "candidate_pairs": 1380,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 465.0
+      },
+      {
+        "date": "2026-03-12",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 55,
+        "candidate_pairs": 1350,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8722.5
+      },
+      {
+        "date": "2026-03-12",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 55,
+        "candidate_pairs": 1376,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 212.3333333333
+      },
+      {
+        "date": "2026-03-13",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 8763.0
+      },
+      {
+        "date": "2026-03-13",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 45.5
+      },
+      {
+        "date": "2026-03-14",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 7660.0
+      },
+      {
+        "date": "2026-03-14",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 97.0
+      },
+      {
+        "date": "2026-03-15",
+        "direction": "DOWN",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1358,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 6194.5
+      },
+      {
+        "date": "2026-03-15",
+        "direction": "UP",
+        "period": 202603,
+        "complete_zones": 57,
+        "candidate_pairs": 1384,
+        "exact_feasible": false,
+        "min_max_abs_error_veh": 511.0
+      }
+    ],
+    "legacy_long_distance": [
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-15",
+        "new_long_100km_pct": 5.687028942,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 623457.1723846865,
+        "legacy_total_trips": 87845.6726192557
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-16",
+        "new_long_100km_pct": 5.5624506106,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 615264.1754462591,
+        "legacy_total_trips": 86691.2720305661
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-17",
+        "new_long_100km_pct": 5.1771665752,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 757249.6531756674,
+        "legacy_total_trips": 106697.1527001211
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-18",
+        "new_long_100km_pct": 5.0569474138,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 607342.0985890338,
+        "legacy_total_trips": 85575.0443233724
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-19",
+        "new_long_100km_pct": 4.7781979799,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 727331.6683463466,
+        "legacy_total_trips": 102481.681907329
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-20",
+        "new_long_100km_pct": 4.8976809324,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 789101.4468604664,
+        "legacy_total_trips": 111185.0988884192
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-21",
+        "new_long_100km_pct": 5.0702409208,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 693845.0121025684,
+        "legacy_total_trips": 97763.3821237965
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-22",
+        "new_long_100km_pct": 5.1507818187,
+        "legacy_long_100km_pct": 47.5315759607,
+        "new_total_trips": 593095.4391465001,
+        "legacy_total_trips": 83567.6772791858
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-15",
+        "new_long_100km_pct": 4.2297686616,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 527346.3307208549,
+        "legacy_total_trips": 28664.2529289859
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-16",
+        "new_long_100km_pct": 4.4931440226,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 531090.1687685689,
+        "legacy_total_trips": 28867.7516820314
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-17",
+        "new_long_100km_pct": 4.5189611884,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 657266.4248766436,
+        "legacy_total_trips": 35726.1441805066
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-18",
+        "new_long_100km_pct": 5.4133243012,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 545830.5181382479,
+        "legacy_total_trips": 29668.9729629618
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-19",
+        "new_long_100km_pct": 4.1597642338,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 635281.5057782712,
+        "legacy_total_trips": 34531.1395982284
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-20",
+        "new_long_100km_pct": 3.9696934886,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 693874.1919341065,
+        "legacy_total_trips": 37715.9831780894
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-21",
+        "new_long_100km_pct": 4.1322025533,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 598876.3273597538,
+        "legacy_total_trips": 32552.3124379317
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-22",
+        "new_long_100km_pct": 4.4239780599,
+        "legacy_long_100km_pct": 45.2523005207,
+        "new_total_trips": 508833.7808940094,
+        "legacy_total_trips": 27657.9912377899
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-08",
+        "new_long_100km_pct": 4.3408343805,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 501885.242724403,
+        "legacy_total_trips": 74461.926625531
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-09",
+        "new_long_100km_pct": 3.9715850953,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 666594.6963797356,
+        "legacy_total_trips": 98898.953675855
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-10",
+        "new_long_100km_pct": 3.9465746087,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 667123.3953398711,
+        "legacy_total_trips": 98977.3938048433
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-11",
+        "new_long_100km_pct": 3.9445373013,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 672804.9364040131,
+        "legacy_total_trips": 99820.3325044185
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-12",
+        "new_long_100km_pct": 4.0023068955,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 677373.8423430942,
+        "legacy_total_trips": 100498.1957086602
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-13",
+        "new_long_100km_pct": 4.2153838622,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 704814.8965799753,
+        "legacy_total_trips": 104569.4725527891
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-14",
+        "new_long_100km_pct": 4.4108496734,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 614624.3777013463,
+        "legacy_total_trips": 91188.4060711296
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-15",
+        "new_long_100km_pct": 4.417874341,
+        "legacy_long_100km_pct": 45.5417890939,
+        "new_total_trips": 515402.5758395079,
+        "legacy_total_trips": 76467.4182816037
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-08",
+        "new_long_100km_pct": 4.77763195,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 468322.1755035836,
+        "legacy_total_trips": 25398.8892503908
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-09",
+        "new_long_100km_pct": 4.1384197262,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 615984.1127698941,
+        "legacy_total_trips": 33407.156608417
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-10",
+        "new_long_100km_pct": 4.0674407995,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 619483.8756712505,
+        "legacy_total_trips": 33596.9620350736
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-11",
+        "new_long_100km_pct": 4.055603002,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 628214.8242595505,
+        "legacy_total_trips": 34070.4745182411
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-12",
+        "new_long_100km_pct": 4.1301682675,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 634420.6274633275,
+        "legacy_total_trips": 34407.0387821753
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-13",
+        "new_long_100km_pct": 4.2030298516,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 659996.95381417,
+        "legacy_total_trips": 35794.1400436485
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-14",
+        "new_long_100km_pct": 4.4636481635,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 572798.219921719,
+        "legacy_total_trips": 31065.0217128175
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-15",
+        "new_long_100km_pct": 4.8562888483,
+        "legacy_long_100km_pct": 44.8395045245,
+        "new_total_trips": 478603.6519595733,
+        "legacy_total_trips": 25956.4927453681
+      }
+    ],
+    "legacy_metrics": [
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "model": "fitted_veh",
+        "rows": 10921,
+        "rmse": 657.390530417,
+        "mape_pct": 48.4960792303
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "model": "legacy_train_only_veh",
+        "rows": 10921,
+        "rmse": 1255.6896470133,
+        "mape_pct": 70.87951196
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "model": "fitted_veh",
+        "rows": 10854,
+        "rmse": 696.2850008778,
+        "mape_pct": 34.0903335668
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "model": "legacy_train_only_veh",
+        "rows": 10854,
+        "rmse": 1926.4905089936,
+        "mape_pct": 60.0459456096
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "model": "fitted_veh",
+        "rows": 10918,
+        "rmse": 398.8816243599,
+        "mape_pct": 21.6446881272
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "model": "legacy_train_only_veh",
+        "rows": 10918,
+        "rmse": 1176.5480854503,
+        "mape_pct": 62.9786626008
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "model": "fitted_veh",
+        "rows": 10909,
+        "rmse": 489.9535936861,
+        "mape_pct": 24.2167810526
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "model": "legacy_train_only_veh",
+        "rows": 10909,
+        "rmse": 1746.9750679015,
+        "mape_pct": 55.7037815231
+      }
+    ],
+    "od_jc_coordinate_evidence": [
+      {
+        "name": "옥산JC",
+        "moct_node_id": 2710220802,
+        "raw_x": 231442.8660392882,
+        "raw_y": 457369.8558900099,
+        "longitude": 127.3519315208,
+        "latitude": 36.7143425144,
+        "milepost_km": 314.947451924,
+        "snap_distance_km": 0.2962564043,
+        "connecting_road": "옥산오창고속도로",
+        "link_ids": "2710684000;2710687403;2710687500",
+        "selected": false
+      },
+      {
+        "name": "언양JC",
+        "moct_node_id": 1960011907,
+        "raw_x": 393480.6493814005,
+        "raw_y": 331838.0292333264,
+        "longitude": 129.1340532271,
+        "latitude": 35.5646621707,
+        "milepost_km": 39.4375827922,
+        "snap_distance_km": 0.4152151211,
+        "connecting_road": "울산고속도로",
+        "link_ids": "1960019403;1960027203;1960027500",
+        "selected": false
+      },
+      {
+        "name": "언양JC",
+        "moct_node_id": 1960013608,
+        "raw_x": 393181.5841769808,
+        "raw_y": 332416.1449977487,
+        "longitude": 129.1308945574,
+        "latitude": 35.5699274417,
+        "milepost_km": 39.9109415995,
+        "snap_distance_km": 0.0033061945,
+        "connecting_road": "울산고속도로",
+        "link_ids": "1960027600;1960028400;1960037645",
+        "selected": true
+      },
+      {
+        "name": "옥산JC",
+        "moct_node_id": 2710217302,
+        "raw_x": 230314.136262521,
+        "raw_y": 457791.6414920349,
+        "longitude": 127.3393148722,
+        "latitude": 36.7181799443,
+        "milepost_km": 316.0007186455,
+        "snap_distance_km": 0.0091179771,
+        "connecting_road": "옥산오창고속도로",
+        "link_ids": "2710684200;2710687600;2710688301",
+        "selected": false
+      },
+      {
+        "name": "언양JC",
+        "moct_node_id": 1960011801,
+        "raw_x": 393041.5016081437,
+        "raw_y": 331821.6296576863,
+        "longitude": 129.1292085991,
+        "latitude": 35.5646000909,
+        "milepost_km": 39.2998305147,
+        "snap_distance_km": 0.0035450654,
+        "connecting_road": "울산고속도로",
+        "link_ids": "1960022605;1960027100;1960028300",
+        "selected": false
+      },
+      {
+        "name": "옥산JC",
+        "moct_node_id": 2710219801,
+        "raw_x": 231030.133910606,
+        "raw_y": 456272.0272998572,
+        "longitude": 127.3472674809,
+        "latitude": 36.7044634393,
+        "milepost_km": 313.9222788575,
+        "snap_distance_km": 0.004083544,
+        "connecting_road": "옥산오창고속도로",
+        "link_ids": "2710659901;2710683900;2710684100",
+        "selected": true
+      }
+    ],
+    "validation_daily_metrics": [
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-15",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 585.2429551599,
+        "mape_pct": 20.9490506353
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-15",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1128.3218450675,
+        "mape_pct": 75.3447679998
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-16",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 616.0194070592,
+        "mape_pct": 28.803908348
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-16",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1154.8552852898,
+        "mape_pct": 94.075731317
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-17",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 688.3634667603,
+        "mape_pct": 59.1844178085
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-17",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1406.4460869437,
+        "mape_pct": 175.2208510122
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-18",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 681.2435580139,
+        "mape_pct": 57.5787203546
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-18",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1275.1222682608,
+        "mape_pct": 157.3858771917
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-19",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 693.3827983979,
+        "mape_pct": 56.2036693346
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-19",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1154.2818381356,
+        "mape_pct": 139.9215958816
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-20",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 691.0483477024,
+        "mape_pct": 48.1540687512
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-20",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1237.7172289011,
+        "mape_pct": 126.5906060672
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-21",
+        "model": "fitted_veh",
+        "rows": 1347,
+        "rmse": 668.125899656,
+        "mape_pct": 53.5839969628
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-21",
+        "model": "uniform_profile_veh",
+        "rows": 1347,
+        "rmse": 1186.9727726417,
+        "mape_pct": 134.0353651958
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-22",
+        "model": "fitted_veh",
+        "rows": 1366,
+        "rmse": 626.7482539546,
+        "mape_pct": 63.61100349
+      },
+      {
+        "period": 202602,
+        "direction": "DOWN",
+        "date": "2026-02-22",
+        "model": "uniform_profile_veh",
+        "rows": 1366,
+        "rmse": 1135.0899560144,
+        "mape_pct": 165.6543746456
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-15",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 597.5118265405,
+        "mape_pct": 26.2427457742
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-15",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1241.7058963593,
+        "mape_pct": 117.2941791144
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-16",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 797.0843833339,
+        "mape_pct": 30.4299063296
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-16",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1409.3145220031,
+        "mape_pct": 128.7433008724
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-17",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 906.0384319227,
+        "mape_pct": 37.3073465481
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-17",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1503.695320103,
+        "mape_pct": 147.1793461299
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-18",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 1102.3922748073,
+        "mape_pct": 32.549503779
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-18",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1375.2332016314,
+        "mape_pct": 71.4188161226
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-19",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 457.2778004513,
+        "mape_pct": 17.3878123028
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-19",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1108.5105418866,
+        "mape_pct": 104.0864143508
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-20",
+        "model": "fitted_veh",
+        "rows": 1337,
+        "rmse": 398.597141394,
+        "mape_pct": 18.3398068723
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-20",
+        "model": "uniform_profile_veh",
+        "rows": 1337,
+        "rmse": 1105.8108582191,
+        "mape_pct": 111.3774095623
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-21",
+        "model": "fitted_veh",
+        "rows": 1332,
+        "rmse": 418.0707834737,
+        "mape_pct": 62.1589406483
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-21",
+        "model": "uniform_profile_veh",
+        "rows": 1332,
+        "rmse": 1090.4095863387,
+        "mape_pct": 158.9768559077
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-22",
+        "model": "fitted_veh",
+        "rows": 1345,
+        "rmse": 536.9828947393,
+        "mape_pct": 48.9379652387
+      },
+      {
+        "period": 202602,
+        "direction": "UP",
+        "date": "2026-02-22",
+        "model": "uniform_profile_veh",
+        "rows": 1345,
+        "rmse": 1148.6043203317,
+        "mape_pct": 184.1715683377
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-08",
+        "model": "fitted_veh",
+        "rows": 1365,
+        "rmse": 477.2442440608,
+        "mape_pct": 32.529272443
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-08",
+        "model": "uniform_profile_veh",
+        "rows": 1365,
+        "rmse": 1047.3221217673,
+        "mape_pct": 152.9960522379
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-09",
+        "model": "fitted_veh",
+        "rows": 1359,
+        "rmse": 452.0266235427,
+        "mape_pct": 30.1038289065
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-09",
+        "model": "uniform_profile_veh",
+        "rows": 1359,
+        "rmse": 1055.8691138703,
+        "mape_pct": 127.0356385916
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-10",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 347.6156257583,
+        "mape_pct": 17.2690986011
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-10",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1054.1711461104,
+        "mape_pct": 101.0711333819
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-11",
+        "model": "fitted_veh",
+        "rows": 1365,
+        "rmse": 356.1397650549,
+        "mape_pct": 17.9332293299
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-11",
+        "model": "uniform_profile_veh",
+        "rows": 1365,
+        "rmse": 1069.6590090082,
+        "mape_pct": 102.8994133472
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-12",
+        "model": "fitted_veh",
+        "rows": 1357,
+        "rmse": 348.5959738401,
+        "mape_pct": 21.865270418
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-12",
+        "model": "uniform_profile_veh",
+        "rows": 1357,
+        "rmse": 1063.9770651799,
+        "mape_pct": 108.1148759417
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-13",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 338.1302209479,
+        "mape_pct": 14.2750713018
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-13",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1153.3098446153,
+        "mape_pct": 105.1740374018
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-14",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 336.3554791708,
+        "mape_pct": 11.9397930521
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-14",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1102.9223907518,
+        "mape_pct": 95.4504598342
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-15",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 494.1446798876,
+        "mape_pct": 27.3150974336
+      },
+      {
+        "period": 202603,
+        "direction": "DOWN",
+        "date": "2026-03-15",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1084.3363238094,
+        "mape_pct": 133.9374823115
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-08",
+        "model": "fitted_veh",
+        "rows": 1369,
+        "rmse": 552.562744966,
+        "mape_pct": 34.2733183485
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-08",
+        "model": "uniform_profile_veh",
+        "rows": 1369,
+        "rmse": 1113.7755576314,
+        "mape_pct": 152.3062991812
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-09",
+        "model": "fitted_veh",
+        "rows": 1343,
+        "rmse": 562.5522076775,
+        "mape_pct": 30.6081380747
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-09",
+        "model": "uniform_profile_veh",
+        "rows": 1343,
+        "rmse": 987.7907360683,
+        "mape_pct": 103.7109132375
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-10",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 469.368663378,
+        "mape_pct": 19.6388577047
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-10",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1002.6046329208,
+        "mape_pct": 98.3842230618
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-11",
+        "model": "fitted_veh",
+        "rows": 1366,
+        "rmse": 465.4510412278,
+        "mape_pct": 19.966758294
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-11",
+        "model": "uniform_profile_veh",
+        "rows": 1366,
+        "rmse": 1016.5749896011,
+        "mape_pct": 101.8570471676
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-12",
+        "model": "fitted_veh",
+        "rows": 1357,
+        "rmse": 456.9511768472,
+        "mape_pct": 25.136069495
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-12",
+        "model": "uniform_profile_veh",
+        "rows": 1357,
+        "rmse": 1028.9609020311,
+        "mape_pct": 105.8070785217
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-13",
+        "model": "fitted_veh",
+        "rows": 1368,
+        "rmse": 394.8065180342,
+        "mape_pct": 14.5801873132
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-13",
+        "model": "uniform_profile_veh",
+        "rows": 1368,
+        "rmse": 1062.553973674,
+        "mape_pct": 104.5051735401
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-14",
+        "model": "fitted_veh",
+        "rows": 1369,
+        "rmse": 333.6734380207,
+        "mape_pct": 15.3469612708
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-14",
+        "model": "uniform_profile_veh",
+        "rows": 1369,
+        "rmse": 1060.1196399373,
+        "mape_pct": 118.1785262263
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-15",
+        "model": "fitted_veh",
+        "rows": 1369,
+        "rmse": 621.8758081504,
+        "mape_pct": 34.2937038357
+      },
+      {
+        "period": 202603,
+        "direction": "UP",
+        "date": "2026-03-15",
+        "model": "uniform_profile_veh",
+        "rows": 1369,
+        "rmse": 1185.8352741923,
+        "mape_pct": 146.7474685883
+      }
+    ],
+    "validation_metrics": [
+      {
+        "split": "train",
+        "model": "fitted_veh",
+        "rows": 2451,
+        "rmse": 398.5195929546,
+        "mape_pct": 11.6401456357,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "DOWN"
+      },
+      {
+        "split": "train",
+        "model": "uniform_profile_veh",
+        "rows": 2451,
+        "rmse": 960.0426263061,
+        "mape_pct": 49.0677226139,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "DOWN"
+      },
+      {
+        "split": "validation",
+        "model": "fitted_veh",
+        "rows": 10921,
+        "rmse": 657.390530417,
+        "mape_pct": 48.4960792303,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "DOWN"
+      },
+      {
+        "split": "validation",
+        "model": "uniform_profile_veh",
+        "rows": 10921,
+        "rmse": 1213.1418151757,
+        "mape_pct": 133.5217884991,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "DOWN"
+      },
+      {
+        "split": "train",
+        "model": "fitted_veh",
+        "rows": 2451,
+        "rmse": 313.8847469767,
+        "mape_pct": 10.5765180248,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "UP"
+      },
+      {
+        "split": "train",
+        "model": "uniform_profile_veh",
+        "rows": 2451,
+        "rmse": 952.4273942951,
+        "mape_pct": 72.8110296899,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "UP"
+      },
+      {
+        "split": "validation",
+        "model": "fitted_veh",
+        "rows": 10854,
+        "rmse": 696.2850008778,
+        "mape_pct": 34.0903335668,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "UP"
+      },
+      {
+        "split": "validation",
+        "model": "uniform_profile_veh",
+        "rows": 10854,
+        "rmse": 1258.1346850692,
+        "mape_pct": 127.7309104002,
+        "zero_target_rows": 0,
+        "period": 202602,
+        "direction": "UP"
+      },
+      {
+        "split": "train",
+        "model": "fitted_veh",
+        "rows": 2445,
+        "rmse": 268.528064094,
+        "mape_pct": 8.5391997924,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "DOWN"
+      },
+      {
+        "split": "train",
+        "model": "uniform_profile_veh",
+        "rows": 2445,
+        "rmse": 1002.4191343629,
+        "mape_pct": 72.7005306543,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "DOWN"
+      },
+      {
+        "split": "validation",
+        "model": "fitted_veh",
+        "rows": 10918,
+        "rmse": 398.8816243599,
+        "mape_pct": 21.6446881272,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "DOWN"
+      },
+      {
+        "split": "validation",
+        "model": "uniform_profile_veh",
+        "rows": 10918,
+        "rmse": 1079.4894523917,
+        "mape_pct": 115.8267749139,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "DOWN"
+      },
+      {
+        "split": "train",
+        "model": "fitted_veh",
+        "rows": 2446,
+        "rmse": 335.2993053932,
+        "mape_pct": 12.1676942718,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "UP"
+      },
+      {
+        "split": "train",
+        "model": "uniform_profile_veh",
+        "rows": 2446,
+        "rmse": 953.0340266357,
+        "mape_pct": 89.1290008663,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "UP"
+      },
+      {
+        "split": "validation",
+        "model": "fitted_veh",
+        "rows": 10909,
+        "rmse": 489.9535936861,
+        "mape_pct": 24.2167810526,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "UP"
+      },
+      {
+        "split": "validation",
+        "model": "uniform_profile_veh",
+        "rows": 10909,
+        "rmse": 1059.2636306481,
+        "mape_pct": 116.4858734526,
+        "zero_target_rows": 0,
+        "period": 202603,
+        "direction": "UP"
+      }
+    ]
+  },
+  "completion_checks": [
+    {
+      "condition": "coordinate_based_nodes",
+      "passed": true,
+      "detail": "0 directional JC rows remain boundary estimates"
+    },
+    {
+      "condition": "exact_daily_constraints",
+      "passed": false,
+      "detail": "0/40 exact feasible conditions"
+    },
+    {
+      "condition": "hourly_delay_and_pair_conservation",
+      "passed": true,
+      "detail": "Hourly implementation tested separately; exported TCS sums verified"
+    },
+    {
+      "condition": "requested_output_files",
+      "passed": true,
+      "detail": "Four parquet files and fingerprints verified"
+    },
+    {
+      "condition": "separate_calibration_validation_and_metrics",
+      "passed": true,
+      "detail": "2 calibration / 8 validation dates per period; metrics recomputed"
+    },
+    {
+      "condition": "legacy_error_and_long_distance_comparison",
+      "passed": true,
+      "detail": "Four period/direction comparisons and 32 daily distance rows"
+    }
+  ],
+  "input_sha256": {
+    "od_nodes_gyeongbu_supplemented.parquet": "e516efdf0d7ed09453d8e0c6e0eb6d23c93a857b7e1d2f25f70f91e94bbb4797",
+    "conzone_gyeongbu.parquet": "751c305875ce30f60eb19b3d79a8a3a0e3bf45c0454ac6b02e413c95810491fc",
+    "tcs_od_gyeongbu.parquet": "be01fe4eba80b3649ca14e5b2dc712e97fedacc1e88a6cf6953f46054b7a2ed0",
+    "traffic_gyeongbu.parquet": "491aa6b7a98df89d3a578a35bfb1c01f48c5057bf78baed03fe236788fe3f7fb",
+    "od_input_audit.csv": "3fbffd05f7cc6a19755f6c929cb5993bb6db3b68fba6ad4672b9610afa575e4d"
+  },
+  "coordinate_parameters": {
+    "source": "ITS standard node/link MOCT_LINK",
+    "source_crs": "EPSG:5186",
+    "source_url": "https://www.its.go.kr/nodelink/nodelinkRef",
+    "selection": "actual shared road node with least distance to shared centerline",
+    "interpretation": "representative junction attachment, not geometric JC center or all ramp movements",
+    "input_sha256": {
+      "MOCT_LINK.shp": "4cf3cc17b52c42f901e147a7ac9ae15d5ec6d606a674e2b6bfa1a50473978ae1",
+      "MOCT_LINK.dbf": "2f324d13fd598cf987a48788ec92c8ec96c5a177ba6401fe82a1b09e2030e432",
+      "gyeongbu_route.json": "d365d3be711ae5ed67cbc96afed37c8fd0cba39578e64264d641e201b15a28d1",
+      "od_nodes_gyeongbu_supplemented.parquet": "099188466869da430abcd260207201c37d0215e33de42902902d59f10ee94225"
+    }
+  },
+  "packaging_verification": {
+    "pytest_passed": 563,
+    "excluded_diagnostic_tests": 5,
+    "same_validation_metrics_after_merge": true
+  }
+}
