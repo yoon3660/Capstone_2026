@@ -1,26 +1,60 @@
-# #62 코리도 시간대 OD 추정 — 설계·검증·재현
+# #62 OD 추정: 최종 선택·설계·검증·재현
 
-기준: 2026-10-07, develop/62. 대상: [GitHub #62](https://github.com/yoon3660/Capstone_2026/issues/62).
+기준: 2026-10-08, develop/62. 대상: [GitHub #62](https://github.com/yoon3660/Capstone_2026/issues/62).
 
-TCS 실측 일 합계를 보존한 일별·시간대 OD 추정, 좌표 보완, 날짜 분리 검증과 기존 방식 비교를 구현했다. **현재 결과는 가중 최소제곱 근사 시제품이다. 구간 일 교통량을 모두 정확히 맞추는 해는 현재 입력과 이동 규칙에서 존재하지 않으므로, 모든 완료조건 충족으로 판정하지 않는다.**
+## 최종 결론과 선택 이유
 
-## 완료조건별 상태
+현재 채택한 개발 모델은 **실측 TCS 일별 OD 고정 + 중력 사전의 외부 OD 근사 추정 + 평일·주말·연휴별 시간 패턴 및 하루 규모 추정 + 통행 지연**이다. 월별 앞 4일을 보정하고 뒤 6일을 검증하며, 통행 지연은 상수 90km/h를 유지한다. 정확한 구간 일 교통량 제약을 충족하는 모델이나 실제 OD의 유일한 정답이 아니라 **한계를 기록한 조건부 추정 시제품**이다.
 
+이 구성을 선택한 이유는 다음과 같다.
 
-| 완료조건 | 현재 판정 | 증거와 실제 한계 |
-|---|---|---|
-| 끝·영업소·JC 좌표 → 기점거리 | 완료 | 방향별 68개 노드. JC 19개 API 좌표 및 언양·옥산 2개 표준 링크 연결 노드 좌표를 투영. 아래 언양·옥산 JC 좌표 근거 참조 |
-| 중력 사전 + 일 교통량·TCS·비음수 제약 + 가장 가까운 해, 가중치 근거 | 코드 구현 완료 / 실제 입력 미충족 | 정확 제약 및 최근접 사전 해 구현·테스트. 실제 20일 양방향 40조건은 모두 불가능. 근사 결과를 정확 제약 결과로 바꾸지 않음 |
-| 진입점 시간 비율 보정 + 통행시간 지연 | 구현·시제품 검증 완료 | 날짜 분리 학습, 분수 시간·자정 이월, 상수 90km/h 가정 |
-| 지정 경로 parquet | 파일 생성·검사 완료 | 202602/202603 UP/DOWN 4개. 시제품 상태·SHA256 설정 파일, 34,440 TCS 일별 쌍 합계 보존 |
-| 보정/검증 분리 + RMSE·MAPE 표 | 완료(조건부 검증) | 각 월 보정 2일·검증 8일. 검증 VDS 학습 제외, 검증 TCS 입력. 종합·날짜별 표와 재계산 대조 |
-| 기존 방식 재현 오차·장거리 비율 비교 | 완료(비교 적용 명시) | 같은 관측 행·지연·날짜, 기존 저장소 함수의 보정일 기반 프로파일. 원본 스크립트의 검증일 VDS 직접 사용은 하지 않음 |
-| 4지점의 알려진 OD를 구간 관측만으로 복원 | 완료(식별 가능 구조 한정) | 인접 3개 경로 및 겹치는 비인접 3개 경로의 미지 대수 복원. 6경로 전체는 유일 식별 불가능 사례도 검증 |
+1. TCS 쌍별 일 합계와 비음수는 지키면서, 구간 교통량을 이용해 코리도 밖에서 진입·진출하는 통행을 추가할 필요가 있었다. 기존 한쪽 끝 출발 방식은 중간 진출입을 충분히 표현하지 못한다.
+2. 시간 패턴의 날짜 유형 구분과 보정일 확대는 같은 날짜로 재평가한 원래 2일 모델보다 네 조건의 전체 MAPE를 낮췄다. 두 변화의 효과를 분리하기 위해 4일 공통 패턴 대조군도 실행했다.
+3. 모든 보정일의 평균 규모를 쓰던 방식을 날짜 유형별 TCS 대비 외부 OD 비율로 바꾸자, 직전 4일 유형별 패턴 모델 대비 네 조건 모두 전체 MAPE와 RMSE가 낮아졌다. 검증일 VDS를 예측에 사용하지 않는다.
+4. 추가 후보는 작은 개선과 다른 조건의 악화가 함께 나타나 반영하지 않았다. 유리한 날짜에만 다른 모델을 적용하거나 검증 관측값으로 결과를 직접 맞추지 않았다.
+
+이는 현재까지 확인한 방법 중 선택한 구성이지, 모든 가능한 모형 중 최선임을 증명한 결과가 아니다. 검증 날짜는 개발 과정에서 이미 살펴본 자료이므로 새로운 독립 검증이라고 주장하지 않는다. 전체 MAPE가 낮아졌어도 일부 날짜·시간대 및 RMSE는 악화됐다.
+
+**최종 실행 설정과 코드 기본값은 다르다.** 코드 기본값은 정확 제약·2일 보정·공통 패턴·공통 규모이며 그대로 유지했다. 아래 재현 명령의 approximate / 4 / calendar / calendar 옵션으로 최종 개발 모델을 실행한다. 기존에 공유한 20261007 결과 ZIP도 2일 공통 모델이며, 새 개선 결과로 바뀐 것이 아니다.
+
+## 최종 성능과 남은 한계
+
+모든 모델을 같은 뒤 6일의 가용 구간×시간 관측으로 비교했다. RMSE 단위는 대/시간, MAPE 단위는 %다. 2월 검증은 17~22일, 3월은 10~15일이다.
+
+| 기간 | 방향 | 원래 2일 전체 MAPE | 직전 4일 유형별 패턴 MAPE | 최종 전체 MAPE | 최종 RMSE | 최종 새벽 0~5시 MAPE |
+|---|---|---:|---:|---:|---:|---:|
+| 202602 | DOWN | 56.391 | 49.327 | 47.972 | 750.788 | 92.890 |
+| 202602 | UP | 36.030 | 33.978 | 31.841 | 613.916 | 38.819 |
+| 202603 | DOWN | 18.429 | 15.057 | 13.957 | 372.953 | 19.263 |
+| 202603 | UP | 21.490 | 17.526 | 15.459 | 444.022 | 18.510 |
+
+2월 DOWN의 새벽 MAPE는 같은 표본에서 원래 2일 모델 137.183% → 4일 공통 모델 104.935% → 최종 모델 92.890%다. 큰 새벽 상대 오차가 이번 수정으로 새로 생긴 것은 아니다. 다만 원래 대비 새벽 RMSE는 797.591 → 827.947, 전체 RMSE는 675.242 → 750.788로 증가했다. MAPE 감소만으로 모든 지표가 개선됐다고 말하지 않는다.
+
+2월 DOWN의 완전 24시간 구간·날짜 336개만 분석하면 하루 통과량 평균 절대 오차는 직전 모델 23.619% → 최종 21.089%다. 그러나 0~5시 MAPE는 90.911% → 91.069%다. 이 값은 위 표의 가용 새벽 시간 전체와 표본이 다르다. 19·20일 하루 편차는 줄었지만 21·22일은 커졌다. 여기서 하루 총량은 차량의 중복 없는 통행 건수가 아니라 구간을 통과한 대수다.
+
+현재 입력·일별 중간점 모델·이동 규칙에서 20일×양방향 40조건 모두 정확한 비음수 해가 없다. 2026-02-14 DOWN의 신탄진–상서 / 상서–회덕 관측은 67,345 / 44,151대지만 고정 TCS 차이는 3대이며 상서의 추가 진출입을 허용하지 않는다. 이 조합의 최소 최대오차는 11,598.5대/일이다. 관측 의미·단면 대응·날짜 경계·이동 규칙 중 무엇이 실제 원인인지는 확정하지 못했다. 이를 센서 오류나 실제 램프 통행으로 단정하지 않는다.
+
+**#62 완료조건을 전부 충족했다고 판정하지 않는다.** 좌표·추정 코드·시간 지연·출력·날짜 분리 지표·기존 방식 비교·식별 가능한 4지점 복원 검사는 구현했다. TCS 34,440개 날짜·방향·쌍 합계 보존과 비음수도 검사했다. 그러나 정확 일별 교통량 제약과 2월 DOWN 새벽 정확도는 미해결이다. 근사 허용이 완료조건에 부합하는지는 팀의 기준 확인이 필요하다.
+
+## 추가 개선안을 제외한 이유
+
+| 시험한 방법 | 실제 결과와 결정 |
+|---|---|
+| 단거리·장거리별 시간 패턴 | 초기 실행은 수렴 실패. 한도를 늘려 수렴시킨 2월 DOWN도 전체 47.972 → 48.242%, 새벽 92.890 → 94.442%로 악화돼 제외 |
+| 통행시간 가정 70·90·110km/h | 2월 DOWN 보정일의 동일 5,130개 관측에서 선택된 110을 네 조건에 고정 적용. 세 조건의 MAPE는 줄었지만 2월 UP은 악화. 기본값 90 유지. 실제 속도를 측정한 결과가 아님 |
+| 외부 OD의 새벽 비중 별도 학습 | 보정일만으로 조정했고 하루 OD 합계 보존. 효과가 거의 없고 2월 DOWN이 악화돼 제외 |
+| 유형별 패턴의 공통 사전 페널티 0.01 → 0.1 | 2월 전체 MAPE는 개선됐지만 2월 DOWN 새벽과 3월 전체 MAPE가 악화돼 제외 |
+| 지역별 TCS 기반 외부 규모 | 40km 지수 커널·전체/지역 비율 50:50 혼합. 개선 폭이 작고 2월 DOWN이 악화돼 제외 |
+| 50km 이하 TCS 기반 하루 규모 | 네 조건 중 세 조건의 MAPE 악화로 제외 |
+
+관측 하루 합계를 모델에 직접 적용한 오차 분해는 진단에만 사용했다. 이는 실행 가능한 OD 해나 새로운 성능 결과가 아니다. 구간별 독립 조정은 TCS·네트워크 제약을 보장하지 않는다. 시험 코드·자료는 별도 작업 폴더에 보관하며 최종 저장소 파일에 넣지 않는다.
+
+추가 개선 여지는 남아 있다. 현재 보정 자료의 설 연휴는 16일 하루뿐이라 귀성·귀경 단계별 차이를 배우기 어렵다. 추가 자료와 새 검증 날짜, 관측 의미 및 이동 규칙 확인이 필요하며 자료를 늘리면 반드시 큰 폭으로 좋아진다고 보장하지 않는다.
 
 ## 설계와 가중치
 
 
-공유 중심선 길이 415.057836km에서 UP은 부산→서울 기점거리, DOWN은 공유 길이에서 UP 기점거리를 뺀 값이다. 끝점·TCS 영업소·JC·보충 IC를 별도 식별자로 보존한다. 가까운 TCS/JC를 자동 병합하지 않는다. JC 19개는 API 원본 좌표 투영, 언양·옥산 2개는 표준 링크 원본에서 본선과 연결 고속도로가 공유하는 노드 좌표를 투영한다. 최소 중심선 투영 거리를 가진 실제 연결 노드를 대표 위치로 선택하며 모든 램프의 중심이라는 의미는 아니다. 후보·원본 링크 식별자·좌표·CRS·해시는 아래 좌표 근거와 T62_validation_summary.json의 좌표 증거에 기록했다.
+공유 중심선 길이 415.057836km에서 UP은 부산→서울 기점거리, DOWN은 공유 길이에서 UP 기점거리를 뺀 값이다. 끝점·TCS 영업소·JC·보충 IC를 별도 식별자로 보존한다. 가까운 TCS/JC를 자동 병합하지 않는다. JC 19개는 API 원본 좌표 투영, 언양·옥산 2개는 표준 링크 원본에서 본선과 연결 고속도로가 공유하는 노드 좌표를 투영한다. 최소 중심선 투영 거리를 가진 실제 연결 노드를 대표 위치로 선택하며 모든 램프의 중심이라는 의미는 아니다. 후보·원본 링크 식별자·좌표·CRS·해시는 아래 좌표 근거와 별도 검증 근거 ZIP의 T62_validation_summary.json 좌표 증거에 기록했다.
 
 구간 관측은 콘존 중간점을 사용한다. 포털 집계의 대표 VDS와 정확한 단면이 미확정이므로 검지기 후보 좌표를 자동 채택하지 않는다. 구간 일 합계는 24시간 모두 관측된 경우만 사용하고 시간별 결측은 학습·평가에서 제외한다.
 
@@ -42,7 +76,7 @@ TCS 쌍별 실측 일 합계는 고정한다. 추가 OD는 끝점·영업소·JC
 
 ## 학습·검증 및 식별성
 
-2월 13–14일, 3월 6–7일을 각각 보정하고 같은 월의 후속 8일을 검증한다. 검증 VDS를 학습에 쓰지 않으며 검증 TCS는 입력으로 사용한다. 외부 OD는 보정일 평균에 검증 TCS 총량/보정 TCS 평균 총량을 곱한다. 따라서 TCS가 주어진 조건부 VDS 재현 검증이며 월간 이전 예측이 아니다.
+최종 개발 모델은 2월 13–16일 및 3월 6–9일을 각각 보정하고 뒤 6일을 검증한다. 검증 VDS를 학습에 쓰지 않으며 검증 TCS는 입력으로 사용한다. 외부 OD는 같은 날짜 유형의 보정일 외부 OD 합계에 검증일 TCS 총량/해당 보정일 TCS 총량을 곱한다. 보정 자료에 없는 유형은 전체 보정일로 처리한다. 따라서 TCS가 주어진 조건부 VDS 재현 검증이며 월간 이전 예측이 아니다.
 
 전체 전방 6개 OD를 허용한 4지점은 3개 구간 교통량만으로 유일 식별할 수 없다. 복원 테스트는 구조적으로 알려진 3개 경로에 한정한다. 인접 경로와 겹치는 비인접 경로 모두에서 미지 OD 대수를 관측으로 복원하며, 부족한 관측으로 정답을 주장하지 않는 시험도 포함한다. 정확 모드에서 식별 불가능한 경우에는 사전에서 가장 가까운 해를 선택한다.
 
@@ -59,28 +93,7 @@ API 원본에는 두 JC가 없어 ITS 표준 링크 MOCT_LINK에서 본선과 �
 
 좌표계는 이 프로젝트의 기존 표준 노드·링크 읽기와 data/raw/README.md에 명시된 EPSG:5186을 사용해 WGS84로 변환했다. 원본 SHP/DBF, 공유 노선 및 입력 노드의 SHA256을 설정 파일에 기록했다. 국가교통정보센터 자료 경로: https://www.its.go.kr/nodelink/nodelinkRef
 
-근거 자료: [ITS 표준 노드·링크](https://www.its.go.kr/nodelink/nodelinkRef). 선택 후보와 원본 SHA256은 T62_validation_summary.json의 od_jc_coordinate_evidence 및 coordinate_parameters에 보존한다.
-
-## 검증 결과
-
-각 월 보정 2일·검증 8일, 양방향 네 조건을 실제 보완 좌표로 재학습했다. 검증 TCS는 입력으로 사용하고 검증 VDS는 학습에서 제외한다. 34,440개 TCS 날짜·방향·쌍의 일 합계와 비음수를 검사했다.
-
-| 기간 | 방향 | 새 RMSE 대/시간 | 새 MAPE % | 기존 RMSE 대/시간 |
-|---|---|---:|---:|---:|
-| 202602 | DOWN | 657.391 | 48.496 | 1,255.690 |
-| 202602 | UP | 696.285 | 34.090 | 1,926.491 |
-| 202603 | DOWN | 398.882 | 21.645 | 1,176.548 |
-| 202603 | UP | 489.954 | 24.217 | 1,746.975 |
-
-이 수치는 기존 근사 시제품의 검증이며 정확 제약 모드의 실데이터 성능 수치가 아니다. 새로운 모드를 추가했다고 기존 수치가 개선된 것으로 표현하지 않는다.
-
-정리 후 전체 pytest 563개 통과 (제외한 경계 조사·상행 원인 진단 테스트 5개를 뺀 수치), src/tests/scripts ruff 및 git diff --check 통과. 4지점 복원은 알려진 후보 경로의 미지 대수를 구간 관측만으로 복원하는 시험이며, 전체 6경로의 유일 식별을 주장하지 않는다.
-
-## 정확 일별 제약이 남는 이유
-
-현재 자료의 20일 × 양방향 40조건 모두 정확한 비음수 해가 없다. 예를 들어 2026-02-14 DOWN의 신탄진–상서 / 상서–회덕 관측은 67,345 / 44,151대인데 고정 TCS 통과량의 차이는 3대다. 상서에서 추가 진출입을 허용하지 않는 현재 규칙으로는 이 차이를 맞출 수 없다. 최소 최대오차는 11,598.5대/일이다. 영락 부근과 일부 상행 조합에도 충돌이 있다.
-
-이 결과는 현재 일별 중간점 모델 아래의 불가능성을 뜻한다. 센서 오류나 실제 램프 교통량의 원인을 확정하지 않는다. 관측 대응·날짜 경계·이동 규칙에는 추가 확인이 필요하다. 관측을 임의로 삭제하거나 추가 영업소간 OD를 넣어 충돌을 숨기지 않았다. 가중 최소제곱의 잔차 허용 결과를 완료로 인정할지 아직 확정되지 않았다.
+근거 자료: [ITS 표준 노드·링크](https://www.its.go.kr/nodelink/nodelinkRef). 선택 후보와 원본 SHA256은 별도 검증 근거 ZIP의 T62_validation_summary.json의 od_jc_coordinate_evidence 및 coordinate_parameters에 보존한다.
 
 ## 입력·출력 및 재현
 
@@ -96,7 +109,7 @@ python scripts/build_od_nodes.py coordinates --shp-file data/raw/nodelink/MOCT_L
 좌표 출력의 보완 노드 parquet를 supplemented 입력으로 사용하고 좌표 근거 CSV·설정 JSON을 processed에 둔다. 보충 JSON은 build_od_nodes.py의 --jc-coordinate-file 입력으로도 사용할 수 있다. 기존 결과와 다른 새 디렉터리에 근사 시제품을 생성한다.
 
 ```powershell
-python scripts/run_od_validation.py run --processed-dir data/processed --results-dir data/processed/od_validation_t62 --daily-constraint-mode approximate --export-dir data/processed/od_export_t62
+python scripts/run_od_validation.py run --processed-dir data/processed --results-dir data/processed/od_validation_t62 --daily-constraint-mode approximate --train-day-count 4 --profile-mode calendar --external-scale-mode calendar --speed-kmh 90 --export-dir data/processed/od_export_t62
 python scripts/run_od_validation.py feasibility --processed-dir data/processed --output-dir data/processed/od_feasibility_t62
 python scripts/run_od_validation.py check --processed-dir data/processed/od_export_t62 --results-dir data/processed/od_validation_t62 --feasibility-dir data/processed/od_feasibility_t62 --report data/processed/t62_completion.json
 ```
@@ -105,39 +118,25 @@ python scripts/run_od_validation.py check --processed-dir data/processed/od_expo
 
 출력 이름: od_gyeongbu_<DOWN 또는 UP>_<202602 또는 202603>.parquet 및 각각의 .parameters.json. 설정에는 날짜 분할·가중치·가정·입력 및 결과 SHA256을 기록한다. 주요 열은 date, departure_hour, direction, start_node, end_node, start_offset_km, end_offset_km, distance_km, volume_veh, source, split이다. volume_veh는 실수 기대 대수다. measured_tcs_daily의 일 합계는 실측이나 시간 배분은 추정이며, 검증 외부 OD는 predicted_external_daily_from_training이다.
 
-## PR에 포함하는 자료
+## 저장소 파일 통합과 검증
 
-실행·검증 코드, 관련 테스트, 이 문서 하나와 T62_validation_summary.json의 현재 검증 표를 포함한다. 원본 데이터·생성 parquet·중간 조사 문서·시제품 백업은 포함하지 않는다. 검증 요약 JSON은 실행 입력 데이터와 구분한다.
+| 파일 | 통합한 역할 |
+|---|---|
+| scripts/build_od_nodes.py | 기본 노드·보충 IC·JC 좌표 근거 생성: build / supplement / coordinates |
+| scripts/estimate_od_daily.py | 입력 검사·이동 규칙·일별 제약·일별 및 시간대 추정: audit / daily / hourly |
+| scripts/run_od_validation.py | 기간·방향 실행·오차 집계·기존 방식 비교·정확 실행 가능성·완료 검사: run / feasibility / check |
+| tests/test_od.py | 관련 OD 회귀 검사를 한 파일로 통합 |
+| docs/od_design.md | 최종 결론·설계·제약·재현·자료 제공 안내를 한 문서로 통합 |
 
-## 팀원 사용 방법과 최소 업로드 구성
+커밋 대상은 위 5개다. 테스트 경로 설정은 test_od.py 내부로 옮겨 기존 conftest.py 변경을 원복했다. 최종 결론·핵심 수치·좌표·가중치·재현 안내는 이 문서에 모았다. 전체 상세 수치 JSON은 별도 T62_validation_evidence_20261008.zip에 보존하며 커밋에 포함하지 않는다. 데이터 파일도 Git에서 제외한다. 이미 커밋된 JSON의 제거와 conftest.py 원복은 다음 정리 커밋에 함께 반영해야 최종 PR 파일 구성이 5개가 된다.
 
-결과 parquet를 사용하는 팀원은 테스트나 검증 코드를 실행할 필요가 없다. 별도 전달한 결과 파일을 읽으면 된다. 같은 입력으로 결과를 재생성하려면 다음 세 기능 파일을 사용한다.
+build_od_nodes.py는 기존 GyeongbuRoute.load/project/to_direction 및 #61 TCS 영업소 결과를 재사용해 OD 노드 표를 만든다. 기존 build_route.py·build_tcs_offices.py·공유 노선 자체는 변경하지 않았다. 입력 생성, 추정, 검증은 서로 다른 실행 역할이므로 이미 통합된 세 파일을 유지한다. 검증 코드는 추정 함수를 가져와 중복 구현을 피한다. 테스트는 팀원의 parquet 사용에는 필요하지 않지만 이후 모델 수정의 회귀 검사이므로 유지한다.
 
-| 파일 | 역할 | 실행 구분 |
-|---|---|---|
-| scripts/build_od_nodes.py | 기본 노드, 보충 IC, 실제 JC 좌표 구성 | build / supplement / coordinates |
-| scripts/estimate_od_daily.py | 입력 검사, 진출입·제약, 일별 및 시간대 추정 | audit / daily / hourly |
-| scripts/run_od_validation.py | 두 기간·양방향 실행, 오차·기존 방식 비교, 제약 검사 | run / feasibility / check |
-
-입력 검사는 일별 코드로, 관련 진출입·제약 함수도 같은 파일로 합쳤다. 시간대 코어는 시간대 추정 코드에, 검증 집계·기존 방식 비교·정확 실행 가능성 CLI·완료 검사는 검증 코드에 합쳤다. 후보 경로와 실행 가능성 함수는 일별 모델에 두며 검증 도구가 이를 가져온다.
-
-테스트는 tests/test_od.py 한 파일로 모았고, 기존 tests/conftest.py의 scripts 경로 설정을 포함한다. 테스트는 팀원이 결과를 사용하는 데 필요하지 않지만 모델 변경 시 TCS 합계 보존·시간 지연·4지점 복원·좌표 연결을 확인하는 회귀 검사이므로 저장소에 포함한다.
-
-업로드는 실행 코드 3개, 테스트 본문 1개와 기존 테스트 설정 수정 1개, 이 문서, T62_validation_summary.json의 총 7개 파일이다. 나머지 중간 조사 코드·문서·개별 테스트는 저장소 밖 작업 폴더에 보관했다. 데이터와 생성 parquet는 Git에서 제외한다.
-
-정리 후 검증에서는 기존 결과의 집계·보존·비교를 다시 수행한다. 모델·관측·가중치는 이번 파일 통합에서 변경하지 않았다.
-
-통합 후 확인: 전체 테스트 563개 통과, ruff 전체 검사 통과, 모든 실행 구분의 도움말 로딩 통과, 기존 결과 집계·TCS 합계 보존·기존 방식 비교 수치 동일.
-
-## 파일 통합과 기존 코드 재사용
-
-일별·시간대 추정은 estimate_od_daily.py 하나로 합쳤다. 파일명은 이미 스테이징된 기존 경로를 유지한 것이며, audit / daily / hourly 구분으로 실행한다. 같은 파일의 fit, allocate, learn_profiles, passage_operator를 검증 및 테스트에서 가져온다.
-
-build_od_nodes.py는 도로 중심선을 새로 만드는 코드가 아니다. 기존 GyeongbuRoute.load/project/to_direction과 #61의 TCS 영업소 결과를 재사용해 #62에서 추가로 필요한 끝점·영업소·JC·IC의 방향별 OD 노드 표를 만든다. 기존 build_route.py는 공유 노선과 원본 IC를 생성하고 build_tcs_offices.py는 TCS 영업소만 전처리한다. 이들 기존 출력에 없는 JC/끝점 OD 식별자와 좌표 근거를 추가하므로 노드 구성 파일 하나를 유지한다. 기존 노선·TCS 출력 계약은 바꾸지 않는다.
+최근 코드 검증은 전체 테스트 572개·ruff 통과다. 이번 파일 축소는 테스트의 경로 설정 위치와 검증 근거 보관 위치만 바꿨으며 추정 코드·가중치·모델 결과는 변경하지 않았다. 전체 테스트·코드 검사, 별도 근거 JSON 파싱, 최종 5개 파일 복사본 해시와 git diff --check를 확인했다.
 
 ## 데이터 배포와 준비
 
-코드 커밋과 데이터 첨부를 분리한다. 아래 ZIP은 PR 댓글에 첨부할 자료이다. 이 표에 실제 첨부 링크를 추가한다. 다운로드 주소를 임의로 만들지 않는다.
+코드 커밋과 데이터 첨부를 분리한다. 아래 링크는 기존 PR 댓글에 공유한 자료다. 결과 ZIP은 기존 2일 보정·공통 패턴 모델이며 최종 4일 개선 모델과 구분한다.
 
 | 목적 | 첨부 ZIP | 포함 내용 | 첨부 링크 |
 |---|---|---|---|
@@ -149,7 +148,8 @@ build_od_nodes.py는 도로 중심선을 새로 만드는 코드가 아니다. �
 결과만 사용하는 경우 results ZIP만 받는다. 추정 재실행은 inputs ZIP을 받고 다음 명령을 실행한다. 기존 결과를 덮어쓰지 않는 새 출력 폴더를 사용한다.
 
 ```powershell
-python scripts/run_od_validation.py run --processed-dir data/processed --results-dir data/processed/od_validation_shared --daily-constraint-mode approximate --export-dir data/processed/od_export_shared
+# 기존에 공유한 2일 공통 모델 ZIP의 재현
+python scripts/run_od_validation.py run --processed-dir data/processed --results-dir data/processed/od_validation_shared --daily-constraint-mode approximate --train-day-count 2 --profile-mode shared --external-scale-mode shared --speed-kmh 90 --export-dir data/processed/od_export_shared
 ```
 
 ZIP에 포함한 processed 파일: gyeongbu_route.json, centerline_gyeongbu.parquet, tcs_offices_gyeongbu.parquet, od_nodes_gyeongbu.parquet, od_nodes_gyeongbu_supplemented.parquet, conzone_gyeongbu.parquet, tcs_od_gyeongbu.parquet, traffic_gyeongbu.parquet, od_input_audit.csv, od_jc_coordinate_evidence.csv, od_jc_coordinate_parameters.json, ic_junction_coordinates.json. 원본 IC는 data/raw/ex_route_20260919_152634의 ic_gyeongbu.json·ic_all.json을 함께 제공한다.

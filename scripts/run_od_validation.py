@@ -220,7 +220,13 @@ def run_main():
     parser.add_argument(
         "--export-dir", type=Path, help="Export checked parquet files with the #62 requested names"
     )
+    parser.add_argument("--train-day-count", type=int, choices=[2, 4], default=2)
+    parser.add_argument("--profile-mode", choices=["shared", "calendar"], default="shared")
+    parser.add_argument("--external-scale-mode", choices=["shared", "calendar"], default="shared")
+    parser.add_argument("--speed-kmh", type=float, default=90.0)
     args = parser.parse_args()
+    if not np.isfinite(args.speed_kmh) or args.speed_kmh <= 0:
+        parser.error("--speed-kmh must be finite and positive")
     scripts = Path(__file__).resolve().parent
 
     def run(name, *arguments):
@@ -244,18 +250,27 @@ def run_main():
                     direction,
                     "--daily-constraint-mode",
                     args.daily_constraint_mode,
+                    "--profile-mode",
+                    args.profile_mode,
+                    "--external-scale-mode",
+                    args.external_scale_mode,
+                    "--speed-kmh",
+                    args.speed_kmh,
                     "--train-dates",
-                    *dates[:2],
+                    *dates[: args.train_day_count],
                     "--validation-dates",
-                    *dates[2:],
+                    *dates[args.train_day_count :],
                 )
             params = json.loads((folder / "parameters.json").read_text(encoding="utf-8"))
             if params.get("daily_constraint_mode", "approximate") != args.daily_constraint_mode:
                 raise ValueError(f"Stored constraint mode differs from requested mode: {folder}")
             if (
-                params["train_dates"] != dates[:2]
-                or params["validation_dates"] != dates[2:]
+                params["train_dates"] != dates[: args.train_day_count]
+                or params["validation_dates"] != dates[args.train_day_count :]
                 or params["direction"] != direction
+                or params.get("profile_mode", "shared") != args.profile_mode
+                or params.get("external_scale_mode", "shared") != args.external_scale_mode
+                or not np.isclose(params["speed_kmh"], args.speed_kmh, rtol=0, atol=1e-9)
             ):
                 raise ValueError(f"Unexpected experiment split: {folder}")
     summarize_results(args.results_dir, args.processed_dir)
@@ -359,6 +374,7 @@ def check(processed, results, feasibility):
                 f"Stored feasibility evidence is stale: {stored.date}/{stored.direction}"
             )
     artifacts, measurements = ([], [])
+    validation_day_count = 0
     for period in ["202602", "202603"]:
         for direction in ["DOWN", "UP"]:
             path = processed / f"od_gyeongbu_{direction}_{period}.parquet"
@@ -406,10 +422,11 @@ def check(processed, results, feasibility):
             if (
                 train & validation
                 or max(train) >= min(validation)
-                or len(train) != 2
-                or (len(validation) != 8)
+                or len(train) not in (2, 4)
+                or len(train) + len(validation) != 10
             ):
                 raise ValueError(f"Invalid calibration/validation split: {path}")
+            validation_day_count += len(validation)
             fit = pd.read_csv(results / f"expanded_{period}_{direction}" / "hourly_fit.csv")
             day = fit[fit.split.eq("validation") & fit.scoreable]
             error = day.fitted_veh - day.volume_veh
@@ -436,7 +453,7 @@ def check(processed, results, feasibility):
     comparison_ok = (
         len(legacy) == 8
         and set(legacy.model) == {"fitted_veh", "legacy_train_only_veh"}
-        and (len(distances) == 32)
+        and (len(distances) == validation_day_count)
         and np.isfinite(legacy.rmse).all()
     )
     checks = [
@@ -463,12 +480,12 @@ def check(processed, results, feasibility):
         dict(
             condition="separate_calibration_validation_and_metrics",
             passed=True,
-            detail="2 calibration / 8 validation dates per period; metrics recomputed",
+            detail="Disjoint chronological calibration/validation dates; metrics recomputed",
         ),
         dict(
             condition="legacy_error_and_long_distance_comparison",
             passed=bool(comparison_ok),
-            detail="Four period/direction comparisons and 32 daily distance rows",
+            detail=f"Four period/direction comparisons and {validation_day_count} daily distance rows",
         ),
     ]
     return dict(

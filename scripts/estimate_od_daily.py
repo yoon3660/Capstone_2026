@@ -557,6 +557,82 @@ def measured_od(tcs):
     return result
 
 
+def day_type(date):
+    """Calendar covariate known before prediction; Seollal 2026 is Feb 16–18."""
+    date = pd.Timestamp(date).normalize()
+    if date in pd.date_range("2026-02-16", "2026-02-18"):
+        return "holiday"
+    return "weekend" if date.dayofweek >= 5 else "weekday"
+
+
+def profile_keys(daily_od, train_dates):
+    """Use unseen date types' shared fallback, without inspecting validation VDS."""
+    trained = sorted({day_type(date) for date in train_dates})
+    kinds = ["shared", *trained]
+    origins = sorted(daily_od.start_node.unique())
+    keyed = daily_od.copy()
+    keyed["profile_type"] = [
+        day_type(d) if day_type(d) in trained else "shared" for d in keyed.date
+    ]
+    keyed["start_node"] = keyed.start_node + "|" + keyed.profile_type
+    keys = [origin + "|" + kind for kind in kinds for origin in origins]
+    return keyed, keys, kinds
+
+
+def allocate_by_calendar(daily_od, origins, profiles, kinds, train_dates):
+    """Retain original node IDs and each measured daily pair sum."""
+    trained = {day_type(date) for date in train_dates}
+    frames = []
+    for date, rows in daily_od.groupby("date", sort=True):
+        kind = day_type(date) if day_type(date) in trained else "shared"
+        block = kinds.index(kind) * len(origins)
+        frames.append(allocate(rows, origins, profiles[block : block + len(origins)]))
+    return pd.concat(frames, ignore_index=True)
+
+
+def predict_external(
+    training_frames,
+    training_tcs_totals,
+    train_dates,
+    prediction_date,
+    prediction_tcs_total,
+    mode="shared",
+):
+    """Estimate external OD with training-only daily OD/TCS ratios by date type."""
+    if mode not in {"shared", "calendar"}:
+        raise ValueError("Unknown external scale mode")
+    if (
+        not training_frames
+        or len(training_frames) != len(train_dates)
+        or len(training_frames) != len(training_tcs_totals)
+    ):
+        raise ValueError("Aligned nonempty calibration inputs required")
+    totals = np.asarray(training_tcs_totals, dtype=float)
+    if not np.isfinite(totals).all() or (totals <= 0).any():
+        raise ValueError("Positive training TCS totals required")
+    if not np.isfinite(prediction_tcs_total) or prediction_tcs_total < 0:
+        raise ValueError("Finite nonnegative prediction TCS total required")
+    selected = list(range(len(train_dates)))
+    if mode == "calendar":
+        matches = [
+            i for i, date in enumerate(train_dates) if day_type(date) == day_type(prediction_date)
+        ]
+        if matches:
+            selected = matches
+    keys = ["start_node", "end_node", "start_offset_km", "end_offset_km", "distance_km"]
+    predicted = (
+        pd.concat([training_frames[i] for i in selected])
+        .groupby(keys, dropna=False)
+        .volume_veh.sum()
+        .reset_index()
+    )
+    predicted.volume_veh *= float(prediction_tcs_total) / totals[selected].sum()
+    if not np.isfinite(predicted.volume_veh).all() or predicted.volume_veh.lt(0).any():
+        raise ValueError("Invalid external OD estimate")
+    predicted["source"] = "predicted_external_daily_from_training"
+    return predicted
+
+
 def hourly_main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--processed-dir", type=Path, required=True)
@@ -570,6 +646,8 @@ def hourly_main():
         "--daily-constraint-mode", choices=["exact", "approximate"], default="exact"
     )
     parser.add_argument("--hourly-prior-strength", type=float, default=0.01)
+    parser.add_argument("--profile-mode", choices=["shared", "calendar"], default="shared")
+    parser.add_argument("--external-scale-mode", choices=["shared", "calendar"], default="shared")
     args = parser.parse_args()
     train = sorted(pd.Timestamp(x).normalize() for x in args.train_dates)
     validation = sorted(pd.Timestamp(x).normalize() for x in args.validation_dates)
@@ -622,21 +700,18 @@ def hourly_main():
         daily_frames.append(daily)
         external_training.append(daily[daily.source.eq("estimated_external_daily")])
         training_tcs_total.append(float(fixed.volume_veh.sum()))
-    keys = ["start_node", "end_node", "start_offset_km", "end_offset_km", "distance_km"]
-    external = (
-        pd.concat(external_training).groupby(keys, dropna=False).volume_veh.sum().reset_index()
-    )
-    external.volume_veh /= len(train)
-    mean_tcs = np.mean(training_tcs_total)
-    if mean_tcs <= 0:
-        raise ValueError("Training TCS total must be positive")
     for date in validation:
         fixed = tcs[tcs.date.eq(date)]
         if fixed.empty:
             raise ValueError(f"Missing validation TCS: {date}")
-        predicted = external.copy()
-        predicted.volume_veh *= float(fixed.volume_veh.sum()) / mean_tcs
-        predicted["source"] = "predicted_external_daily_from_training"
+        predicted = predict_external(
+            external_training,
+            training_tcs_total,
+            train,
+            date,
+            float(fixed.volume_veh.sum()),
+            args.external_scale_mode,
+        )
         daily = pd.concat([measured_od(fixed), predicted], ignore_index=True)
         daily["date"] = date
         daily_frames.append(daily)
@@ -646,6 +721,12 @@ def hourly_main():
     matrix, total_hours = passage_operator(
         daily_od, positions, origins, days[0], len(days), args.speed_kmh
     )
+    calendar_keys = calendar_kinds = None
+    if args.profile_mode == "calendar":
+        keyed, calendar_keys, calendar_kinds = profile_keys(daily_od, train)
+        calendar_matrix, _ = passage_operator(
+            keyed, positions, calendar_keys, days[0], len(days), args.speed_kmh
+        )
     index = pd.MultiIndex.from_product(
         [zones.conzone_id, range(total_hours)], names=["conzone_id", "time_index"]
     )
@@ -697,7 +778,22 @@ def hourly_main():
         solver_gtol=1e-07,
         solver_ftol=1e-10,
     )
-    diagnostic["fitted_veh"] = matrix @ profiles.ravel()
+    if args.profile_mode == "calendar":
+        # The shared solution is a shrinkage prior and an unseen-type fallback.
+        grouped_prior = np.tile(np.maximum(profiles, 1e-12), (len(calendar_kinds), 1))
+        profiles = learn_profiles(
+            calendar_matrix,
+            diagnostic.volume_veh.to_numpy(),
+            training_mask.to_numpy(),
+            grouped_prior,
+            args.hourly_prior_strength,
+            solver_gtol=1e-07,
+            solver_ftol=1e-10,
+        )
+        profiles[: len(origins)] = grouped_prior[: len(origins)]
+        diagnostic["fitted_veh"] = calendar_matrix @ profiles.ravel()
+    else:
+        diagnostic["fitted_veh"] = matrix @ profiles.ravel()
     diagnostic["uniform_profile_veh"] = matrix @ np.full(len(origins) * 24, 1 / 24)
     metrics = []
     for split in ["train", "validation"]:
@@ -717,7 +813,11 @@ def hourly_main():
                     zero_target_rows=int((~positive).sum()),
                 )
             )
-    hourly = allocate(daily_od, origins, profiles)
+    hourly = (
+        allocate_by_calendar(daily_od, origins, profiles, calendar_kinds, train)
+        if args.profile_mode == "calendar"
+        else allocate(daily_od, origins, profiles)
+    )
     hourly["direction"] = args.direction
     hourly["split"] = np.where(hourly.date.isin(train), "train", "validation")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -726,11 +826,15 @@ def hourly_main():
     )
     diagnostic.to_csv(args.output_dir / "hourly_fit.csv", index=False)
     pd.DataFrame(metrics).to_csv(args.output_dir / "metrics.csv", index=False)
-    pd.DataFrame(profiles, index=origins).rename_axis("start_node").to_csv(
-        args.output_dir / "entry_profiles.csv"
-    )
+    pd.DataFrame(profiles, index=calendar_keys if calendar_keys else origins).rename_axis(
+        "start_node"
+    ).to_csv(args.output_dir / "entry_profiles.csv")
     metadata = dict(
         direction=args.direction,
+        profile_mode=args.profile_mode,
+        external_scale_mode=args.external_scale_mode,
+        holiday_dates=["2026-02-16", "2026-02-17", "2026-02-18"],
+        profile_fallback="shared training profile for unobserved date type",
         input_sha256={
             name: hashlib.sha256((source / name).read_bytes()).hexdigest()
             for name in [
@@ -750,14 +854,18 @@ def hourly_main():
         daily_constraint_mode=args.daily_constraint_mode,
         hourly_prior_strength=args.hourly_prior_strength,
         warmup_hours=warmup_hours,
-        validation_external_scale="validation TCS total / training mean TCS total",
+        validation_external_scale="training external OD / training TCS, within date type if calendar; unseen type uses all training days",
         limitations=[
             "prototype",
             "constant speed assumption",
             "midpoint observations",
             "VDS lane aggregation unresolved",
             "daily stage lacks midnight correction",
-            "shared origin profile assumed stationary across dates",
+            (
+                "origin profiles stationary within calendar category; holiday phase not distinguished"
+                if args.profile_mode == "calendar"
+                else "shared origin profile stationary across dates"
+            ),
             "uniform profile baseline is not legacy single-origin model",
             "unverified IC/JC movements remain",
         ],
