@@ -9,7 +9,7 @@ TCS 실측 일 합계를 보존한 일별·시간대 OD 추정, 좌표 보완, �
 
 | 완료조건 | 현재 판정 | 증거와 실제 한계 |
 |---|---|---|
-| 끝·영업소·JC 좌표 → 기점거리 | 완료 | 방향별 68개 노드. JC 19개 API 좌표 및 언양·옥산 2개 표준 링크 연결 노드 좌표를 투영. T62_completed_jc_coordinates.md 참조 |
+| 끝·영업소·JC 좌표 → 기점거리 | 완료 | 방향별 68개 노드. JC 19개 API 좌표 및 언양·옥산 2개 표준 링크 연결 노드 좌표를 투영. 아래 언양·옥산 JC 좌표 근거 참조 |
 | 중력 사전 + 일 교통량·TCS·비음수 제약 + 가장 가까운 해, 가중치 근거 | 코드 구현 완료 / 실제 입력 미충족 | 정확 제약 및 최근접 사전 해 구현·테스트. 실제 20일 양방향 40조건은 모두 불가능. 근사 결과를 정확 제약 결과로 바꾸지 않음 |
 | 진입점 시간 비율 보정 + 통행시간 지연 | 구현·시제품 검증 완료 | 날짜 분리 학습, 분수 시간·자정 이월, 상수 90km/h 가정 |
 | 지정 경로 parquet | 파일 생성·검사 완료 | 202602/202603 UP/DOWN 4개. 시제품 상태·SHA256 설정 파일, 34,440 TCS 일별 쌍 합계 보존 |
@@ -26,7 +26,7 @@ TCS 실측 일 합계를 보존한 일별·시간대 OD 추정, 좌표 보완, �
 
 ## 일별 OD
 
-TCS 쌍별 실측 일 합계는 고정한다. 추가 OD는 끝점·영업소·JC 등의 허용 진출입을 잇는 전방 경로이며 영업소 간 추가 OD는 중복 수요 방지를 위해 제외한다. 끝점, 상서, 금강휴게소 정책은 od_movement_rules.py에 기록하며 나머지 이동 가능 여부는 가정이다.
+TCS 쌍별 실측 일 합계는 고정한다. 추가 OD는 끝점·영업소·JC 등의 허용 진출입을 잇는 전방 경로이며 영업소 간 추가 OD는 중복 수요 방지를 위해 제외한다. 끝점, 상서, 금강휴게소 정책은 estimate_od_daily.py의 apply_rules에 기록하며 나머지 이동 가능 여부는 가정이다.
 
 고정 TCS 통과량 f와 경로 통과 행렬 A에 대해 추가 OD x를 추정한다. 중력 사전 q는 `(거리 + 10km)^(-1.5)`에 관측 잔여량의 중앙값 규모를 곱한다. 10km는 매우 가까운 노드 쌍에서 사전이 폭증하지 않도록 하는 완화이고 1.5는 시험 가정이다. 실제 통행거리 분포로 보정한 값이 아니다.
 
@@ -107,7 +107,7 @@ python scripts/run_od_validation.py check --processed-dir data/processed/od_expo
 
 ## PR에 포함하는 자료
 
-실행·검증 코드, 관련 테스트, 이 문서 하나와 T62_validation_summary.json의 현재 검증 표를 포함한다. 원본 데이터·생성 parquet·중간 조사 문서·시제품 백업은 포함하지 않는다. 증거 CSV는 소규모 검증 결과이며 실행 입력 데이터와 구분한다.
+실행·검증 코드, 관련 테스트, 이 문서 하나와 T62_validation_summary.json의 현재 검증 표를 포함한다. 원본 데이터·생성 parquet·중간 조사 문서·시제품 백업은 포함하지 않는다. 검증 요약 JSON은 실행 입력 데이터와 구분한다.
 
 ## 팀원 사용 방법과 최소 업로드 구성
 
@@ -134,3 +134,34 @@ python scripts/run_od_validation.py check --processed-dir data/processed/od_expo
 일별·시간대 추정은 estimate_od_daily.py 하나로 합쳤다. 파일명은 이미 스테이징된 기존 경로를 유지한 것이며, audit / daily / hourly 구분으로 실행한다. 같은 파일의 fit, allocate, learn_profiles, passage_operator를 검증 및 테스트에서 가져온다.
 
 build_od_nodes.py는 도로 중심선을 새로 만드는 코드가 아니다. 기존 GyeongbuRoute.load/project/to_direction과 #61의 TCS 영업소 결과를 재사용해 #62에서 추가로 필요한 끝점·영업소·JC·IC의 방향별 OD 노드 표를 만든다. 기존 build_route.py는 공유 노선과 원본 IC를 생성하고 build_tcs_offices.py는 TCS 영업소만 전처리한다. 이들 기존 출력에 없는 JC/끝점 OD 식별자와 좌표 근거를 추가하므로 노드 구성 파일 하나를 유지한다. 기존 노선·TCS 출력 계약은 바꾸지 않는다.
+
+## 데이터 배포와 준비
+
+코드 커밋과 데이터 첨부를 분리한다. 아래 ZIP은 PR 댓글에 첨부할 자료이다. 이 표에 실제 첨부 링크를 추가한다. 다운로드 주소를 임의로 만들지 않는다.
+
+| 목적 | 첨부 ZIP | 포함 내용 | 첨부 링크 |
+|---|---|---|---|
+| OD 결과 사용 | T62_results_20261007.zip | 202602/202603 UP/DOWN parquet 4개와 설정 JSON 4개 | [T62_results_20261007.zip](https://github.com/user-attachments/files/33161978/T62_results_20261007.zip) |
+| 추정 재실행 | T62_inputs_20261007.zip | 동일 노선·영업소·노드·콘존·TCS·traffic·audit·좌표 근거·IC 스냅샷 | [T62_inputs_20261007.zip](https://github.com/user-attachments/files/33162354/T62_inputs_20261007.zip) |
+
+각 ZIP에 T62_MANIFEST.json(파일 경로·크기·SHA256)과 T62_README.txt를 포함한다. 프로젝트 루트에 풀면 data/processed 및 data/raw 경로에 배치된다. 기존 데이터가 있는 팀원은 먼저 해시를 비교하고, 서로 다른 노선 기준 자료를 섞어 덮어쓰지 않는다. 배포 입력은 노선과 교통량의 동일 스냅샷을 함께 제공한다.
+
+결과만 사용하는 경우 results ZIP만 받는다. 추정 재실행은 inputs ZIP을 받고 다음 명령을 실행한다. 기존 결과를 덮어쓰지 않는 새 출력 폴더를 사용한다.
+
+```powershell
+python scripts/run_od_validation.py run --processed-dir data/processed --results-dir data/processed/od_validation_shared --daily-constraint-mode approximate --export-dir data/processed/od_export_shared
+```
+
+ZIP에 포함한 processed 파일: gyeongbu_route.json, centerline_gyeongbu.parquet, tcs_offices_gyeongbu.parquet, od_nodes_gyeongbu.parquet, od_nodes_gyeongbu_supplemented.parquet, conzone_gyeongbu.parquet, tcs_od_gyeongbu.parquet, traffic_gyeongbu.parquet, od_input_audit.csv, od_jc_coordinate_evidence.csv, od_jc_coordinate_parameters.json, ic_junction_coordinates.json. 원본 IC는 data/raw/ex_route_20260919_152634의 ic_gyeongbu.json·ic_all.json을 함께 제공한다.
+
+### 원본부터 재현할 때
+
+| 카테고리 | 원본·출처 | 기간·저장 위치 및 기존 처리 |
+|---|---|---|
+| TCS 실측 OD | [도로공사 전체 영업소간 교통량 매트릭스](https://data.ex.co.kr/portal/fdwn/view?num=39&requestfrom=dataset&type=TCS) | 월 단위 202602·202603 CSV. data/raw/tcs_od/tcs_od_202602.csv 및 tcs_od_202603.csv. #61 build_tcs_od.py 이후 영업소·경부 OD 전처리 사용 |
+| 구간 교통량·속도 | [도로공사 공공데이터 포털](https://data.ex.co.kr/) | 기존 fetch_traffic.py로 2026-02-13~22 / 2026-03-06~15 수집 후 build_traffic.py 실행. 두 ex_vds 기간 폴더를 사용. 별도의 전국 VDS 지점 월 ZIP은 이번 추정 입력 자체가 아닌 원인 조사용 |
+| IC·영업소 | [도로공사 OpenAPI 안내](https://data.ex.co.kr/guidedown/openoasis_guide.pdf) | 기존 build_route.py·build_tcs_offices.py로 수집. API 키는 각자 .env에 준비. 동일 입력 재현에는 inputs ZIP의 IC 스냅샷 사용 |
+| 도로 중심선 | 기존 프로젝트의 도로 중심선 CSV | 기존 load_centerline.py와 build_route.py 사용. 원본 ETC_S0_07_04_345774.csv의 정확한 개별 다운로드 페이지와 배포본은 이번 작업에서 확인하지 못했으므로 임의 링크를 적지 않음. 기존 팀 원본 또는 ZIP의 centerline·route 스냅샷 사용 |
+| 누락 JC 연결 좌표 | [ITS 전국 표준 노드·링크](https://www.its.go.kr/nodelink/nodelinkRef) | MOCT_LINK.shp / .shx / .dbf를 data/raw/nodelink에 배치 후 build_od_nodes.py coordinates 실행. 새 배포본은 기존 결과와 좌표가 달라질 수 있어 manifest의 원본 해시와 비교 |
+
+큰 전국 원본은 ZIP에 포함하지 않는다. 입력 ZIP으로 #62 추정을 다시 실행하는 데 원본 다운로드는 필요하지 않다. 전국 원본에서 전처리까지 다시 만드는 경우에는 #61 및 기존 노선·교통량 파이프라인도 필요하며, 위 표만으로 원본 배포본의 동일성을 보장하지 않는다.
