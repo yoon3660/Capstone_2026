@@ -18,6 +18,18 @@ from scipy.special import softmax
 
 from evdt.paths import DATA_PROCESSED_DIR
 
+#: 실측 TCS 행이 갖고 있는 신원 열. 추정 행에는 해당하는 값이 없으므로 비어 있다.
+#: **보정일과 검증일이 같은 열을 갖도록** 양쪽 경로에서 똑같이 들고 간다 (#62 hotfix).
+TCS_IDENTITY = [
+    "period",
+    "start_office_code",
+    "start_office",
+    "end_office_code",
+    "end_office",
+    "start_milepost_km",
+    "end_milepost_km",
+]
+
 
 def apply_rules(nodes: pd.DataFrame) -> pd.DataFrame:
     result = nodes.copy()
@@ -367,10 +379,20 @@ def fit(
         "prior_volume_veh",
         "source",
     ]
+    # TCS 행의 신원 열은 같이 들고 간다. 보정일은 이 함수를 거치고 검증일은
+    # measured_od() 를 거치는데, 여기서 떨어뜨리면 **보정일에서만 비는** 열이 생긴다.
+    # 그 결과 period 로 거르는 쪽에서 "적합한 날은 버리고 예측한 날만 남는" 일이
+    # 벌어진다 — 에러 없이.
     result = (
-        estimated[columns].copy()
+        estimated.reindex(columns=columns + TCS_IDENTITY).copy()
         if fixed_od.empty
-        else pd.concat([fixed_od[columns], estimated[columns]], ignore_index=True)
+        else pd.concat(
+            [
+                fixed_od.reindex(columns=columns + TCS_IDENTITY),
+                estimated.reindex(columns=columns + TCS_IDENTITY),
+            ],
+            ignore_index=True,
+        )
     )
     diagnostics = observations.copy()
     diagnostics["tcs_fixed_veh"] = fixed

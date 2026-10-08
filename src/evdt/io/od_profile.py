@@ -155,7 +155,8 @@ class OdDestinations:
         )
 
 
-def load_od_profile(path: str | Path, period: str, direction: str) -> OdDestinations:
+def load_od_profile(path: str | Path, period: str, direction: str, *,
+                    accept_subset: bool = False) -> OdDestinations:
     """OD parquet 에서 이 기간·방향의 `P(목적지 | 기점)` 를 만든다.
 
     **기간·방향은 `validate_trip_length.od_subset` 과 같은 대응을 써야 한다** — 두
@@ -173,16 +174,51 @@ def load_od_profile(path: str | Path, period: str, direction: str) -> OdDestinat
             f"  있는 열: {list(od.columns)}"
         )
 
+    # ⚠ 우리가 **안 쓰는 열**이 있으면 조용히 버리지 않는다 (#62 hotfix).
+    #
+    # #62 의 산출물은 `departure_hour` (시간대) 와 `source` (측정/추정/예측) 를 들고
+    # 온다. 이 함수는 날짜·시간을 전부 합쳐 **일별 측정 OD 처럼** 다루므로, 그냥
+    # 넣으면 시간 정보가 사라지고 추정 통행이 섞인다 — **에러 없이.**
+    #
+    # 실제로 그랬다: #62 결과를 그대로 먹이니 평균 통행거리가 40.50 → 39.52 km 로
+    # 조용히 바뀌었다. 쓸 거면 **알고 쓰라고** 요구한다.
+    richer = [c for c in ("departure_hour", "source") if c in od.columns]
+    if richer and not accept_subset:
+        raise ValueError(
+            f"\n[중단] 이 OD 는 {richer} 를 들고 있는데 이 함수는 그걸 쓰지 않는다.\n"
+            "  날짜·시간을 합치고 period 로 걸러 **일부만** 쓰게 된다.\n"
+            "  그래도 되면 accept_subset=True 로 명시하라 — 무엇이 빠지는지 찍어 준다."
+        )
+
+    whole = float(od["volume_veh"].sum())
+
     for col, want in (("period", period), ("direction", direction)):
-        have = set(od[col].astype(str).unique())
+        have = set(od[col].dropna().astype(str).unique())
         if want not in have:
             raise ValueError(
                 f"\n[중단] OD 의 {col} 에 {want!r} 가 없다. 있는 값: {sorted(have)}"
+            )
+        # ⚠ NaN 은 `== want` 에서 조용히 떨어진다. 떨어뜨리기 전에 **센다** —
+        #   #62 의 첫 산출물은 period 가 **보정일에서만** 비어 있어서, 이 필터가
+        #   "실제로 적합한 날은 버리고 예측한 날만 남기는" 결과를 냈다
+        blank = float(od.loc[od[col].isna(), "volume_veh"].sum())
+        if blank > 0 and not accept_subset:
+            raise ValueError(
+                f"\n[중단] OD 의 {col} 이 비어 있는 행이 있다 ({blank:,.0f}대).\n"
+                f"  {col}=={want!r} 로 거르면 그 행들은 **말없이 사라진다.**\n"
+                "  어느 기간인지 모르는 통행을 섞을 수는 없다 — 생성 쪽을 고치거나"
+                " accept_subset=True 로 명시하라."
             )
         od = od[od[col].astype(str) == want]
 
     if od.empty:
         raise ValueError(f"\n[중단] {period}·{direction} 에 해당하는 OD 행이 없다.")
+
+    kept = float(od["volume_veh"].sum())
+    if accept_subset and whole > 0:
+        print(f"  [od_profile] {period}·{direction} 로 {kept:,.0f} / {whole:,.0f}대 "
+              f"({kept / whole:.0%}) 를 쓴다"
+              + (f" · 안 쓰는 열 {richer}" if richer else ""))
 
     agg = (
         od.groupby(["start_offset_km", "end_offset_km"], as_index=False)["volume_veh"]

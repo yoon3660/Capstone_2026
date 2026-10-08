@@ -164,3 +164,48 @@ def test_an_unknown_period_is_refused():
     cfg = _Cfg("chuseok", "gyeongbu_up", "chuseok2026")
     with pytest.raises(ValueError, match="chuseok2026"):
         od_subset_for(cfg)
+
+
+# -- 조용한 축소를 막는다 (#62 hotfix) ---------------------------------------
+
+
+def test_a_richer_od_is_refused_unless_the_caller_says_so(tmp_path):
+    """**이것이 #62 hotfix 의 전부다.**
+
+    #62 산출물은 `departure_hour` 와 `source` 를 들고 온다. 이 함수는 날짜·시간을
+    전부 합쳐 일별 측정 OD 처럼 다루므로, 그냥 넣으면 시간 정보가 사라지고 추정
+    통행이 섞인다 — **에러 없이.** 실제로 평균 통행거리가 40.50 → 39.52 km 로
+    조용히 바뀌었다.
+    """
+    df = _od([(10.0, 60.0, 100)])
+    df["departure_hour"] = 8
+    df["source"] = "measured_tcs_daily"
+    path = _write(tmp_path, df)
+
+    with pytest.raises(ValueError, match="departure_hour"):
+        load_od_profile(path, "holiday", "DOWN")
+
+    od = load_od_profile(path, "holiday", "DOWN", accept_subset=True)
+    assert len(od.origins) == 1
+
+
+def test_rows_with_a_blank_period_are_refused(tmp_path):
+    """NaN 은 `== want` 에서 조용히 떨어진다.
+
+    #62 의 첫 산출물은 period 가 **보정일에서만** 비어 있어서, 이 필터가
+    "실제로 적합한 날은 버리고 예측한 날만 남기는" 결과를 냈다.
+    """
+    df = pd.concat([
+        _od([(10.0, 60.0, 100)]),
+        _od([(10.0, 200.0, 900)]).assign(period=None),
+    ], ignore_index=True)
+    path = _write(tmp_path, df)
+
+    with pytest.raises(ValueError, match="비어 있는"):
+        load_od_profile(path, "holiday", "DOWN")
+
+
+def test_a_plain_measured_od_still_loads_without_ceremony(tmp_path):
+    """기존 파일은 그대로 돌아야 한다 — 가드가 일을 막으면 안 된다."""
+    path = _write(tmp_path, _od([(10.0, 60.0, 100), (10.0, 200.0, 50)]))
+    assert len(load_od_profile(path, "holiday", "DOWN").origins) == 1
