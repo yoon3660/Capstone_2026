@@ -24,11 +24,14 @@ import argparse
 import pandas as pd
 from _bootstrap import ROOT  # noqa: E402,F401
 
+from evdt.demand_layers import effective_ev_share  # noqa: E402
 from evdt.engine.ue import UENotConverged  # noqa: E402
 from evdt.io.db import get_conn  # noqa: E402
 from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
-from evdt.runner import load_config, run_once  # noqa: E402
+from evdt.runner import load_config, reusable_run, run_once  # noqa: E402
+
+OD_PATH = "data/processed/tcs_od_gyeongbu.parquet"
 
 COLUMNS = {
     "n_ev": "진입EV",
@@ -82,12 +85,6 @@ def check_same_world(table: pd.DataFrame) -> None:
     )
 
 
-def _status(db, run_id: str) -> str | None:
-    with get_conn(db, readonly=True) as conn:
-        row = conn.execute("SELECT status FROM run WHERE run_id = ?", (run_id,)).fetchone()
-    return None if row is None else row[0]
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_seollal_down.yaml")
@@ -95,6 +92,8 @@ def main() -> int:
     ap.add_argument("--dm", nargs="+", type=float, default=[1.0, 2.0, 3.0], help="수요 배율들")
     ap.add_argument("--ev-share", nargs="+", type=float, default=[None],
                     help="EV 비중들 (예: 0.05 0.10 0.15). 빼면 config 값 그대로")
+    ap.add_argument("--od", action="store_true",
+                    help="목적지를 실측 OD 에서 뽑는다 (#99). scenario_id 에 __od 가 붙는다")
     ap.add_argument("--seeds", nargs="+", type=int, default=None, help="기본: config 의 시드 하나")
     ap.add_argument("--overwrite", action="store_true", help="이미 있는 칸도 다시 돌린다")
     args = ap.parse_args()
@@ -105,16 +104,29 @@ def main() -> int:
     for soc in args.soc:
         for dm in args.dm:
             for ev in args.ev_share:
-                cfg = load_config(args.config, soc=soc, demand_multiplier=dm, ev_share=ev)
+                cfg = load_config(args.config, soc=soc, demand_multiplier=dm, ev_share=ev,
+                                  od=OD_PATH if args.od else None)
                 for seed in args.seeds or [cfg.vehicles.seed]:
                     run_id = make_run_id(cfg.scenario_id, cfg.policy.stage, seed,
                                          cfg.policy.participation)
-                    cells.append({"soc": soc, "dm": dm, "ev%": cfg.demand.ev_share * 100,
+                    # ⚠ `cfg.demand.ev_share` 가 아니라 **레이어까지 반영한 값**이어야
+                    # 한다. #54 이후 EV 비중은 `demand.ev_share` 를 덮어쓰지 않고
+                    # ev_adoption 레이어로 얹히므로, 그 자리는 **항상 실측 5%** 다.
+                    # 그걸 라벨로 쓰면 모든 칸이 ev%=5 로 묶이고, check_same_world 가
+                    # 서로 다른 수요를 한 그룹으로 보고 오탐을 낸다 (#101)
+                    cells.append({"soc": soc, "dm": dm,
+                                  "ev%": effective_ev_share(cfg.demand.layers,
+                                                            cfg.demand.ev_share) * 100,
                                   "seed": seed, "run_id": run_id})
 
-                    if _status(db, run_id) == "DONE" and not args.overwrite:
+                    ok, why = reusable_run(db, run_id, cfg)
+                    if ok and not args.overwrite:
                         print(f"\n[건너뜀] {run_id} (이미 DONE)")
                         continue
+                    if why.startswith("설정이 다르다"):
+                        # 같은 run_id 로 **다른 세계**가 돌아 있었다. 진입 EV 가 같으면
+                        # check_same_world 로는 안 걸린다 (#101)
+                        print(f"\n[다시 돌림] {run_id}\n  {why}")
 
                     try:
                         run_once(cfg, seed=seed, overwrite=True)
