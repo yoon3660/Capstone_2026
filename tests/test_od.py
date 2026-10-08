@@ -267,6 +267,49 @@ class MovementTests(unittest.TestCase):
         self.assertTrue(extra.volume_veh.ge(0).all())
         np.testing.assert_allclose(diagnostic.tcs_fixed_veh, [0, 7, 0, 0])
 
+    def test_fit_carries_tcs_identity_so_train_and_validation_match(self):
+        """보정일과 검증일이 **같은 열**을 갖게 한다 (#62 hotfix).
+
+        보정일은 fit() 을 거치고 검증일은 measured_od() 를 거친다. fit() 이 period 같은
+        TCS 신원 열을 떨어뜨리면 **보정일에서만 비는 열**이 생기고, period 로 거르는
+        쪽에서 *"실제로 적합한 날은 버리고 예측한 날만 남는"* 일이 벌어진다 — 에러 없이.
+
+        실제로 그랬다: 배포된 2월 DOWN 결과에서 2/13~2/16 의 period 가 전부 비어
+        측정 1,472,089대 중 579,789대가 조용히 사라졌다.
+        """
+        tcs = pd.DataFrame(
+            [
+                dict(
+                    start_office_code="1",
+                    end_office_code="2",
+                    start_offset_km=10,
+                    end_offset_km=20,
+                    distance_km=10,
+                    volume_veh=7,
+                    period="holiday",
+                    start_office="가",
+                    end_office="나",
+                    start_milepost_km=1.0,
+                    end_milepost_km=2.0,
+                )
+            ]
+        )
+        zones = pd.DataFrame(
+            {"offset_km_start": [0, 10, 20, 30], "offset_km_end": [10, 20, 30, 40]}
+        )
+        obs = pd.DataFrame({"vds_daily_veh": [100, 100, 100, 100]})
+        result, _ = fit(self.nodes("DOWN"), zones, tcs, obs, 0.001)
+
+        measured = result[result.source == "measured_tcs_daily"]
+        self.assertEqual(measured.period.tolist(), ["holiday"])
+        self.assertEqual(measured.start_office.tolist(), ["가"])
+
+        # 추정 행에는 TCS 신원이 **없는 것이 맞다** — 다만 열 자체는 있어야 한다.
+        # 열이 없으면 concat 뒤에 보정일 전체가 비는 것과 구분되지 않는다
+        extra = result[result.source == "estimated_external_daily"]
+        self.assertIn("period", result.columns)
+        self.assertTrue(extra.period.isna().all())
+
 
 class HourlyODTest(unittest.TestCase):
     def test_midnight_fractional_delay_and_daily_conservation(self):
