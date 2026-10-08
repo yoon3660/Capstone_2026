@@ -44,19 +44,39 @@ from evdt.io.entry_exit import (  # noqa: E402
     corridor_entry_hourly_from_profile,
     sample_exit_offsets,
 )
+from evdt.io.od_balance import from_profile  # noqa: E402
 from evdt.io.od_profile import load_od_profile, od_subset_for  # noqa: E402
-from evdt.paths import DATA_PROCESSED_DIR, PROJECT_ROOT  # noqa: E402
+from evdt.paths import PROJECT_ROOT  # noqa: E402
 from evdt.runner import load_config  # noqa: E402
 
 OD_PATH = "data/processed/tcs_od_gyeongbu.parquet"
 
 
-def zone_positions(direction: str) -> pd.DataFrame:
-    z = pd.read_parquet(DATA_PROCESSED_DIR / "conzone_gyeongbu.parquet")
-    z = z[z["direction"].astype(str) == direction].copy()
-    z["position_km"] = (z["offset_km_start"] + z["offset_km_end"]) / 2.0
-    return (z[["conzone_id", "position_km"]]
-            .drop_duplicates("conzone_id").sort_values("position_km"))
+def scoring_grid(profile: pd.DataFrame) -> pd.DataFrame:
+    """채점 격자 — **`entry_exit_profile` 자신의 경계**를 쓴다.
+
+    ⚠ `conzone_gyeongbu.parquet` 의 콘존(66개)으로 채점하면 안 된다. 프로파일은
+    그 중 **52개 경계**에서만 만들어졌고, 나머지 콘존의 교통량은 프로파일이 설명하는
+    양이 아니다. 섞어 채점하면 **격자 불일치가 모델 오차로 보고된다** —
+    실제로 그랬다 (옛 수요 배율이 1.11 로 나왔는데, 맞춰 재면 1.001 이다).
+
+    정렬도 한 칸 주의한다. 프로파일은 다음 항등식을 만족한다 (표준편차 0.003):
+
+        경계 k 까지의 (누적 진입 − 누적 진출)  ==  경계 k+1 에 기록된 교통량
+
+    즉 **경계 k 를 지나는 흐름은 `vol[k+1]` 과 비교**해야 한다.
+    """
+
+    g = (profile.groupby(["offset_km", "hour"])["volume_veh"].sum()
+         .rename("vds_veh").reset_index())
+    edges = np.sort(g["offset_km"].unique())
+    # 경계 k 의 하류 흐름 ↔ 경계 k+1 의 교통량
+    nxt = dict(zip(edges[:-1], edges[1:], strict=True))
+    g = g[g["offset_km"].isin(nxt.values())].copy()
+    back = {v: k for k, v in nxt.items()}
+    g["position_km"] = g["offset_km"].map(back)
+    g["conzone_id"] = g["position_km"].map(lambda v: f"edge_{v:.3f}")
+    return g[["conzone_id", "position_km", "hour", "vds_veh"]]
 
 
 def hazard_destinations(origins: np.ndarray, hour: int, profile: pd.DataFrame,
@@ -75,7 +95,7 @@ def hazard_destinations(origins: np.ndarray, hour: int, profile: pd.DataFrame,
     return out
 
 
-def build_od(cfg, use_od: bool) -> tuple[pd.DataFrame, str]:
+def build_od(cfg, use_od: bool, *, balance_to_vds: bool = False) -> tuple[pd.DataFrame, str]:
     """(진입 offset, 목적지 offset, 시각, 대수) 표. **전체 차량** 기준."""
 
     profile = pd.read_csv(PROJECT_ROOT / cfg.demand.entry_exit_profile)
@@ -84,7 +104,32 @@ def build_od(cfg, use_od: bool) -> tuple[pd.DataFrame, str]:
     end_km = float(profile["offset_km"].max())
 
     rows = []
-    if use_od:
+    if use_od and balance_to_vds:
+        # IPF 균형화 (#111). 조건부 구조는 OD 가, 주변분포는 VDS 가 정한다.
+        # 기점별 **하루** 총량으로 균형화하고 시각은 VDS 진입 프로파일이 준다 —
+        # 시간대별로 균형화하면 진입·진출이 같은 시간에 안 맞는다 (통행시간 때문)
+        period, direction = od_subset_for(cfg)
+        od = load_od_profile(PROJECT_ROOT / OD_PATH, period, direction)
+        label = f"OD 수요 + VDS 균형화 ({period}·{direction})"
+
+        ent = points.groupby("offset_km")["entry_veh"].sum()
+        ex = profile.groupby("offset_km")["exit_veh"].sum()
+        ex = ex[ex > 0]
+        bal = from_profile(od, ent.index.to_numpy(float), ent.to_numpy(float),
+                           ex.index.to_numpy(float), ex.to_numpy(float), end_km)
+        o, d, v = bal.rows()
+        share = pd.DataFrame({"start_offset_km": o, "end_offset_km": d, "veh": v})
+        total = share.groupby("start_offset_km")["veh"].transform("sum")
+        share["p"] = share["veh"] / total
+
+        for hour, g in points.groupby("hour"):
+            by_origin = dict(zip(g["offset_km"], g["entry_veh"], strict=True))
+            part = share[share["start_offset_km"].isin(by_origin)].copy()
+            part["veh"] = part["p"] * part["start_offset_km"].map(by_origin)
+            part["hour"] = int(hour)
+            rows.append(part[["start_offset_km", "end_offset_km", "hour", "veh"]])
+
+    elif use_od:
         period, direction = od_subset_for(cfg)
         od = load_od_profile(PROJECT_ROOT / OD_PATH, period, direction)
         label = f"OD 수요 ({period}·{direction})"
@@ -150,23 +195,24 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_seollal_down.yaml")
     ap.add_argument("--od", action="store_true", help="목적지를 실측 OD 에서 (#99)")
+    ap.add_argument("--balance", action="store_true",
+                    help="OD 를 VDS 주변분포에 IPF 로 균형화 (#111). --od 와 같이 쓴다")
     ap.add_argument("--warmup-hours", type=int, default=5)
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     direction = "UP" if str(cfg.corridor_id).endswith("_up") else "DOWN"
-    zones = zone_positions(direction)
 
-    od, label = build_od(cfg, args.od)
+    profile = pd.read_csv(PROJECT_ROOT / cfg.demand.entry_exit_profile)
+    vds = scoring_grid(profile)
+    zones = (vds[["conzone_id", "position_km"]]
+             .drop_duplicates("conzone_id").sort_values("position_km"))
+
+    od, label = build_od(cfg, args.od, balance_to_vds=args.balance)
     model = passage(od, zones, float(cfg.demand.cruise_speed_kmh))
 
-    vds = pd.read_parquet(DATA_PROCESSED_DIR / "traffic_gyeongbu.parquet")
-    vds = vds[(vds["direction"].astype(str) == direction)
-              & (vds["period"].astype(str) == str(cfg.demand.period))]
-    vds = (vds.groupby(["conzone_id", "hour"])["volume_veh"].mean()
-           .rename("vds_veh").reset_index())
-
-    cmp = model.merge(vds, on=["conzone_id", "hour"], how="left")
+    cmp = model.merge(vds[["conzone_id", "hour", "vds_veh"]],
+                      on=["conzone_id", "hour"], how="left")
     cells = len(cmp)
     # ⚠ 자료 없는 칸은 **빼고 몇 칸인지 적는다.** 0 으로 세면 과대추정으로 보인다
     gap = cmp["vds_veh"].isna() | (cmp["vds_veh"] <= 0)
@@ -183,7 +229,7 @@ def main() -> int:
     print(f"수요: {cfg.demand_label}")
     print(f"속도 {cfg.demand.cruise_speed_kmh:g} km/h · 워밍업 {args.warmup_hours}시간 제외")
     print(f"\n  점수에 쓴 칸 {len(cmp):,} / {cells:,}")
-    print(f"  VDS 자료 없음 {int(gap.sum()):,}칸 · 콘존 {len(gap_zones)}곳")
+    print(f"  VDS 자료 없음 {int(gap.sum()):,}칸 · 경계 {len(gap_zones)}곳")
     print(f"\n  MAPE   {mape:6.1f}%")
     print(f"  WAPE   {wape:6.1f}%   (물량가중 — 새벽 작은 칸이 MAPE 를 부풀린다)")
     print(f"  총량배율 {ratio:5.2f}   (1.0 이면 하루 통과 대수가 맞는다)")
