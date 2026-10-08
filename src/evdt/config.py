@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -123,22 +124,47 @@ class _Errors:
             raise ConfigError(f"config 검증 실패: {self.source}\n{lines}")
 
 
-def _soc_beta(e: _Errors, raw: Any, path: str) -> SocBeta | None:
-    """{a, b, lo, hi} 하나를 검사한다. 출발 SoC ~ lo + Beta(a, b) × (hi − lo)."""
+def _soc_beta(e: _Errors, raw: Any, path: str) -> SocDist | None:
+    """진입 SoC 분포 하나를 검사한다.
+
+        {dist: beta,      a, b, lo, hi}   lo + Beta(a,b) × (hi − lo)   — 기본값
+        {dist: lognormal, mu, sigma, lo, hi}   LogNormal 을 [lo,hi] 로 절삭 (#55)
+
+    `dist` 를 빼면 beta 다 (#55 이전 config 가 그대로 돈다).
+    """
 
     if not isinstance(raw, dict):
-        e.add(path, "a / b / lo / hi 를 담은 매핑이어야 한다")
+        e.add(path, "분포 파라미터를 담은 매핑이어야 한다")
         return None
-    a = e.number(raw.get("a", 2.0), f"{path}.a", lo=0, lo_exclusive=True)
-    b = e.number(raw.get("b", 5.0), f"{path}.b", lo=0, lo_exclusive=True)
-    lo = e.number(raw.get("lo", 0.10), f"{path}.lo", lo=0.0, hi=1.0)
-    hi = e.number(raw.get("hi", 0.95), f"{path}.hi", lo=0.0, hi=1.0)
+
+    kind = str(raw.get("dist", "beta"))
+    if kind not in ("beta", "lognormal"):
+        e.add(f"{path}.dist", f"beta / lognormal 중 하나여야 한다 (받은 값: {kind!r})")
+        return None
+
+    default_lo = 0.10 if kind == "beta" else 0.40     # 로그정규는 행태 가드레일이 기본
+    default_hi = 0.95 if kind == "beta" else 1.00
+    lo = e.number(raw.get("lo", default_lo), f"{path}.lo", lo=0.0, hi=1.0)
+    hi = e.number(raw.get("hi", default_hi), f"{path}.hi", lo=0.0, hi=1.0)
     if lo is not None and hi is not None and hi <= lo:
         e.add(f"{path}.hi", f"lo({lo}) 보다 커야 한다 (받은 값: {hi})")
         return None
-    if None in (a, b, lo, hi):
+
+    if kind == "beta":
+        a = e.number(raw.get("a", 2.0), f"{path}.a", lo=0, lo_exclusive=True)
+        b = e.number(raw.get("b", 5.0), f"{path}.b", lo=0, lo_exclusive=True)
+        if None in (a, b, lo, hi):
+            return None
+        return SocBeta(a, b, lo, hi)  # type: ignore[arg-type]
+
+    for key in ("mu", "sigma"):
+        if raw.get(key) is None:
+            e.add(f"{path}.{key}", "로그정규는 mu 와 sigma 가 필수다")
+    mu = e.number(raw.get("mu"), f"{path}.mu")
+    sigma = e.number(raw.get("sigma"), f"{path}.sigma", lo=0, lo_exclusive=True)
+    if None in (mu, sigma, lo, hi):
         return None
-    return SocBeta(a, b, lo, hi)  # type: ignore[arg-type]
+    return SocLogNormal(mu, sigma, lo, hi)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +217,11 @@ class DemandConfig:
     #: 차마다 진입 지점이 달라지고, 목적지는 실측 진출 비율로 뽑는다.
     #: scripts/build_entry_exit_profile.py 가 만든다.
     entry_exit_profile: str | None = None
+    #: 실측 TCS OD parquet (#99). 있으면 **목적지만** 여기서 뽑는다 —
+    #: entry_exit_profile 의 exit_share 위험률 모델 대신 P(목적지 | 기점) 을 쓴다.
+    #: ⚠ **진입 시각은 여전히 VDS 가 준다.** OD 는 일자별이라 hour 가 없다.
+    #:   없으면 지금까지의 방식 그대로다 (옛 실험 재현).
+    od_profile: str | None = None
     #: 휴게소 사이 주행 속도 (km/h). travel_time == "fixed" 일 때만 쓴다
     cruise_speed_kmh: float = 80.0
     #: 실측 위에 얹은 가정 레이어 (#54). 비어 있으면 2026 재현 그대로
@@ -203,6 +234,8 @@ class DemandConfig:
     #: 휴게소 계획이 전부 이보다 비싸면 차는 코리도를 벗어난다 → KPI `n_escaped`.
     #: 0 이면 이탈 선택지가 없다. ⚠ 120분은 잠정값, 근거는 #64
     escape_cost_min: float = 0.0
+    #: 이탈 비용의 산포 (로그정규 sigma) (#78). 0 이면 전원이 같은 값을 쓴다.
+    escape_cost_sigma: float = 0.0
 
     #: 시간대별 EV 대수를 생성하는 방법 (#53)
     #:   fixed     기대값을 반올림하는 기존 방식
@@ -218,27 +251,101 @@ class DemandConfig:
     cruise_speed_kmh: float = 80.0
     travel_time: str = "fixed"
 
+def _phi(x: float) -> float:
+    """표준정규 CDF. 절삭 로그정규의 평균을 닫힌 형태로 구하는 데만 쓴다."""
+
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
 @dataclass(frozen=True, slots=True)
 class SocBeta:
+    """진입 SoC ~ lo + Beta(a, b) × (hi − lo).
+
+    ⚠ 기본 프로파일이던 Beta(2,5) 는 Rupnik 의 **휴게소 도착 SoC** 였다. 진입 SoC 로
+    쓰면 안 된다 (#55). 민감도 대조군으로만 남긴다.
+    """
+
     a: float
     b: float
     lo: float
     hi: float
 
+    def mean(self) -> float:
+        return self.lo + self.a / (self.a + self.b) * (self.hi - self.lo)
+
+    def params(self) -> dict[str, float | str]:
+        return {"dist": "beta", "a": self.a, "b": self.b, "lo": self.lo, "hi": self.hi}
+
+    @property
+    def label(self) -> str:
+        return f"Beta({self.a:g},{self.b:g}) on [{self.lo:g},{self.hi:g}]"
+
+
+@dataclass(frozen=True, slots=True)
+class SocLogNormal:
+    """진입 SoC ~ LogNormal(mu, sigma) 를 [lo, hi] 로 **절삭 후 재정규화** (#55).
+
+    고속도로 EV 충전 부하 문헌의 표준 분포다 (Bai et al. 2026 — 고속도로·CTM·혼잡으로
+    우리와 같은 설정). `lo` 는 행태 가드레일이다 — 명절 장거리를 앞두고 그 미만으로
+    고속도로에 올라오지 않는다는 **가정**이지 관측이 아니다.
+
+    `max(soc, lo)` 로 깔지 않고 절삭하는 이유: 깔면 `lo` 지점에 뾰족한 덩어리가 생겨
+    그 자체가 인공물이 된다. 몇 대가 걸렸는지는 `n_soc_floored` KPI 로 남는다.
+    """
+
+    mu: float
+    sigma: float
+    lo: float
+    hi: float
+
+    def mean(self) -> float:
+        """절삭 로그정규의 평균 (닫힌 형태).
+
+        E[X | lo<X<hi] = exp(mu + s²/2) · [Φ(β−s) − Φ(α−s)] / [Φ(β) − Φ(α)]
+        단 α = (ln lo − mu)/s, β = (ln hi − mu)/s.
+        """
+
+        s = self.sigma
+        a = (math.log(self.lo) - self.mu) / s if self.lo > 0 else -40.0
+        b = (math.log(self.hi) - self.mu) / s
+        denom = _phi(b) - _phi(a)
+        if denom <= 1e-12:                       # 절삭 구간에 질량이 사실상 없다
+            return 0.5 * (self.lo + self.hi)
+        return math.exp(self.mu + 0.5 * s * s) * (_phi(b - s) - _phi(a - s)) / denom
+
+    def params(self) -> dict[str, float | str]:
+        return {"dist": "lognormal", "mu": self.mu, "sigma": self.sigma,
+                "lo": self.lo, "hi": self.hi}
+
+    @property
+    def label(self) -> str:
+        return (f"LogNormal(mu={self.mu:g}, sigma={self.sigma:g}) "
+                f"truncated to [{self.lo:g},{self.hi:g}]")
+
+
+#: 진입 SoC 분포. 새 분포를 더하면 여기와 `io/synthetic_ev.sample_initial_soc` 둘 다 고친다.
+SocDist = SocBeta | SocLogNormal
+
 
 @dataclass(frozen=True, slots=True)
 class SocBetaProfile:
-    """출발 SoC 분포 하나에 이름을 붙인 것 (vehicles.soc_profiles)."""
+    """진입 SoC 분포 하나에 이름을 붙인 것 (vehicles.soc_profiles).
+
+    이름은 Beta 만 있던 때의 것이다. 지금은 `dist` 로 분포 종류를 고른다 (#55).
+    """
 
     name: str
-    beta: SocBeta
+    beta: SocDist
 
 
 @dataclass(frozen=True, slots=True)
 class VehiclesConfig:
     seed: int
-    soc_beta: SocBeta          # 이번 실행이 쓰는 출발 SoC 분포 (프로파일을 골랐으면 그 값)
+    soc_beta: SocDist          # 이번 실행이 쓰는 진입 SoC 분포 (프로파일을 골랐으면 그 값)
     target_soc_cap: float      # 목표 SoC 상한 0.8 (§2.3)
+    #: 습관 목표 SoC (#82). 사람은 "필요한 만큼" 만 채우지 않는다 — 국내 실측 85%.
+    #: 0.0 이면 필요한 만큼만 (#82 이전 동작). 상한보다 크면 상한이 이긴다.
+    habit_soc: float = 0.0
     departure_soc: str | None = None                   # 고른 프로파일 이름 (없으면 soc_beta 직접 지정)
     soc_profiles: tuple[SocBetaProfile, ...] = ()      # 고를 수 있는 프로파일 전부
 
@@ -411,9 +518,22 @@ class ScenarioConfig:
         entry_exit_profile = d.get("entry_exit_profile")
         if entry_exit_profile is not None:
             entry_exit_profile = e.text(entry_exit_profile, "demand.entry_exit_profile")
+        od_profile = d.get("od_profile")
+        if od_profile is not None:
+            od_profile = e.text(od_profile, "demand.od_profile")
+            # OD 는 진입 지점별 목적지를 준다. 진입 지점이 차마다 달라야 쓸 수 있다 —
+            # entry_exit_profile 이 없으면 전원이 코리도 시작점에서 타므로 기점이 하나다
+            if entry_exit_profile is None:
+                e.add(
+                    "demand.od_profile",
+                    "entry_exit_profile 과 같이 써야 한다 — 진입 지점이 차마다 달라야 "
+                    f"기점별 목적지가 의미를 가진다 (받은 값: {od_profile})",
+                )
         layers = parse_layers(d.get("layers"), e)
         escape_cost_min = e.number(
             d.get("escape_cost_min", 0.0), "demand.escape_cost_min", lo=0.0)
+        escape_cost_sigma = e.number(
+            d.get("escape_cost_sigma", 0.0), "demand.escape_cost_sigma", lo=0.0)
         travel_time = str(d.get("travel_time", "fixed"))
         if travel_time not in TRAVEL_TIME_MODES:
             e.add("demand.travel_time",
@@ -473,6 +593,7 @@ class ScenarioConfig:
         target_soc_cap = e.number(
             v.get("target_soc_cap", 0.8), "vehicles.target_soc_cap", lo=0.0, hi=1.0, lo_exclusive=True
         )
+        habit_soc = e.number(v.get("habit_soc", 0.0), "vehicles.habit_soc", lo=0.0, hi=1.0)
 
         # environment ------------------------------------------------------
         env = e.section(data, "environment")
@@ -574,9 +695,11 @@ class ScenarioConfig:
                 low_soc_threshold=low_soc_threshold,       # type: ignore[arg-type]
                 through_profile=through_profile,           # type: ignore[arg-type]
                 entry_exit_profile=entry_exit_profile,     # type: ignore[arg-type]
+                od_profile=od_profile,                     # type: ignore[arg-type]
                 cruise_speed_kmh=cruise_speed_kmh,         # type: ignore[arg-type]
                 travel_time=travel_time,
                 escape_cost_min=escape_cost_min,           # type: ignore[arg-type]
+                escape_cost_sigma=escape_cost_sigma,       # type: ignore[arg-type]
                 layers=layers,
                 beta_binomial_concentration=beta_binomial_concentration,   # type: ignore[arg-type]
                 poisson_lognormal_sigma=poisson_lognormal_sigma,           # type: ignore[arg-type]
@@ -585,6 +708,7 @@ class ScenarioConfig:
                 seed=seed,                                 # type: ignore[arg-type]
                 soc_beta=selected,                         # type: ignore[arg-type]
                 target_soc_cap=target_soc_cap,             # type: ignore[arg-type]
+                habit_soc=habit_soc,                       # type: ignore[arg-type]
                 departure_soc=departure_soc,
                 soc_profiles=tuple(soc_profiles),
             ),
@@ -612,6 +736,8 @@ class ScenarioConfig:
             candidates.append(self.demand.through_profile)
         if self.demand.entry_exit_profile:
             candidates.append(self.demand.entry_exit_profile)
+        if self.demand.od_profile:
+            candidates.append(self.demand.od_profile)
         return [c for c in candidates if not (base / c).is_file() and not Path(c).is_file()]
 
     # -- DB 연동 -------------------------------------------------------------

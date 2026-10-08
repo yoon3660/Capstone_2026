@@ -839,3 +839,49 @@ def test_plan_prefers_farther_reachable_station():
         for stop in result["charging_stops"]
     ] == ["far"]
     assert result["final_soc"] == pytest.approx(0.2)
+
+# ---------------------------------------------------------------------------
+# 습관 목표 SoC (#82)
+#
+# 사람은 "필요한 만큼" 만 채우지 않는다. 이걸 안 넣었을 때 충전 종료 SoC 가 평균
+# 52.9% 였는데 국내 실측은 85% 다 — 충전시간이 짧게 나오고 **대기가 과소평가된다.**
+# ---------------------------------------------------------------------------
+def _target(dist_km: float, habit: float, cap: float = 0.8) -> float:
+    return calculate_target_soc(
+        battery_kwh=60.0, consumption_kwh_km=0.2, range_factor=1.0,
+        distance_to_dest_km=dist_km, buffer_km=30.0,
+        target_soc_cap=cap, arrival_reserve_soc=0.2, habit_soc=habit,
+    )
+
+
+def test_habit_lifts_a_short_trip_that_needed_almost_nothing():
+    """가까운 목적지라도 **습관만큼은 채운다.**
+
+    30 km 만 남은 차는 필요량이 작아 금방 떠난다. 그게 충전시간을 9분으로 만들었다.
+    """
+    assert _target(30.0, habit=0.0) == pytest.approx(0.3)      # 필요한 만큼만
+    assert _target(30.0, habit=0.85, cap=0.9) == pytest.approx(0.85)
+
+
+def test_habit_does_not_lower_a_long_trip_that_needs_more():
+    """습관보다 더 가야 하면 **필요량이 이긴다.** 습관은 하한이지 목표가 아니다."""
+    far = _target(400.0, habit=0.0, cap=1.0)
+    assert far > 0.85
+    assert _target(400.0, habit=0.85, cap=1.0) == pytest.approx(far)
+
+
+def test_the_cap_still_wins():
+    """상한은 그대로 천장이다 — 급속은 80% 를 넘기면 급격히 느려진다."""
+    assert _target(30.0, habit=0.95, cap=0.8) == pytest.approx(0.8)
+
+
+def test_zero_habit_keeps_the_old_behaviour():
+    """0.0 이면 #82 이전과 **정확히** 같다. 기본값이 이것이라 기준선이 안 움직인다."""
+    for dist in (0.0, 50.0, 200.0, 400.0):
+        assert _target(dist, habit=0.0) == pytest.approx(
+            calculate_target_soc(
+                battery_kwh=60.0, consumption_kwh_km=0.2, range_factor=1.0,
+                distance_to_dest_km=dist, buffer_km=30.0,
+                target_soc_cap=0.8, arrival_reserve_soc=0.2,
+            )
+        )

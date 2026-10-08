@@ -69,6 +69,22 @@ def test_ue_requires_full_participation() -> None:
         ScenarioConfig.from_dict(data)
 
 
+def test_od_profile_needs_entry_exit_profile() -> None:
+    """OD 는 기점별 목적지를 준다 (#99).
+
+    entry_exit_profile 이 없으면 전원이 코리도 시작점에서 타므로 **기점이 하나**다.
+    그러면 기점별 분포가 아무 뜻이 없는데도 조용히 돌아간다.
+    """
+    base = ScenarioConfig.from_yaml(ROOT / "config" / "scenario_seollal_down.yaml")
+    import yaml
+
+    data = yaml.safe_load(base.raw_yaml)
+    data["demand"]["od_profile"] = "data/processed/tcs_od_gyeongbu.parquet"
+    data["demand"]["entry_exit_profile"] = None
+    with pytest.raises(ConfigError, match="entry_exit_profile"):
+        ScenarioConfig.from_dict(data)
+
+
 def test_scenario_row_matches_db_columns(cfg: ScenarioConfig, db_path) -> None:
     from evdt.io.db import column_names, get_conn
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
+import numpy as np
 from _bootstrap import ROOT  # noqa: E402  (src 경로와 콘솔 인코딩을 먼저 준비한다)
 
 from evdt.config import ScenarioConfig  # noqa: E402
@@ -31,6 +32,7 @@ from evdt.io.event_log import load_sql, log_sim_result  # noqa: E402
 from evdt.io.loaders import duck_connect  # noqa: E402
 from evdt.io.run_registry import RunContext  # noqa: E402
 from evdt.io.stations import SMOKE_SOURCE, read_station_chargers  # noqa: E402
+from evdt.io.synthetic_ev import sample_initial_soc  # noqa: E402
 from evdt.io.vehicles import curve_segments, load_from_db, temp_table  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
 from evdt.world.charging import temp_factors  # noqa: E402
@@ -112,8 +114,11 @@ def build_arrivals(cfg, rng, stations, vclasses, curves, charge_power_factor):
     shares = [v["share"] for v in vclasses]
     by_id = {v["vclass_id"]: v for v in vclasses}
     curve_by_id = {vid: tuple(curve_segments(curves, vid)) for vid in ids}
-    beta = cfg.vehicles.soc_beta
     target = cfg.vehicles.target_soc_cap
+    # 분포 종류(Beta / 로그정규)를 가리지 않게 생성기와 같은 샘플러를 쓴다 (#55)
+    soc_pool, _ = sample_initial_soc(
+        cfg.vehicles.soc_beta, np.random.default_rng(cfg.vehicles.seed), N_EV
+    )
 
     arrivals = []
 
@@ -123,7 +128,7 @@ def build_arrivals(cfg, rng, stations, vclasses, curves, charge_power_factor):
         vclass_id = rng.choices(ids, weights=shares, k=1)[0]
         vclass = by_id[vclass_id]
 
-        soc_in = beta.lo + rng.betavariate(beta.a, beta.b) * (beta.hi - beta.lo)
+        soc_in = float(soc_pool[i])
 
         # 목표까지 채울 것이 없으면 애초에 충전하러 오지 않는다
         if soc_in >= target:

@@ -31,7 +31,9 @@ import yaml
 
 from evdt.config import ScenarioConfig
 from evdt.demand_layers import effective_ev_share, opportunity_charge
+from evdt.engine.reservation import ReservationLedger
 from evdt.engine.s0 import S0Policy, S0Settings
+from evdt.engine.s1 import S1Policy, S1Settings
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
@@ -45,6 +47,7 @@ from evdt.io.entry_exit import (
 )
 from evdt.io.event_log import load_sql, log_sim_result
 from evdt.io.loaders import duck_connect, load_run_table
+from evdt.io.od_profile import load_od_profile, od_subset_for
 from evdt.io.run_registry import RunContext, make_run_id
 from evdt.io.stations import read_station_chargers
 from evdt.io.synthetic_ev import generate_evs
@@ -91,6 +94,8 @@ def load_config(
     *,
     soc: str | None = None,
     demand_multiplier: float | None = None,
+    ev_share: float | None = None,
+    od: str | None = None,
     stage: str | None = None,
     root: Path = PROJECT_ROOT,
 ) -> ScenarioConfig:
@@ -114,6 +119,24 @@ def load_config(
         tags.append(f"dm{demand_multiplier:g}")
         overrides["demand.demand_multiplier"] = float(demand_multiplier)
 
+    # EV 비중은 **EV 만** 늘린다. 수요 배율(dm)은 배경 교통량까지 같이 올리므로,
+    # "EV 가 늘면 어떻게 되나" 를 묻는 축으로는 이쪽이 맞다 (#55 · #67).
+    #
+    # ⚠ `demand.ev_share` 를 직접 덮어쓰지 않는다. 그 자리는 **실측**이고, 얹는 것은
+    #   반드시 이름 붙은 레이어로만 얹는다 (#54, `demand_layers.py`). 레이어로 넣어야
+    #   `demand_label` 에 "EV 보급률 25%" 가 찍히고 **모든 그림 부제에 따라 붙는다**.
+    #   직접 덮어쓰면 재현과 가정이 구분되지 않는다 — 그걸 막으려고 만든 장치다.
+    if ev_share is not None:
+        tags.append(f"ev{ev_share * 100:g}")
+        overrides["demand.layers"] = [{"kind": "ev_adoption", "ev_share": float(ev_share)}]
+
+    # 실측 OD 목적지 (#99). **세계를 바꾸므로 반드시 이름이 바뀌어야 한다** — 안 바뀌면
+    # 옛 수요 run 과 OD 수요 run 이 같은 run_id 를 갖고, #101 의 비교가 같은 run 을
+    # 자기 자신과 비교한다. 한 곳에서만 태그를 붙여야 스크립트마다 갈라지지 않는다
+    if od is not None:
+        tags.append("od")
+        overrides["demand.od_profile"] = str(od)
+
     out = cfg.variant("__".join(tags), overrides) if tags else cfg
     return with_stage(out, stage) if stage is not None else out
 
@@ -123,8 +146,67 @@ def with_seed(cfg: ScenarioConfig, seed: int) -> ScenarioConfig:
 
 
 def departure_soc_mean(cfg: ScenarioConfig) -> float:
-    b = cfg.vehicles.soc_beta
-    return b.lo + b.a / (b.a + b.b) * (b.hi - b.lo)
+    """진입 SoC 분포의 평균. 분포 종류와 무관하다 (#55)."""
+
+    return cfg.vehicles.soc_beta.mean()
+
+
+def run_params(cfg: ScenarioConfig) -> dict:
+    """run 표에 남기는 값. **run_id 가 구분하지 못하는 것**을 여기에 적는다.
+
+    `run_id` 는 (scenario_id, stage, 참여율, seed) 뿐이라, **같은 이름으로 다른 세계를
+    돌릴 수 있다.** 실제로 그랬다 — #55 가 yaml 기본 `departure_soc` 를 low → holiday
+    로 바꿨는데 `run_id` 는 그대로여서, 9월에 돌린 `soc=low` 결과(충전 필요 10,129대)가
+    10월에도 "재현 기준선"(1,854대)인 척 계속 제공됐다.
+
+    그래서 재사용하기 전에 `stale_reason` 으로 이 값들을 대조한다.
+    """
+
+    return {
+        "departure_soc": cfg.vehicles.departure_soc,
+        "departure_soc_mean": round(departure_soc_mean(cfg), 4),
+        "demand_multiplier": cfg.demand.demand_multiplier,
+        # 실측 위에 무엇이 얹혔나 (#54). 결과를 다시 볼 때 가장 먼저 봐야 하는 값이다
+        "demand_layers": cfg.demand_label,
+        # 목적지를 어디서 뽑았나 (#99). scenario_id 에도 __od 로 들어가지만,
+        # 기록에 남겨야 옛 run 을 재사용할 때 눈으로 확인할 수 있다
+        "od_profile": cfg.demand.od_profile,
+    }
+
+
+def stale_reason(stored: dict, cfg: ScenarioConfig) -> str | None:
+    """이미 DONE 인 run 을 지금 config 로 재사용해도 되나. 안 되면 그 이유.
+
+    **기록에 있는 키만 본다.** 옛 run 에는 나중에 추가된 키가 없는데, 없다고 전부
+    다시 돌리면 쓸 수 있는 결과까지 버린다. 기록된 값이 다르면 그건 확실한 불일치다.
+    """
+
+    want = run_params(cfg)
+    diffs = [f"{k}: 기록 {stored[k]!r} ≠ 지금 {want[k]!r}"
+             for k in want if k in stored and stored[k] != want[k]]
+    return " · ".join(diffs) if diffs else None
+
+
+def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig) -> tuple[bool, str]:
+    """이미 있는 run 을 그대로 써도 되나. 돌려주는 것은 (써도 되나, 이유).
+
+    ⚠ **DONE 인 것만으로는 부족하다.** `check_same_world` 는 진입 EV 수만 보는데,
+    진입 EV 가 같으면서 세계가 다를 수 있다 — #55 가 yaml 기본 `departure_soc` 를
+    low → holiday 로 바꿨을 때가 그랬다. 진입 EV 는 18,534 로 같고 **충전 필요만
+    10,129 → 1,854** 로 달랐다. 그래서 그 방어로는 안 걸린다.
+    """
+
+    with get_conn(db, readonly=True) as conn:
+        row = conn.execute(
+            "SELECT status, params_json FROM run WHERE run_id = ?", (run_id,)).fetchone()
+
+    if row is None:
+        return False, "없음"
+    if row[0] != "DONE":
+        return False, str(row[0])
+
+    why = stale_reason(json.loads(row[1] or "{}"), cfg)
+    return (False, f"설정이 다르다 — {why}") if why else (True, "DONE")
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +215,8 @@ def departure_soc_mean(cfg: ScenarioConfig) -> float:
 
 
 def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corridor_end_km: float,
-                 *, root: Path = PROJECT_ROOT) -> tuple[DemandBuild, float, float]:
+                 *, root: Path = PROJECT_ROOT,
+                 log: Log = print) -> tuple[DemandBuild, float, float]:
     """교통량 프로파일 → EV → 충전 계획 선택지."""
 
     missing = cfg.missing_inputs(root)
@@ -168,16 +251,41 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
     evs = generate_evs(volume, cfg, dest_offset_km=corridor_end_km)
 
     if points is not None:
-        # 목적지는 실측 진출 비율로 하류를 훑으며 뽑는다
+        # 진입 지점과 시각은 **언제나 VDS** 가 준다. 목적지만 두 방식이 있다 (#99)
         hours = ((evs["entry_time_min"] // 60).astype(int) % 24).to_numpy()
         entry = np.zeros(len(evs))
         dest = np.zeros(len(evs))
+
+        # 실측 OD 가 있으면 P(목적지 | 기점) 에서 뽑는다. 없으면 지금까지의
+        # 위험률 모델 — 그쪽은 **목적지가 진입 지점과 무관**하다고 가정하고,
+        # 실측으로 재 보니 서울 진입차의 p50 이 16.8 → 63.1 km 였다 (#99)
+        od = None
+        if cfg.demand.od_profile:
+            od_period, od_direction = od_subset_for(cfg)
+            od = load_od_profile(root / cfg.demand.od_profile, od_period, od_direction)
+            log(f"  실측 OD 목적지: period={od_period} · direction={od_direction}  (#99)")
+
+        # ⚠ 맞추기 **전**의 진입 지점을 따로 모은다. 맞춘 값으로 거리를 재면 0 이
+        # 나와서 "조용히 맞추지 않겠다" 던 보고가 거짓 안심이 된다
+        raw_entry = np.zeros(len(evs))
+
         for hour in np.unique(hours):
             pick = hours == hour
             here = sample_entry_offsets(int(pick.sum()), int(hour), points, rng)
-            entry[pick] = here
-            dest[pick] = sample_exit_offsets(here, int(hour), profile, rng,
-                                             corridor_end_km=corridor_end_km)
+            raw_entry[pick] = here
+            if od is None:
+                entry[pick] = here
+                dest[pick] = sample_exit_offsets(here, int(hour), profile, rng,
+                                                 corridor_end_km=corridor_end_km)
+            else:
+                # 진입 위치를 OD 기점에 맞춘다 — 코리도 0 km(양재)와 서울TG(12.941)는
+                # 같은 진입을 다르게 부르는 것이다. 맞춰야 통행거리가 실측과 같은 자로
+                # 재진다. 멀면 od_profile 쪽에서 그 자리에서 터진다
+                entry[pick], dest[pick] = od.sample(here, rng)
+
+        if od is not None:
+            log("  " + od.describe_snap(raw_entry))
+
         evs["entry_offset_km"] = entry
         evs["dest_offset_km"] = dest
     elif cfg.demand.through_profile:
@@ -192,8 +300,10 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         buffer_km=cfg.demand.safety_buffer_km,
         reserve_soc=cfg.demand.low_soc_threshold,
         target_soc_cap=cfg.vehicles.target_soc_cap,
+        habit_soc=cfg.vehicles.habit_soc,
         max_stops=cfg.policy.ue.max_stops,
         escape_cost_min=cfg.demand.escape_cost_min,
+        escape_cost_sigma=cfg.demand.escape_cost_sigma,
         opportunity_prob=opp_prob,
         opportunity_soc_margin=opp_margin,
     )
@@ -206,6 +316,9 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         charge_power_factor=charge_power_factor,
         rng=np.random.default_rng([cfg.vehicles.seed, OPPORTUNITY_STREAM]),
     )
+    # 행태 바닥은 생성기가 걸고, 도달 가능성은 build_trip_demands 가 건다 (#55).
+    # 둘을 한 군데 모아 두어야 KPI 셋을 같이 읽을 수 있다
+    built = dataclasses.replace(built, n_soc_floored=int(evs.attrs.get("n_soc_floored", 0)))
     return built, range_factor, charge_power_factor
 
 
@@ -260,7 +373,7 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
-RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0")
+RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1")
 
 
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
@@ -302,6 +415,7 @@ def _sim_evs(trips: Sequence) -> list[SimEV]:
             consumption_kwh_km=t.consumption_kwh_km, vmax_kw=t.vmax_kw,
             curve=t.curve, cold_factor=t.cold_factor,
             wants_opportunity_charge=t.wants_opportunity_charge,
+            escape_cost_min=t.escape_cost_min,
         )
         for t in trips
     ]
@@ -351,7 +465,8 @@ def run_once(
     stations = [r for r in station_rows if r["station_id"] in chargers]
     offsets = {r["station_id"]: float(r["offset_km"]) for r in stations}
 
-    built, range_factor, cpf = build_demand(cfg, stations, vclasses, curves, temps, corridor_end_km, root=root)
+    built, range_factor, cpf = build_demand(cfg, stations, vclasses, curves, temps,
+                                            corridor_end_km, root=root, log=log)
     soc_mean = departure_soc_mean(cfg)
 
     log(f"\n{cfg.scenario_id}  seed={cfg.vehicles.seed}  기온 {cfg.environment.temp_c}°C "
@@ -372,13 +487,7 @@ def run_once(
         travel=None if ctm is None else ctm.speed_field,
         escape_cost_min=cfg.demand.escape_cost_min,
     )
-    params = {
-        "departure_soc": cfg.vehicles.departure_soc,
-        "departure_soc_mean": round(soc_mean, 4),
-        "demand_multiplier": cfg.demand.demand_multiplier,
-        # 실측 위에 무엇이 얹혔나 (#54). 결과를 다시 볼 때 가장 먼저 봐야 하는 값이다
-        "demand_layers": cfg.demand_label,
-    }
+    params = run_params(cfg)
 
     with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, runs_dir=runs,
                          overwrite=overwrite, params=params) as run:
@@ -389,6 +498,15 @@ def run_once(
             "n_ev_no_charge": (built.n_no_charge, "count"),
             "n_ev_infeasible": (built.n_infeasible, "count"),
             "departure_soc_mean": (soc_mean, "ratio"),
+            # 진입 SoC 가드레일이 몇 대를 건드렸나 (#55). 조용히 올리면 진입 SoC 분포가
+            # 선언한 것과 달라지고 그걸 아무도 모르게 된다. **이 수가 크면 가드레일이
+            # 잘 도는 게 아니라 분포가 틀린 것이다** — docs/departure_soc.md §5.
+            "n_soc_floored": (built.n_soc_floored, "count"),
+            "n_entry_lifted": (built.n_entry_lifted, "count"),
+            "soc_lift_mean": (
+                built.soc_lift_total / built.n_entry_lifted if built.n_entry_lifted else 0.0,
+                "ratio",
+            ),
         })
 
         # 수렴 못 하면 gap 이력을 남기고 예외 → RunContext 가 run 을 FAILED 로 기록한다
@@ -455,6 +573,27 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
     sim = run_charging_des(specs, des_arrivals(built.trips, result),
                            snapshot_every_min=float(cfg.output.snapshot_every_min))
 
+    # 첫 sweep 에 통과하면 **균형이라 부를 수 없을 수 있다** (#29 가 3% 를 버린 이유다).
+    #
+    # ⚠ 다만 통과에는 **두 가지**가 있고, 최종 gap 이 둘을 가른다 (#55).
+    #   (가) gap 이 tol 에 **간신히** 들어왔다 → gap_tol 이 느슨한 것이다. 전원이 한 번씩
+    #        고르고 끝났을 뿐 "아무도 바꾸고 싶지 않은 상태" 가 아니다. 엔진 비교 불가
+    #   (나) gap 이 tol 보다 **한참 아래**다 → 애초에 바꿀 이유가 없을 만큼 한산하다.
+    #        재현 기준선(충전 필요 1,842대)이 여기다. 균형이 맞다
+    # 숫자만 보고 (가)로 읽으면 멀쩡한 기준선을 버린다.
+    final_gap, tol = result.final_gap, settings.gap_tol
+    first_sweep = int(result.history[-1].iteration <= 1)
+    if first_sweep:
+        tight = final_gap < tol * 0.5
+        log("")
+        log(f"  ⚠ UE 가 첫 sweep 에 통과했다 (반복 1회, gap {final_gap:.2%} / tol {tol:.1%}).")
+        if tight:
+            log("    gap 이 tol 보다 한참 아래다 — **바꿀 이유가 없을 만큼 한산한** 것이지")
+            log("    gap_tol 이 느슨한 것이 아니다. 기준선으로 써도 된다.")
+        else:
+            log("    gap 이 tol 에 간신히 들어왔다 — 균형이 아니라 '한 번 훑은 상태' 다.")
+            log("    **엔진 비교의 기준선으로 쓰지 말 것.**")
+
     return (
         list(sim.charge_events),
         list(sim.snapshots),
@@ -462,6 +601,7 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
         {
             "ue_iterations": (result.history[-1].iteration, "count"),
             "ue_final_gap": (result.final_gap, "ratio"),
+            "ue_first_sweep_pass": (first_sweep, "count"),
         },
     )
 
@@ -476,22 +616,33 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
 
     stage = cfg.policy.stage
 
-    if stage != "S0":
+    if stage not in ("S0", "S1"):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
-    policy = S0Policy(S0Settings(
-        buffer_km=cfg.demand.safety_buffer_km,
-        reserve_soc=cfg.demand.low_soc_threshold,
-        target_soc_cap=cfg.vehicles.target_soc_cap,
-        max_stops=cfg.policy.ue.max_stops,
-        # 이탈 비용은 UE 와 **같은 값**이어야 한다. 한쪽만 다르면 이탈 수 차이가
-        # 정책 차이로 보고된다
-        escape_cost_min=cfg.demand.escape_cost_min,
-    ))
+    # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
+    kw = {
+        "buffer_km": cfg.demand.safety_buffer_km,
+        "reserve_soc": cfg.demand.low_soc_threshold,
+        "target_soc_cap": cfg.vehicles.target_soc_cap,
+        # 습관 충전은 **UE·S0·S1 이 같은 값**을 써야 한다 (#82). 한쪽만 다르면
+        # 충전량이 갈라지고 그 차이가 정책 차이로 보고된다
+        "habit_soc": cfg.vehicles.habit_soc,
+        "max_stops": cfg.policy.ue.max_stops,
+        "escape_cost_min": cfg.demand.escape_cost_min,
+    }
+    # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
+    # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
+    ledger = None
+    if stage == "S1":
+        policy = S1Policy(S1Settings(**kw))
+        ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
+    else:
+        policy = S0Policy(S0Settings(**kw))
     amount = ChargeAmount(
         buffer_km=cfg.demand.safety_buffer_km,
         reserve_soc=cfg.demand.low_soc_threshold,
         target_soc_cap=cfg.vehicles.target_soc_cap,
+        habit_soc=cfg.vehicles.habit_soc,
     )
 
     out = run_corridor(
@@ -505,6 +656,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
         cruise_speed_kmh=cfg.demand.cruise_speed_kmh,
         escape_cost_min=cfg.demand.escape_cost_min,
         snapshot_every_min=float(cfg.output.snapshot_every_min),
+        ledger=ledger,
     )
 
     log(f"  Δt {cfg.time.dt_min}분 · decide() 호출 {out.n_decide_calls:,}번 "
@@ -774,10 +926,18 @@ KPI_LABELS: dict[str, str] = {
     "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
+    # 1 이면 반복 1회로 끝났다. **ue_final_gap 과 같이 읽는다** (#55) — gap 이 tol 에
+    # 간신히 들어왔으면 균형이 아니고, 한참 아래면 그냥 한산한 것이다
+    "ue_first_sweep_pass": "⚠ 첫 sweep 통과 (gap 과 같이 볼 것)",
     "n_ev": "진입 EV (대)",
     "n_ev_no_charge": "충전 없이 도착 (대)",
     "n_ev_infeasible": "3회 정차로도 불가 (대)",
-    "departure_soc_mean": "출발 SoC 평균",
+    "departure_soc_mean": "진입 SoC 평균",
+    # 가드레일 셋은 **같이 읽는다** (#55). 분포가 맞으면 셋 다 작아야 한다 —
+    # 커지면 바닥이 아니라 분포(mu·sigma)를 다시 봐야 한다는 신호다
+    "n_soc_floored": "가드레일: 행태 바닥에 걸림 (대)",
+    "n_entry_lifted": "가드레일: 닿을 곳이 없어 올림 (대)",
+    "soc_lift_mean": "가드레일: 평균 올린 SoC",
 }
 
 
