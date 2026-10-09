@@ -98,11 +98,16 @@ def main() -> int:
     corridor = str(cell["entity_id"].iloc[0]).rsplit("_", 1)[0]
     direction = "UP" if corridor.endswith("_up") else "DOWN"
 
+    # 기간은 run 이 저장한 config 전문에서 읽는다 — scenario 표에는 열이 없고,
+    # 이름으로 짐작하면 설 시나리오가 평시 속도와 대조될 수 있다 (#97 이 그랬다)
+    import yaml
     with sqlite3.connect(default_db_path()) as conn:
-        period = conn.execute(
-            "SELECT s.period FROM run r JOIN scenario s ON s.scenario_id = r.scenario_id "
+        row = conn.execute(
+            "SELECT s.config_yaml FROM run r JOIN scenario s ON s.scenario_id = r.scenario_id "
             "WHERE r.run_id = ?", (args.run,)).fetchone()
-    period = period[0] if period else "seollal2026"
+    if row is None:
+        raise SystemExit(f"\n[중단] run 이 DB 에 없다: {args.run}")
+    period = str(yaml.safe_load(row[0])["demand"]["period"])
 
     m = cell_to_conzone(corridor, direction)
     cell = cell.assign(hour=(cell["t_min"] // 60).astype(int) % 24)
@@ -113,9 +118,18 @@ def main() -> int:
              .groupby(["conzone_id", "hour"])[["wv", "w"]].sum())
     model = (model["wv"] / model["w"]).rename("ctm_kmh").reset_index()
 
+    # ⚠ **같은 날과 비교한다.** 수요 프로파일은 `peak_date` 한 날에서 나온다
+    # (`io/demand_profile.entry_hourly_volume`). 그런데 속도를 기간 평균과 비교하면
+    # 서로 다른 날을 맞대는 것이고, 게다가 **평균이 정체를 지운다** — 설 하행은
+    # 날짜별 정체칸 2.96% 가 10일 평균 뒤 0.44% 로, 최저속도는 13 → 50 km/h 가 된다.
+    import evdt.io.demand_profile as dp
+    traffic = pd.read_parquet(DATA_PROCESSED_DIR / "traffic_gyeongbu.parquet")
+    day = dp.peak_date(traffic, period=period, direction=direction)
+
     vds = pd.read_parquet(DATA_PROCESSED_DIR / "speed_gyeongbu.parquet")
     vds = vds[(vds["direction"].astype(str) == direction)
-              & (vds["period"].astype(str) == period)]
+              & (vds["period"].astype(str) == period)
+              & (pd.to_datetime(vds["date"]).dt.normalize() == day)]
     vds = (vds.groupby(["conzone_id", "hour"])["speed_kmh"].mean()
            .rename("vds_kmh").reset_index())
 
