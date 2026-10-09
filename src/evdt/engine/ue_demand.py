@@ -90,6 +90,11 @@ class TripDemand:
     #: 수천 대가 되고, 작은 차이로 집단이 뒤집혀 최적반응이 가라앉지 않는다.
     #: 0 이면 호출자가 준 전역값을 쓴다 (#78 이전 동작).
     escape_cost_min: float = 0.0
+    #: 이 차가 채우고 싶어 하는 SoC (#112). **차마다 다르다** — 전원이 똑같이
+    #: 80% 를 목표로 하면 같은 휴게소에서 체류가 전부 같아지고, 무차별해진 차들이
+    #: 한꺼번에 뒤집혀 최적반응이 가라앉지 않는다 (#78 의 이탈 비용과 같은 모양).
+    #: 0 이면 호출자가 준 전역값을 쓴다.
+    habit_soc: float = 0.0
     #: 필요 없는데 들른 김에 충전하는 차인가 (#54). 추첨은 수요를 만들 때 한 번만 한다
     wants_opportunity_charge: bool = False
 
@@ -129,6 +134,8 @@ class ChargeRule:
     #: 사람은 "필요한 만큼" 만 채우지 않는다 (#82). 국내 실측 85% (김범일 외 2022).
     #: 0.0 이면 필요한 만큼만 — #82 이전 동작이고 기본값이다.
     habit_soc: float = 0.0
+    #: 습관 목표 SoC 의 흩어짐 (#112). 0 이면 전원이 habit_soc 를 쓴다 (진동한다)
+    habit_soc_sigma: float = 0.0
     escape_cost_min: float = 0.0
     #: 이탈 비용의 산포 (로그정규의 sigma) (#78). 0 이면 전원이 같은 값을 쓴다.
     #: **전원이 같으면 그 값 근처에 질량이 몰려 최적반응이 가라앉지 않는다** —
@@ -181,6 +188,7 @@ def enumerate_plans(
     consumption_kwh_km: float,
     rule: ChargeRule,
     opportunity: bool = False,
+    habit_soc: float | None = None,
 ) -> tuple[Plan, ...] | None:
     """정차 수가 가장 적은 실행 가능한 계획 전부. 충전이 필요 없으면 None, 불가능하면 ().
 
@@ -190,6 +198,8 @@ def enumerate_plans(
     """
 
     kw = dict(battery_kwh=battery_kwh, consumption_kwh_km=consumption_kwh_km, range_factor=rule.range_factor)
+    # 이 차가 채우고 싶어 하는 SoC. 안 주면 전역값 (#112 이전 동작)
+    habit = rule.habit_soc if habit_soc is None else habit_soc
 
     def reaches_dest(soc: float, offset: float) -> bool:
         return can_reach_destination(
@@ -227,7 +237,7 @@ def enumerate_plans(
                 calculate_target_soc(
                     distance_to_dest_km=dest_offset_km - s_off, buffer_km=rule.buffer_km,
                     target_soc_cap=rule.target_soc_cap, arrival_reserve_soc=rule.reserve_soc,
-                    habit_soc=rule.habit_soc, **kw,
+                    habit_soc=habit, **kw,
                 ),
             )
 
@@ -347,6 +357,17 @@ def build_trip_demands(
     else:
         escape_costs = np.full(len(evs), rule.escape_cost_min, dtype=float)
 
+    # 습관 목표 SoC 도 **차마다 다르다** (#112). 전원이 같은 값이면 같은 휴게소에서
+    # 체류가 전부 같아져 무차별점이 생기고, 상행에서 gap 이 3.12% ↔ 3.20% 로
+    # 2주기 진동했다 — #78 의 이탈 비용 점질량과 같은 고장이다.
+    # 잘린 정규분포로 뽑는다: 목표 SoC 는 상·하한이 있는 양이라 로그정규가 맞지 않는다.
+    if rule.habit_soc > 0 and rule.habit_soc_sigma > 0:
+        habits = np.clip(
+            gen.normal(rule.habit_soc, rule.habit_soc_sigma, size=len(evs)), 0.0, 1.0
+        )
+    else:
+        habits = np.full(len(evs), rule.habit_soc, dtype=float)
+
     for i, ev in enumerate(evs):
         n_ev += 1
         v = vclasses[str(ev["vclass_id"])]
@@ -369,6 +390,7 @@ def build_trip_demands(
 
         opportunity = _wants_opportunity_charge(ev, v, entry_km, rule, draw)
         n_opportunity += int(opportunity)
+        habit = float(habits[i])
         plans = enumerate_plans(
             stations,
             entry_offset_km=entry_km,
@@ -378,6 +400,7 @@ def build_trip_demands(
             consumption_kwh_km=float(v["consumption_kwh_km"]),
             rule=rule,
             opportunity=opportunity,
+            habit_soc=habit,
         )
 
         escape = (Plan(()),) if rule.escape_cost_min > 0 else ()
@@ -411,6 +434,7 @@ def build_trip_demands(
                 soc0=soc0,
                 consumption_kwh_km=float(v["consumption_kwh_km"]),
                 escape_cost_min=float(escape_costs[i]),
+                habit_soc=float(habit),
                 wants_opportunity_charge=opportunity,
             )
         )

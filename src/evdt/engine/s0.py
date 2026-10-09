@@ -106,7 +106,7 @@ class S0Policy:
             buffer_km=self.settings.buffer_km,
             target_soc_cap=self.settings.target_soc_cap,
             arrival_reserve_soc=self.settings.reserve_soc,
-            habit_soc=self.settings.habit_soc,
+            habit_soc=ev.habit_soc or self.settings.habit_soc,
         )
         return max(soc_in, need, self.settings.target_soc_cap if opportunity else 0.0)
 
