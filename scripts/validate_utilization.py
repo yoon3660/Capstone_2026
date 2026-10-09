@@ -43,6 +43,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import pandas as pd
 from _bootstrap import ROOT  # noqa: E402,F401
@@ -51,8 +52,9 @@ from evdt.io.db import get_conn  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
 
 #: 실측 (워터, 2026 설 고속도로 49곳, 오후 12~6시). inews24 보도.
-MEASURED = {"small": 50.3, "big": 33.5}
-MEASURED_RATIO = MEASURED["small"] / MEASURED["big"]
+#: 보도 통계 기본값. **실측 파일이 오면 `--measured` 로 갈아끼운다** (#64 준비).
+PUBLISHED = {"small": 50.3, "big": 33.5}
+PUBLISHED_SOURCE = "워터, 2026 설 고속도로 49곳 (inews24 보도)"
 
 #: 결과를 보기 전에 정한 기준 (#112)
 TOLERANCE = 0.30
@@ -60,6 +62,66 @@ MIN_RATIO = 1.2
 
 PM_FROM, PM_TO = 12, 18
 SMALL_MAX, BIG_MIN = 2, 7
+
+
+def _ratio(measured: dict) -> float:
+    if "small" in measured and measured.get("big"):
+        return measured["small"] / measured["big"]
+    return float("nan")
+
+def load_measured(path: Path | None) -> tuple[dict, str, pd.DataFrame | None]:
+    """실측 이용률. 파일이 없으면 보도 통계를 쓴다 (#64 준비).
+
+    ## 기대하는 형식 — 팀원이 받아오는 자료를 이 모양으로만 맞춰 주면 된다
+
+    CSV 한 장, 최소 세 열:
+
+        station,hour,util_pct        휴게소 이름(또는 코드) · 0~23 · 0~100
+        안성,13,46.8
+        안성,14,51.2
+        ...
+
+    `util_pct` 대신 `busy,total` 을 줘도 된다 (우리가 나눈다).
+
+    > **충전 세션 로그(시작·종료 시각)를 받았다면** 위 표는 groupby 한 번이다 —
+    > 각 (휴게소, 시) 에서 동시에 꽂혀 있던 충전기 수의 평균 ÷ 총 충전기 수.
+    > 로그 자체를 이 스크립트에 넣지 않는 이유는, **점유를 세는 규칙이 하나여야**
+    > 하기 때문이다 (설계 규칙 1 과 같은 이유).
+
+    휴게소 이름은 우리 `station.name` 과 맞아야 한다. 안 맞는 이름은 **버리지 않고
+    세어서 알린다** — 조용히 빠지면 비교 대상이 줄어든 걸 아무도 모른다.
+    """
+
+    if path is None:
+        return dict(PUBLISHED), PUBLISHED_SOURCE, None
+
+    if not path.exists():
+        raise SystemExit(f"\n[중단] 실측 파일이 없다: {path}")
+
+    m = pd.read_csv(path)
+    need = {"station", "hour"}
+    if not need <= set(m.columns):
+        raise SystemExit(
+            f"\n[중단] {path} 에 {sorted(need)} 가 있어야 한다.\n"
+            f"  있는 열: {list(m.columns)}\n"
+            "  형식은 load_measured 의 설명을 볼 것."
+        )
+    if "util_pct" not in m.columns:
+        if not {"busy", "total"} <= set(m.columns):
+            raise SystemExit(
+                f"\n[중단] {path} 에 util_pct 가 없으면 busy·total 이 있어야 한다."
+            )
+        m["util_pct"] = m["busy"] / m["total"].replace(0, pd.NA) * 100
+
+    pm = m[(m["hour"] >= PM_FROM) & (m["hour"] < PM_TO)]
+    if pm.empty:
+        raise SystemExit(
+            f"\n[중단] {path} 에 {PM_FROM}~{PM_TO}시 자료가 없다.\n"
+            "  비교 시간대가 다르면 PM_FROM/PM_TO 를 같이 고치고 **문서에 적을 것.**"
+        )
+
+    by_station = pm.groupby("station")["util_pct"].mean()
+    return {}, f"{path.name} (휴게소 {len(by_station)}곳)", by_station.rename("util_pct").reset_index()
 
 
 def utilization(run_id: str) -> pd.DataFrame:
@@ -86,7 +148,7 @@ def utilization(run_id: str) -> pd.DataFrame:
     return g
 
 
-def report(g: pd.DataFrame, label: str) -> dict:
+def report(g: pd.DataFrame, label: str, measured: dict) -> dict:
     small = g[g["total"] <= SMALL_MAX]
     big = g[g["total"] >= BIG_MIN]
     out = {
@@ -100,35 +162,58 @@ def report(g: pd.DataFrame, label: str) -> dict:
 
     print(f"\n=== {label} ===")
     print(f"  충전기 {SMALL_MAX}기 이하 {out['n_small']:2d}곳  "
-          f"{out['small']:5.1f}%   실측 {MEASURED['small']:.1f}%")
+          f"{out['small']:5.1f}%   실측 {measured.get('small', float('nan')):5.1f}%")
     print(f"  충전기 {BIG_MIN}기 이상 {out['n_big']:2d}곳  "
-          f"{out['big']:5.1f}%   실측 {MEASURED['big']:.1f}%")
+          f"{out['big']:5.1f}%   실측 {measured.get('big', float('nan')):5.1f}%")
     print(f"  전체 {len(g):2d}곳        {out['all']:5.1f}%")
-    print(f"  작은÷큰 {out['ratio']:5.2f}        실측 {MEASURED_RATIO:.2f}  "
+    print(f"  작은÷큰 {out['ratio']:5.2f}        실측 "
+          f"{_ratio(measured):.2f}  "
           f"(기준 ≥ {MIN_RATIO})")
     print(f"  휴게소 편차 {out['spread']:.1f}배   실측 영동 인천방향 3.4배")
     return out
 
 
-def verdict(out: dict) -> None:
+def verdict(out: dict, measured: dict) -> None:
+    """⚠ **못 잰 검사를 통과로 세지 않는다.**
+
+    기준 셋 중 둘이 "판정 불가" 인데 남은 하나가 통과했다고 "기준 통과" 라고 하면,
+    **아무것도 검증하지 않고 합격증을 내주는 것**이다. #97 에서 0행을 검증하고
+    "저장 완료" 를 찍던 것과 같은 고장이다.
+    """
+
     print("\n  판정 (기준은 결과 보기 전에 정했다)")
-    ok = True
+    passed, failed, skipped = 0, 0, 0
+
     for key, name in (("big", f"{BIG_MIN}기 이상"), ("small", f"{SMALL_MAX}기 이하")):
-        m = MEASURED[key]
-        lo, hi = m * (1 - TOLERANCE), m * (1 + TOLERANCE)
-        v = out[key]
+        if key not in measured:
+            print(f"    {name:9} 실측 없음 — 판정 불가")
+            skipped += 1
+            continue
         if out[f"n_{key}"] == 0:
             print(f"    {name:9} 해당 휴게소 없음 — 판정 불가")
+            skipped += 1
             continue
+        m = measured[key]
+        lo, hi = m * (1 - TOLERANCE), m * (1 + TOLERANCE)
+        v = out[key]
         good = lo <= v <= hi
-        ok &= good
+        passed, failed = passed + good, failed + (not good)
         print(f"    {name:9} {v:5.1f}%  범위 {lo:.1f}~{hi:.1f}%  "
               f"{'통과' if good else '미달'}")
+
     r = out["ratio"]
     good = r >= MIN_RATIO
-    ok &= good
+    passed, failed = passed + good, failed + (not good)
     print(f"    구조(비율) {r:5.2f}   기준 ≥ {MIN_RATIO}        {'통과' if good else '미달'}")
-    print(f"\n  ⇒ {'기준 통과' if ok else '기준 미달'}")
+
+    if failed:
+        print(f"\n  ⇒ 기준 미달 ({failed}개 미달 · {passed}개 통과"
+              + (f" · {skipped}개 판정 불가)" if skipped else ")"))
+    elif skipped:
+        print(f"\n  ⇒ **판정 보류** — {skipped}개를 재지 못했다 ({passed}개만 통과).\n"
+              "     못 잰 것을 통과로 세지 않는다.")
+    else:
+        print(f"\n  ⇒ 기준 통과 ({passed}개 전부)")
 
 
 def main() -> int:
@@ -137,19 +222,36 @@ def main() -> int:
     ap.add_argument("--run", required=True)
     ap.add_argument("--vs", help="비교할 run_id")
     ap.add_argument("--stations", action="store_true", help="휴게소별로 펼친다")
+    ap.add_argument("--measured", type=Path,
+                    help="실측 이용률 CSV (#64). 없으면 보도 통계를 쓴다")
     args = ap.parse_args()
 
+    measured, source, by_station = load_measured(args.measured)
+    print(f"\n실측 출처: {source}")
+
     g = utilization(args.run)
-    out = report(g, args.run)
+    out = report(g, args.run, measured)
 
     if args.vs:
         g2 = utilization(args.vs)
-        out2 = report(g2, args.vs)
+        out2 = report(g2, args.vs, measured)
         print(f"\n  변화  {BIG_MIN}기 이상 {out['big']:.1f}% → {out2['big']:.1f}%"
               f"  ·  전체 {out['all']:.1f}% → {out2['all']:.1f}%")
-        verdict(out2)
+        verdict(out2, measured)
     else:
-        verdict(out)
+        verdict(out, measured)
+
+    if by_station is not None:
+        joined = g.merge(by_station, left_on="name", right_on="station",
+                         how="left", suffixes=("", "_meas"))
+        hit = joined["util_pct_meas"].notna()
+        print(f"\n  휴게소 이름 대조: {int(hit.sum())} / {len(joined)} 곳 일치")
+        if (~hit).any():
+            print("    못 맞춘 우리 휴게소:",
+                  ", ".join(joined.loc[~hit, "name"].head(8)))
+        if hit.any():
+            err = (joined.loc[hit, "util_pct"] - joined.loc[hit, "util_pct_meas"]).abs()
+            print(f"    맞춘 곳 평균절대오차 {err.mean():.1f}%p")
 
     if args.stations:
         print("\n  휴게소별")
