@@ -128,6 +128,7 @@ def plot_corridor_heatmap(
     title: str = "휴게소 × 시간대",
     subtitle: str | None = None,
     x_label: str = "도착 시각",
+    hours: int = 24,
 ) -> Path:
     """가로 = 도착 시각(시), 세로 = 기점거리 offset_km (위 = 코리도 시작), 색 = 값.
 
@@ -139,6 +140,12 @@ def plot_corridor_heatmap(
     것처럼 과장된다 (이슈 #30: offset_km 왜곡을 안 고쳤다면 쏠림이 가짜로 보였을 것).
     휴게소는 제 위치에 얇은 띠로 그리고, 사이의 도로는 비워 둔다.
     값이 없는 칸(그 시각에 온 차가 없음)은 0 과 같은 색이다.
+
+    `hours` 는 가로축 시간 수다. **24 보다 크게 줘야 할 때가 있다** — 귀성 심야 운전
+    때문에 도착 시각이 자정을 넘고(설 상행에서 28시까지), 24 로 자르면 그 칸들이
+    그림에서 사라진다. 그러면 `bottleneck_slots` KPI 가 세는 칸 수와 **그림에서 셀 수
+    있는 칸 수가 달라진다** (S1 에서 137 vs 128). 숫자와 그림이 같다는 것이 이 그림의
+    쓸모라서, 세는 범위를 그리는 범위와 맞춘다 (#120).
     """
 
     import matplotlib
@@ -162,21 +169,25 @@ def plot_corridor_heatmap(
     y_top = min(0.0, bands[0][0])
     y_bottom = bands[-1][1]
 
-    fig, axes = plt.subplots(1, len(panels), figsize=(6.2 * len(panels) + 1.4, 8.2), dpi=150,
+    fig, axes = plt.subplots(1, len(panels),
+                             figsize=(6.2 * len(panels) * hours / 24 + 1.4, 8.2), dpi=150,
                              sharey=True, squeeze=False)
 
     for ax, (label, grid) in zip(axes[0], panels, strict=True):
         values = {(r.station_id, int(r.hour)): float(r.value) for r in grid.itertuples() if r.station_id in row_of}
         for sid, i in row_of.items():
             lo, hi = bands[i]
-            for h in range(24):
+            for h in range(hours):
                 v = values.get((sid, h), 0.0)
                 ax.add_patch(Rectangle((h, lo), 1, hi - lo, facecolor=cmap(norm(v)), edgecolor="white", linewidth=0.6))
 
-        ax.set_xlim(0, 24)
+        ax.set_xlim(0, hours)
         ax.set_ylim(y_bottom, y_top)                    # 위 = 기점
-        ax.set_xticks(range(0, 25, 3))
-        ax.set_xticklabels([f"{h}시" for h in range(0, 25, 3)], fontsize=8, color="#6b6a66")
+        ax.set_xticks(range(0, hours + 1, 3))
+        ax.set_xticklabels([f"{h}시" for h in range(0, hours + 1, 3)], fontsize=8, color="#6b6a66")
+        if hours > 24:
+            # 익일 구간을 눈에 보이게 가른다 — 없으면 "28시" 가 오타처럼 읽힌다
+            ax.axvline(24, color="#1f1f1d", linewidth=0.9, linestyle=(0, (3, 2)))
         ax.set_xlabel(x_label, fontsize=9, color="#6b6a66")
         ax.set_title(label, fontsize=10, loc="left")
         ax.grid(axis="y", color="#e6e5e1", linewidth=0.6)
@@ -192,7 +203,7 @@ def plot_corridor_heatmap(
     last = axes[0][-1]
     names = order["name"].astype(str).tolist()
     for km, text in _label_groups(names, offsets):
-        last.text(24.3, km, text, va="center", ha="left", fontsize=7.5, color="#1f1f1d", clip_on=False)
+        last.text(hours + 0.3, km, text, va="center", ha="left", fontsize=7.5, color="#1f1f1d", clip_on=False)
 
     fig.legend([plt.Rectangle((0, 0), 1, 1, color=c) for c in RAMP], list(bin_labels), title=value_label,
                loc="lower center", ncol=len(RAMP), frameon=False, fontsize=8, title_fontsize=8)
