@@ -217,6 +217,7 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
     escape_cost_min: float = 0.0,
     snapshot_every_min: float = DEFAULT_SNAPSHOT_EVERY_MIN,
     ledger: object | None = None,
+    forecast: object | None = None,
 ) -> CorridorResult:
     """Δt 루프를 돌린다. 같은 입력·같은 정책이면 같은 결과다 (난수를 쓰지 않는다).
 
@@ -306,6 +307,10 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                 # 나르기만 한다 — 알면 "어느 단계가 도는지" 를 아는 셈이고 설계 규칙 2가
                 # 깨진다. 안 주면 None 이고, 필요한 정책은 require_ledger() 에서 터진다
                 ledger=ledger,
+                # 예측도 같은 이유로 그냥 나른다 (#118). 시뮬레이터는 이게 오라클인지
+                # 추정기인지 모른다 — 알면 "미래를 아는 시뮬레이터" 가 되고, 예측의
+                # 가치를 재려는 실험이 그 자리에서 무의미해진다
+                forecast=forecast,
             )
             answers = policy.decide(
                 [

@@ -31,9 +31,11 @@ import yaml
 
 from evdt.config import ScenarioConfig
 from evdt.demand_layers import effective_ev_share, opportunity_charge
+from evdt.engine.forecast import OracleForecast, OracleSource, specs_from_trips
 from evdt.engine.reservation import ReservationLedger
 from evdt.engine.s0 import S0Policy, S0Settings
 from evdt.engine.s1 import S1Policy, S1Settings
+from evdt.engine.s2 import S2Policy, S2Settings
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
@@ -151,7 +153,7 @@ def departure_soc_mean(cfg: ScenarioConfig) -> float:
     return cfg.vehicles.soc_beta.mean()
 
 
-def run_params(cfg: ScenarioConfig) -> dict:
+def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None) -> dict:
     """run 표에 남기는 값. **run_id 가 구분하지 못하는 것**을 여기에 적는다.
 
     `run_id` 는 (scenario_id, stage, 참여율, seed) 뿐이라, **같은 이름으로 다른 세계를
@@ -171,23 +173,30 @@ def run_params(cfg: ScenarioConfig) -> dict:
         # 목적지를 어디서 뽑았나 (#99). scenario_id 에도 __od 로 들어가지만,
         # 기록에 남겨야 옛 run 을 재사용할 때 눈으로 확인할 수 있다
         "od_profile": cfg.demand.od_profile,
+        # 어느 런의 미래를 봤나 (#118). **run_id 에 안 들어간다** — S2 는 어떤
+        # 오라클로 돌아도 `__S2__` 다. 그래서 여기 적지 않으면 1회차 결과를
+        # 2회차인 줄 알고 재사용하게 된다 (#101 과 같은 고장)
+        "oracle_from_run": None if oracle is None else oracle.source_run_id,
+        "oracle_round": None if oracle is None else oracle.round_no,
     }
 
 
-def stale_reason(stored: dict, cfg: ScenarioConfig) -> str | None:
+def stale_reason(stored: dict, cfg: ScenarioConfig,
+                 *, oracle: OracleSource | None = None) -> str | None:
     """이미 DONE 인 run 을 지금 config 로 재사용해도 되나. 안 되면 그 이유.
 
     **기록에 있는 키만 본다.** 옛 run 에는 나중에 추가된 키가 없는데, 없다고 전부
     다시 돌리면 쓸 수 있는 결과까지 버린다. 기록된 값이 다르면 그건 확실한 불일치다.
     """
 
-    want = run_params(cfg)
+    want = run_params(cfg, oracle=oracle)
     diffs = [f"{k}: 기록 {stored[k]!r} ≠ 지금 {want[k]!r}"
              for k in want if k in stored and stored[k] != want[k]]
     return " · ".join(diffs) if diffs else None
 
 
-def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig) -> tuple[bool, str]:
+def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig,
+                 *, oracle: OracleSource | None = None) -> tuple[bool, str]:
     """이미 있는 run 을 그대로 써도 되나. 돌려주는 것은 (써도 되나, 이유).
 
     ⚠ **DONE 인 것만으로는 부족하다.** `check_same_world` 는 진입 EV 수만 보는데,
@@ -205,7 +214,7 @@ def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig) -> tuple[bool, str]
     if row[0] != "DONE":
         return False, str(row[0])
 
-    why = stale_reason(json.loads(row[1] or "{}"), cfg)
+    why = stale_reason(json.loads(row[1] or "{}"), cfg, oracle=oracle)
     return (False, f"설정이 다르다 — {why}") if why else (True, "DONE")
 
 
@@ -374,7 +383,7 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
-RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1")
+RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2")
 
 
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
@@ -432,9 +441,14 @@ def run_once(
     runs_dir: Path | None = None,
     root: Path = PROJECT_ROOT,
     gap_plot: bool = True,
+    oracle: OracleSource | None = None,
     log: Log = print,
 ) -> str:
     """한 번 돌린다. run_id 를 돌려준다.
+
+    `oracle` 은 **S2 만** 쓴다 (#118) — 미래 도착을 어느 런에서 가져올지다. 다른
+    스테이지에 주면 그 자리에서 멈춘다. 쓰지 않는 스테이지가 조용히 받으면
+    "예측을 쓰는 줄 알았는데 안 쓰고 있던" 상태로 실험이 끝난다.
 
     **스테이지에 상관없이 같은 함수다.** 수요·차량·휴게소·기온·통행시간을 만드는 데까지는
     한 줄도 다르지 않고, 갈라지는 곳은 아래 한 군데뿐이다 (UE 균형 ↔ Δt 루프).
@@ -447,6 +461,11 @@ def run_once(
         raise ValueError(
             f"아직 구현되지 않은 스테이지다: policy.stage={cfg.policy.stage} "
             f"(지금 돌릴 수 있는 것: {', '.join(RUNNABLE_STAGES)})")
+
+    if oracle is not None and cfg.policy.stage != "S2":
+        raise ValueError(
+            f"{cfg.policy.stage} 는 예측을 쓰지 않는데 oracle 이 들어왔다 (#118). "
+            "조용히 무시하면 '예측을 쓰는 줄 알았는데 안 쓰고 있던' 결과가 나온다")
 
     if seed is not None:
         cfg = with_seed(cfg, seed)
@@ -489,7 +508,7 @@ def run_once(
         travel=None if ctm is None else ctm.speed_field,
         escape_cost_min=cfg.demand.escape_cost_min,
     )
-    params = run_params(cfg)
+    params = run_params(cfg, oracle=oracle)
 
     with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, runs_dir=runs,
                          overwrite=overwrite, params=params) as run:
@@ -527,7 +546,7 @@ def run_once(
                 built, chargers, specs, settings, cfg, run.writer, log)
         else:
             charge_events, snapshots, escape_rows, stage_kpis = _run_policy_loop(
-                built, specs, offsets, cfg, settings, range_factor, cpf, log)
+                built, specs, offsets, cfg, settings, range_factor, cpf, oracle, log)
         # ================================================================
 
         log_sim_result(run.writer, charge_events, snapshots,
@@ -608,7 +627,8 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
     )
 
 
-def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, log: Log):
+def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
+                     oracle: OracleSource | None, log: Log):
     """S0 이후 — Δt 마다 정책에게 물어보며 하루를 굴린다 (#59).
 
     **UE 와 같은 것**: 차량 집합(built.trips), 휴게소·충전기, 통행시간(settings.travel),
@@ -618,7 +638,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
 
     stage = cfg.policy.stage
 
-    if stage not in ("S0", "S1"):
+    if stage not in ("S0", "S1", "S2"):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
     # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
@@ -634,8 +654,26 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
     }
     # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
     # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
-    ledger = None
-    if stage == "S1":
+    ledger = forecast = None
+    if stage == "S2":
+        # 예측은 **S2 부터만** 쓴다. S1 에 주면 안 쓰고도 받는 셈이라 "무엇이
+        # 달라졌나" 가 흐려진다 (원장을 S0 에 주지 않는 것과 같은 이유)
+        if oracle is None:
+            raise ValueError(
+                "S2 는 미래 도착 예측이 필요하다 (#118). 오라클의 출처가 될 런을 "
+                "`oracle=OracleSource(...)` 로 줘야 한다 — 같은 "
+                "(시나리오·참여율·시드) 의 S1 런이 1회차다")
+        policy = S2Policy(S2Settings(**kw))
+        ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
+        forecast = OracleForecast.from_rows(
+            oracle.rows, specs_from_trips(built.trips),
+            source_run_id=oracle.source_run_id, round_no=oracle.round_no)
+        log(f"  예측 — {forecast.describe()}")
+        log("  ⚠ 이 미래는 "
+            f"{oracle.source_run_id} 가 만든 미래다. S2 가 차를 다른 데로 보내면 "
+            "실제 미래는 이와 달라진다 — 이 결과는 완전 예측의 **상한이 아니라 "
+            "상한 추정치**다 (engine/forecast.py)")
+    elif stage == "S1":
         policy = S1Policy(S1Settings(**kw))
         ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
     else:
@@ -659,6 +697,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
         escape_cost_min=cfg.demand.escape_cost_min,
         snapshot_every_min=float(cfg.output.snapshot_every_min),
         ledger=ledger,
+        forecast=forecast,
     )
 
     log(f"  Δt {cfg.time.dt_min}분 · decide() 호출 {out.n_decide_calls:,}번 "
@@ -675,6 +714,10 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf, lo
         {
             "policy_decide_calls": (out.n_decide_calls, "count"),
             "policy_stranded": (out.n_stranded, "count"),
+            **({} if forecast is None else {
+                "oracle_round": (forecast.round_no, "count"),
+                "oracle_arrivals": (forecast.n_arrivals, "count"),
+            }),
         },
     )
 

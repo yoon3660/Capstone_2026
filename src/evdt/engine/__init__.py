@@ -3,10 +3,13 @@
 채워질 모듈:
     ue.py        UE 반복 균형 (하루 단위, gap 수렴)               이슈 #29
     ue_demand.py UE 선택지 = 차마다 가능한 충전 계획               이슈 #29
-    policy.py    스테이지별 Policy 구현 (S0~S4, MEC, ORACLE)       Sprint 2 (S0) ~
+    s0.py        지금 화면만 보는 운전자                            #59
+    s1.py        + 이미 배정된 차 (예약 원장)                       #83
+    s2.py        + 아직 배정되지 않은 차 (미래 도착 예측)           #118
     ledger.py    예약 원장 (§5.4) — 첫 부분은 #29, 완성은            Sprint 3
     mec.py       한계 외부비용 계산 (§6.1)                           Sprint 3 (S1 변형)
-    forecast.py  미래 도착 예측                                      Sprint 4
+    forecast.py  미래 도착 예측 (#118). **오라클은 상한이 아니라 상한 추정치다** —
+                 이유는 그 파일의 모듈 문서에 있다 (미래 도착이 외생적이지 않다)
     milp.py      Rolling Horizon MILP (PuLP + HiGHS)                Sprint 5
 
 engine 은 world 를 임포트해도 된다 (반대 방향만 금지). 다만 큐 규칙은

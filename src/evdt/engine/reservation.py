@@ -37,6 +37,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -72,17 +73,31 @@ class ReservationLedger:
         return cls({sid: StationLedger(ch) for sid, ch in chargers_by_station.items()})
 
     # -- 묻기 -----------------------------------------------------------------
-    def dwell_if_i_go(self, station_id: str, arr: Arrival) -> float:
+    def dwell_if_i_go(self, station_id: str, arr: Arrival,
+                      *, future: Sequence[Arrival] = ()) -> float:
         """이 차가 이 시각에 그 휴게소에 들어오면 머무는 시간(분). **원장은 안 바뀐다.**
 
         `StationLedger.evaluate` 를 그대로 쓴다 — 큐 계산이 갈라지면 정책이 재는 시간과
         실제 점유시간이 어긋난다.
+
+        `future` 는 **아직 결정하지 않은 차들의 예측 도착**이다 (S2, #118). 비어 있으면
+        S1 과 **완전히 같은 계산**이다.
+
+        ## 이미 결정한 차는 예측에서 뺀다
+
+        예측은 "누가 올 것인가" 를 과거 런에서 가져온다. 그런데 그 차가 **이번 런에서
+        이미 결정했다면** 원장에 진짜 예약이 있다. 둘을 다 세면 한 대가 두 대가 된다.
+
+        같은 휴게소면 `StationLedger` 가 ev_id 로 막는다. **다른 휴게소로 간 차는
+        거기서 안 보인다** — 이 원장만 전체 예약을 안다. 그래서 여기서 뺀다.
         """
 
         led = self.stations.get(station_id)
         if led is None:
             raise KeyError(f"원장에 없는 휴게소다: {station_id}")
-        return led.evaluate(arr, exclude=arr.ev_id)
+        if future:
+            future = [f for f in future if f.ev_id not in self._res]
+        return led.evaluate(arr, exclude=arr.ev_id, extra=future)
 
     def booked(self, station_id: str) -> int:
         """그 휴게소에 **아직 안 온** 예약 수. 정책이 몰림을 보는 가장 싼 신호다."""

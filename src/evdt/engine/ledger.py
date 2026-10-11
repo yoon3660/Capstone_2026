@@ -22,6 +22,7 @@ occupancy 뷰. S1 을 만들 때 이 클래스를 넓힌다.
 from __future__ import annotations
 
 from bisect import bisect_left
+from collections.abc import Sequence
 
 from evdt.world.queue_rule import Arrival, Charger, assign, chargers_after
 
@@ -75,24 +76,54 @@ class StationLedger:
             self._states.append(chargers_after(self._states[j], [a]))
         return self._states[idx]
 
-    def evaluate(self, arr: Arrival, *, exclude: str | None = None) -> float:
+    def evaluate(self, arr: Arrival, *, exclude: str | None = None,
+                 extra: Sequence[Arrival] = ()) -> float:
         """이 차가 arr.arrival_min 에 들어오면 머무는 시간(분) = 대기 + 충전. 원장은 그대로.
 
         FIFO 라서 **먼저 온 차들만** 답을 정한다. exclude 에 준 차가 원장에서 그보다
         앞에 있으면 그 차를 빼고 다시 쌓는다 — 자기 자신과 줄을 설 수는 없다.
+
+        `extra` 는 **원장에 없는 가정된 도착**이다 (S2 의 예측, #118). 끼워서 계산만
+        하고 원장에는 넣지 않는다 — 예측은 아직 일어나지 않은 일이라, 원장에 쓰면
+        다른 차가 **있지도 않은 예약**을 확정된 것으로 본다 (#83 이 두 번째 정차를
+        원장에서 뺀 것과 같은 이유).
+
+        이미 원장에 있는 ev_id 는 `extra` 에서 버린다. 같은 차를 두 번 세면 예측이
+        줄을 **길게** 만들고, 그 과대추정이 "예측을 쓰니 나빠졌다" 로 보고된다.
         """
 
-        idx = bisect_left(self._keys, (float(arr.arrival_min), arr.ev_id))
-        own = self._key_of.get(exclude) if exclude is not None else None
+        key = (float(arr.arrival_min), arr.ev_id)
+        idx = bisect_left(self._keys, key)
 
-        if own is not None and own < (float(arr.arrival_min), arr.ev_id):
-            j = bisect_left(self._keys, own)
-            state = self._state_before(j)
-            for k in range(j + 1, idx):
-                (a,) = assign([self._arrivals[k]], state)
-                state = chargers_after(state, [a])
-        else:
-            state = self._state_before(idx)
+        extras = sorted(
+            ((float(e.arrival_min), e.ev_id), e) for e in extra
+            # 내 뒤에 오는 차는 FIFO 상 내 대기에 영향이 없다. 나 자신과 이미
+            # 원장에 있는 차는 두 번 세지 않는다
+            if (float(e.arrival_min), e.ev_id) < key
+            and e.ev_id != arr.ev_id and e.ev_id not in self._key_of
+        )
+
+        own = self._key_of.get(exclude) if exclude is not None else None
+        if own is not None and own >= key:
+            own = None      # 내 뒤에 있으면 빼도 답이 같다
+
+        # 캐시는 **고쳐야 할 첫 자리 앞까지** 쓸 수 있다. 그 뒤만 다시 쌓는다
+        cut = idx
+        if extras:
+            cut = min(cut, bisect_left(self._keys, extras[0][0]))
+        if own is not None:
+            cut = min(cut, bisect_left(self._keys, own))
+
+        state = self._state_before(cut)
+
+        merged = [(self._keys[k], self._arrivals[k]) for k in range(cut, idx)
+                  if self._keys[k] != own]
+        merged.extend(extras)
+        merged.sort(key=lambda kv: kv[0])
+
+        for _, each in merged:
+            (one,) = assign([each], state)
+            state = chargers_after(state, [one])
 
         (a,) = assign([arr], state)
         return a.end_min - float(arr.arrival_min)
