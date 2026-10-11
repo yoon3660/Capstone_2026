@@ -346,6 +346,8 @@ class VehiclesConfig:
     #: 습관 목표 SoC (#82). 사람은 "필요한 만큼" 만 채우지 않는다 — 국내 실측 85%.
     #: 0.0 이면 필요한 만큼만 (#82 이전 동작). 상한보다 크면 상한이 이긴다.
     habit_soc: float = 0.0
+    #: 습관 목표 SoC 의 흩어짐 (#112). 0 이면 전원이 같은 값 → 최적반응이 진동한다
+    habit_soc_sigma: float = 0.0
     departure_soc: str | None = None                   # 고른 프로파일 이름 (없으면 soc_beta 직접 지정)
     soc_profiles: tuple[SocBetaProfile, ...] = ()      # 고를 수 있는 프로파일 전부
 
@@ -594,6 +596,8 @@ class ScenarioConfig:
             v.get("target_soc_cap", 0.8), "vehicles.target_soc_cap", lo=0.0, hi=1.0, lo_exclusive=True
         )
         habit_soc = e.number(v.get("habit_soc", 0.0), "vehicles.habit_soc", lo=0.0, hi=1.0)
+        habit_soc_sigma = e.number(
+            v.get("habit_soc_sigma", 0.0), "vehicles.habit_soc_sigma", lo=0.0, hi=1.0)
 
         # environment ------------------------------------------------------
         env = e.section(data, "environment")
@@ -709,6 +713,7 @@ class ScenarioConfig:
                 soc_beta=selected,                         # type: ignore[arg-type]
                 target_soc_cap=target_soc_cap,             # type: ignore[arg-type]
                 habit_soc=habit_soc,                       # type: ignore[arg-type]
+                habit_soc_sigma=habit_soc_sigma,           # type: ignore[arg-type]
                 departure_soc=departure_soc,
                 soc_profiles=tuple(soc_profiles),
             ),

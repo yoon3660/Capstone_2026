@@ -93,13 +93,14 @@ class ChargeAmount:
 
     def soc_out(self, *, soc_in: float, offset_km: float, dest_offset_km: float,
                 battery_kwh: float, consumption_kwh_km: float, range_factor: float,
-                opportunity: bool) -> float:
+                opportunity: bool, habit_soc: float | None = None) -> float:
         need = calculate_target_soc(
             battery_kwh=battery_kwh, consumption_kwh_km=consumption_kwh_km,
             range_factor=range_factor,
             distance_to_dest_km=max(dest_offset_km - offset_km, 0.0),
             buffer_km=self.buffer_km, target_soc_cap=self.target_soc_cap,
-            arrival_reserve_soc=self.reserve_soc, habit_soc=self.habit_soc,
+            arrival_reserve_soc=self.reserve_soc,
+            habit_soc=self.habit_soc if habit_soc is None else habit_soc,
         )
         # 기회 충전은 "가야 할 거리" 가 아니라 상한까지 채운다 — 필요해서가 아니라
         # 들른 김에 꽂는 것이므로 (ue_demand.enumerate_plans 와 같다)
@@ -130,6 +131,8 @@ class SimEV:
     #: 이 차의 이탈 비용 (#78). **TripDemand 에서 그대로 와야 한다** — 여기서 다시
     #: 뽑으면 UE 와 S0 가 다른 값을 쓰고 그 차이가 정책 차이로 보고된다.
     escape_cost_min: float = 0.0
+    #: 이 차가 채우고 싶어 하는 SoC (#112). 같은 이유로 TripDemand 에서 온다.
+    habit_soc: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -318,6 +321,7 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                         # 이탈 비용은 차마다 다르다 (#78). UE 가 쓰는 값과 **같은
                         # 값**이 와야 한다 — 갈라지면 이탈 차이가 정책 차이로 보인다
                         escape_cost_min=c.ev.escape_cost_min,
+                        habit_soc=c.ev.habit_soc,
                     )
                     for c in asking
                 ],
@@ -408,6 +412,7 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                     consumption_kwh_km=car.ev.consumption_kwh_km,
                     range_factor=range_factor,
                     opportunity=car.ev.wants_opportunity_charge,
+                    habit_soc=car.ev.habit_soc,
                 )
 
                 if soc_out <= soc_in + SOC_EPS:

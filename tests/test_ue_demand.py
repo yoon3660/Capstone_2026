@@ -635,3 +635,43 @@ def test_the_solver_reads_the_cars_own_cost_not_the_global_one():
     # 0 이면 전역값으로 떨어진다 — TripDemand 를 직접 만드는 옛 코드가 그대로 돈다
     plain = _built(0.0).trips[0]
     assert escape_cost_of(dataclasses.replace(plain, escape_cost_min=0.0), 99.0) == 99.0
+
+
+# -- 습관 목표 SoC 를 차마다 뽑는다 (#112) -----------------------------------
+
+
+def test_habit_soc_is_drawn_per_car_not_shared():
+    """**이것이 #112 의 수렴 수정 전부다.**
+
+    전원이 정확히 같은 SoC 를 목표로 하면 같은 휴게소에서 체류가 전부 같아진다.
+    무차별해진 차들이 한꺼번에 뒤집히고 최적반응이 가라앉지 않는다 — 상행에서
+    gap 이 3.12% ↔ 3.20% 로 2주기 진동했다. #78 의 이탈 비용 점질량과 같은 고장이다.
+    """
+    import numpy as np
+
+    from evdt.engine.ue_demand import ChargeRule, build_trip_demands
+
+    stations = [{"station_id": "A", "offset_km": 100.0},
+                {"station_id": "B", "offset_km": 200.0}]
+    vclasses = {"v": {"battery_kwh": 60.0, "consumption_kwh_km": 0.2, "vmax_kw": 100.0}}
+    evs = [{"ev_id": f"E{i}", "vclass_id": "v", "entry_time_min": 0.0,
+            "initial_soc": 0.4, "entry_offset_km": 0.0, "dest_offset_km": 400.0}
+           for i in range(200)]
+
+    def build(sigma: float):
+        rule = ChargeRule(range_factor=1.0, buffer_km=10.0, reserve_soc=0.1,
+                          target_soc_cap=0.8, max_stops=3,
+                          habit_soc=0.85, habit_soc_sigma=sigma)
+        out = build_trip_demands(evs, stations, vclasses, {"v": ((0.0, 1.0, 100.0),)},
+                                 rule=rule, charge_power_factor=1.0,
+                                 rng=np.random.default_rng(0))
+        return [t.habit_soc for t in out.trips]
+
+    flat = build(0.0)
+    spread = build(0.05)
+
+    assert len(set(flat)) == 1, "sigma 0 이면 전원이 같아야 한다 (이전 동작)"
+    assert flat[0] == pytest.approx(0.85)
+    assert np.std(spread) > 0.01, "sigma 를 줬는데 흩어지지 않았다"
+    assert 0.80 < np.mean(spread) < 0.90, "중앙값이 habit_soc 에서 벗어났다"
+    assert all(0.0 <= h <= 1.0 for h in spread), "SoC 는 0~1 을 벗어나면 안 된다"
