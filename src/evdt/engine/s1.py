@@ -114,7 +114,7 @@ class S1Policy(S0Policy):
                 battery_kwh=ev.battery_kwh, vmax_kw=ev.vmax_kw, curve=ev.curve,
                 charge_power_factor=world.cold_factor,
             )
-            cost = ledger.dwell_if_i_go(st.station_id, arr)
+            cost = self._dwell(ledger, st.station_id, arr, world)
 
             # ★ 여기서 멈추면 **가까운 곳만 고른다.** 줄이 짧다는 이유로 조금만 채우고
             #   또 서게 되고, 그 두 번째 정차가 비용에 안 들어간다. 실제로 그렇게
@@ -183,9 +183,21 @@ class S1Policy(S0Policy):
                 soc_from=soc_in, soc_to=soc_out, battery_kwh=ev.battery_kwh,
                 vmax_kw=ev.vmax_kw, curve=ev.curve, charge_power_factor=world.cold_factor,
             )
-            best = min(best, ledger.dwell_if_i_go(st.station_id, arr))
+            best = min(best, self._dwell(ledger, st.station_id, arr, world))
 
         return 0.0 if best == float("inf") else best
+
+    def _dwell(self, ledger, station_id: str, arr: Arrival, world: WorldView) -> float:
+        """원장이 말하는 체류 — *"내가 그 시각에 들어가면 몇 분 머무는가"*.
+
+        **S2 가 덮어쓰는 유일한 메서드다** (#118). 체류 질의를 여기 하나로 모아 둔
+        이유: S1 은 두 곳에서 체류를 묻는다 (첫 정차 후보, 그리고 `_next_stop_cost` 의
+        두 번째 정차). 한쪽만 예측을 보면 **첫 정차는 줄을 알고 두 번째 정차는 모르는**
+        정책이 되고, 그 비대칭이 "가까운 곳으로 쏠림" 을 만든다 — #83 에서 두 번째
+        정차를 비용에 넣지 않았을 때와 같은 고장이다.
+        """
+
+        return ledger.dwell_if_i_go(station_id, arr)
 
     def decide(self, evs: Sequence[EVState], world: WorldView) -> Mapping[str, str]:
         """**한 대씩 순서대로** 묻는다 (순차 결합).
