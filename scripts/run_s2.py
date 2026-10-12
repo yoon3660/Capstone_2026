@@ -1,45 +1,37 @@
-"""S2 — 완전히 예측하면 얼마나 좋아지나 (오라클 상한 추정, #118).
+"""S2 — 관측 가능한 것만으로 도착을 예측하고 쓴다 (#119).
 
-    python scripts/run_s2.py --config config/scenario_seollal_up_adoption.yaml --seeds 1-5
-    python scripts/run_s2.py --seeds 1 --rounds 4        # 고정점까지 반복
+    python scripts/run_s2.py --seeds 1-6
+    python scripts/run_s2.py --seeds 1 --strength 0,0.5,1,1.5,2   # 과대·과소 민감도
 
-## 무엇을 재는가
+## #118 과 무엇이 다른가 — 이것만 다르다
 
-**예측기를 만드는 것이 아니다.** *"미래를 완전히 알면 얼마나 좋아지나"* 를 먼저 잰다.
-천장이 낮으면 예측기를 만들 이유가 없고, 그걸 **먼저 아는 것이 이 티켓의 성공**이다.
+    PERFECT_ROLLING   시뮬레이터의 **실제 미래 도착**을 넣는다 → 벤치마크, 구현 불가
+    S2 (여기)         **상류 진입 + 통행시간**만으로 추정한다 → 엔진 칸, 구현 가능
 
-예측 대신 **직전 런에서 실제로 일어난 도착**을 넣는다. 설계문서 §8.2 의 "완전 예측
-롤링" 이다.
+엔진 코드(`S2Policy`)는 **한 줄도 다르지 않다.** 예측 객체만 바꿔 끼운다. 그래서
+두 결과의 차이가 **오로지 예측 오차**다 — `DESIGN §8.2` 의 격차 분해 한 칸이다.
 
-## ⚠ 이건 상한이 아니라 상한 추정치다
+## 왜 이 예측이 현실에서 구현 가능한가
 
-고속도로 코리도에서 미래 도착은 **외생적이지 않다.** 어느 휴게소에 설지는 지금
-고르려는 바로 그 값이다.
+내가 `t` 에 offset `y` 에서 offset `x` 의 휴게소를 보면 도착은 `t + (x−y)/v` 다.
+그 창에 `x` 를 지나갈 차의 진입 시각을 풀면 **전부 `t` 이전**이다 (나보다 상류에서
+진입한 차는). 즉 **미래 진입량을 추정할 필요가 없고, VDS 가 지금까지 센 값만으로
+계산된다.**
 
-    "미래 도착" 을 알려면 미래의 결정을 알아야 하고
-    미래의 결정을 하려면 "미래 도착" 을 알아야 한다
+모르는 것 — 그 차가 **어디에 설지** — 는 **충전 용량 몫**으로 본다. 순환하지 않고
+관측 가능하다 (충전기 수는 공개 정보).
 
-그래서 1회차 오라클이 보는 미래는 **S1 의 미래**다. S2 가 차를 다른 데로 보내면
-실제 미래는 그와 달라진다.
+## 두 가지 오차가 반대 방향이다
 
-`--rounds N` 이 이걸 좁힌다 — 직전 회차의 도착을 다음 회차의 오라클로 넣는다 (UE 의
-최적반응과 같은 모양). `moved_share` 가 0 에 가까워지면 **자기 예측과 일치하는 해**다.
-진동하면 그 사실 자체가 결과다: *"완전 예측이 이 문제에서 잘 정의되지 않는다."*
+    과소  나보다 **하류에서** 진입하는 차를 못 센다 (아직 진입 전이니 아무도 못 센다)
+    과대  내 앞 휴게소에서 이미 충전을 마친 차도 "선다" 고 센다
 
-## 미리 정한 판정 기준 (결과를 보기 전에 정했다, #118)
+어느 쪽이 이기는지는 **예측 오차 KPI** 와 `--strength` 민감도로 가른다.
 
-    S1 대비 총 사회적 비용이 **5% 이상** 줄지 않으면 → S2 를 접고 S3 로 간다
+## 읽을 때
 
-5% 인 이유: #59 가 S0→S1 에서 평균 대기 **40.8%** 를 움직였다. 정보를 한 칸 더 줘서
-그 1/8 도 못 움직인다면 남은 격차는 **정보가 아니라 결합**에 있다 — 그게 S3(윈도우 내
-동시 결정) 의 전제다.
-
-## 총 사회적 비용
-
-    총비용 = 총 체류(h) + 이탈 차 수 × 이탈 비용
-
-`compare_stages3.py` 와 **같은 정의**다. 이탈을 안 세면 "힘든 사람을 내보내면 이긴다"
-가 된다.
+    예측 오차   휴게소 × 시(時) 예상 도착 vs 실제 도착 (WAPE)
+    예측 손실   PERFECT_ROLLING 과 S2 의 차이 = **예측이 완벽하지 않아서 잃은 몫**
 """
 
 from __future__ import annotations
@@ -49,15 +41,11 @@ import argparse
 import pandas as pd
 from _bootstrap import ROOT  # noqa: E402,F401
 
-from evdt.engine.forecast import (  # noqa: E402
-    ArrivalSpec,
-    OracleForecast,
-    OracleSource,
-    describe_shift,
-)
+from evdt.engine.forecast import ObservedSpec, observed_from_entries  # noqa: E402
 from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
 from evdt.runner import (  # noqa: E402
+    departure_soc_mean,
     load_config,
     parse_seeds,
     reusable_run,
@@ -65,165 +53,217 @@ from evdt.runner import (  # noqa: E402
     summarize_kpis,
 )
 
-#: #118 에 미리 적은 기준. **결과를 보고 고치지 않는다**
-PASS_DROP_PCT = 5.0
-
-#: moved_share 가 이 밑이면 고정점으로 본다
-FIXED_POINT_SHARE = 0.01
-
-ARRIVAL_COLS = ["ev_id", "station_id", "t_arrive_min", "soc_in", "soc_out", "cold_factor"]
-
-
-def arrivals_of(run_id: str) -> list[dict]:
-    """그 런에서 **실제로 일어난** 충전 도착. 이게 다음 회차의 미래가 된다."""
-
-    path = RUNS_DIR / run_id / "charge_event.parquet"
-    if not path.exists():
-        raise SystemExit(f"\n[중단] 충전 기록이 없다: {path}")
-    return pd.read_parquet(path)[ARRIVAL_COLS].to_dict("records")
+STAGES = ("UE", "S0", "S1", "S2", "PERFECT_ROLLING")
+SHORT = {"PERFECT_ROLLING": "완전예측"}
 
 
 def social_cost(run_id: str, escape_cost_min: float) -> dict[str, float]:
     s = summarize_kpis([run_id]).set_index("metric")["mean"]
-    dwell = float(s.get("dwell_total_h", float("nan")))
-    escaped = float(s.get("n_escaped", 0.0))
+    esc = float(s.get("n_escaped", 0.0))
     return {
-        "dwell_total_h": dwell,
-        "n_escaped": escaped,
-        "escape_h": escaped * escape_cost_min / 60.0,
-        "total_h": dwell + escaped * escape_cost_min / 60.0,
+        "dwell_total_h": float(s.get("dwell_total_h", float("nan"))),
+        "n_escaped": esc,
+        "total_h": float(s.get("dwell_total_h", float("nan"))) + esc * escape_cost_min / 60.0,
         "wait_mean_min": float(s.get("wait_mean_min", float("nan"))),
+        "wait_p95_min": float(s.get("wait_p95_min", float("nan"))),
+        "bottleneck_slots": float(s.get("bottleneck_slots", float("nan"))),
         "n_ev_charging": float(s.get("n_ev_charging", float("nan"))),
     }
 
 
-def ensure_s1(cfg_s1, seed: int, db, *, overwrite: bool) -> str:
-    """S2 의 1회차 오라클은 **같은 세계의 S1** 이다."""
+def forecast_error(run_id: str, cfg, built_trips, offsets, chargers,
+                   spec: ObservedSpec) -> dict[str, float]:
+    """예측한 도착 vs 실제 도착 (#119 완료조건).
 
-    run_id = make_run_id(cfg_s1.scenario_id, "S1", seed, cfg_s1.policy.participation)
-    ok, why = reusable_run(db, run_id, cfg_s1)
-    if ok and not overwrite:
-        print(f"  S1 재사용 — {run_id}")
-        return run_id
-    print(f"  S1 실행 ({why}) — {run_id}")
-    return run_once(cfg_s1, seed=seed, overwrite=True, log=lambda *_: None)
+    **WAPE 를 쓴다.** MAPE 는 분모가 작은 칸(새벽)에서 터진다 — #62 에서 같은 함정을
+    밟았다. 과대·과소를 가르기 위해 **부호 있는 편향**도 같이 낸다.
+    """
+
+    fc = observed_from_entries(
+        built_trips, offsets, chargers,
+        speed_kmh=cfg.demand.cruise_speed_kmh,
+        soc_from=cfg.demand.low_soc_threshold,
+        soc_to=cfg.vehicles.target_soc_cap,
+        consumption_kwh_km=sum(t.consumption_kwh_km for t in built_trips)
+        / max(len(built_trips), 1),
+        entry_soc_mean=departure_soc_mean(cfg), spec=spec)
+    pred = fc.predicted_hourly()
+
+    ce = pd.read_parquet(RUNS_DIR / run_id / "charge_event.parquet")
+    ce["hour"] = (ce["t_arrive_min"] // 60).astype(int)
+    actual = ce.groupby(["station_id", "hour"]).size().to_dict()
+
+    cells = set(pred) | set(actual)
+    err = sum(abs(pred.get(c, 0.0) - actual.get(c, 0)) for c in cells)
+    bias = sum(pred.get(c, 0.0) - actual.get(c, 0) for c in cells)
+    tot = sum(actual.get(c, 0) for c in cells)
+
+    return {
+        "n_cells": float(len(cells)),
+        "pred_total": float(sum(pred.values())),
+        "actual_total": float(tot),
+        "wape_pct": err / tot * 100.0 if tot else float("nan"),
+        "bias_pct": bias / tot * 100.0 if tot else float("nan"),
+    }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_seollal_up_adoption.yaml")
-    ap.add_argument("--seeds", default="1")
-    ap.add_argument("--rounds", type=int, default=1,
-                    help="고정점 반복 회차. 1 이면 S1 의 미래만 쓴다")
-    ap.add_argument("--rerun-s1", action="store_true")
+    ap.add_argument("--seeds", default="1-6")
+    ap.add_argument("--strength", default="1.0",
+                    help="예측을 얼마나 믿나. 쉼표로 여러 개 주면 민감도 (0 이면 S1 과 같다)")
+    ap.add_argument("--overwrite", action="store_true")
     args = ap.parse_args()
 
-    cfg_s1 = load_config(args.config, stage="S1")
-    cfg_s2 = load_config(args.config, stage="S2")
+    cfg = load_config(args.config, stage="S2")
     seeds = parse_seeds(args.seeds)
+    strengths = [float(x) for x in str(args.strength).split(",")]
     db = default_db_path()
-    esc = float(cfg_s1.demand.escape_cost_min)
+    esc = float(cfg.demand.escape_cost_min)
 
-    print(f"\n{cfg_s1.scenario_id}  ·  시드 {seeds}  ·  회차 {args.rounds}")
-    print(f"수요: {cfg_s1.demand_label}  ·  이탈 비용 {esc:.0f}분")
-    print(f"\n미리 정한 기준: S1 대비 총 사회적 비용 **{PASS_DROP_PCT:.0f}% 이상** 감소\n")
+    print(f"\n{cfg.scenario_id}  ·  시드 {seeds}  ·  strength {strengths}")
+    print(f"수요: {cfg.demand_label}  ·  이탈 비용 {esc:.0f}분")
 
-    rows: list[dict] = []
-
+    rows, errs = [], []
     for seed in seeds:
-        print(f"--- 시드 {seed} ---")
-        s1_id = ensure_s1(cfg_s1, seed, db, overwrite=args.rerun_s1)
-        base = social_cost(s1_id, esc)
-        rows.append({"seed": seed, "stage": "S1", "round": 0, **base})
+        for st in strengths:
+            spec = ObservedSpec(strength=st)
+            rid = make_run_id(cfg.scenario_id, "S2", seed, cfg.policy.participation)
+            ok, why = reusable_run(db, rid, cfg, observed=spec)
+            if ok and not args.overwrite and len(strengths) == 1:
+                print(f"  시드 {seed} strength {st:g} — 재사용")
+            else:
+                print(f"  시드 {seed} strength {st:g} — 실행 ({why})")
+                rid = run_once(cfg, seed=seed, overwrite=True, observed=spec,
+                               log=lambda *_: None)
+            rows.append({"seed": seed, "strength": st, "stage": "S2",
+                         **social_cost(rid, esc)})
 
-        source_id, source_rows, prev = s1_id, arrivals_of(s1_id), None
+            # 예측 오차는 **이 런의 차량 집합**으로 다시 만들어 대조한다
+            errs.append({"seed": seed, "strength": st, **_error_for(cfg, seed, rid, spec)})
 
-        for rnd in range(1, args.rounds + 1):
-            oracle = OracleSource(rows=source_rows, source_run_id=source_id, round_no=rnd)
-            # ⚠ run_id 는 어느 회차든 `__S2__` 다 — 회차마다 덮어쓴다. 회차별 결과는
-            #   이 표에 들고, 재사용 방지는 run 기록의 oracle_from_run 이 한다
-            s2_id = run_once(cfg_s2, seed=seed, overwrite=True, oracle=oracle,
-                             log=lambda *_: None)
-            got = social_cost(s2_id, esc)
+    t = pd.DataFrame(rows)
+    e = pd.DataFrame(errs)
 
-            drop = (1.0 - got["total_h"] / base["total_h"]) * 100.0
-            line = {"seed": seed, "stage": "S2", "round": rnd,
-                    "oracle_from": source_id, "drop_pct": drop, **got}
+    print("\n=== 관측 예측 S2 ===")
+    print(t[["seed", "strength", "wait_mean_min", "bottleneck_slots", "n_escaped",
+             "dwell_total_h", "total_h"]]
+          .to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
 
-            now = arrivals_of(s2_id)
-            if prev is not None:
-                sh = describe_shift(
-                    OracleForecast.from_rows(prev, _specs(prev), source_run_id="prev"),
-                    OracleForecast.from_rows(now, _specs(now), source_run_id="now"))
-                line["moved_share"] = sh["moved_share"]
-                line["shift_min"] = sh["mean_abs_shift_min"]
+    print("\n=== 예측 오차 (휴게소 × 시) ===")
+    print(e.to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
+    print("  bias > 0 이면 **과대예측** (엉뚱한 곳으로 보낸다) · < 0 이면 과소예측 "
+          "(S1 쪽으로 돌아간다)")
 
-            rows.append(line)
-            print(f"  {rnd}회차  총비용 {got['total_h']:,.1f}h  "
-                  f"(S1 {base['total_h']:,.1f}h, {drop:+.1f}%)"
-                  + (f"  배정변화 {line['moved_share']:.1%}" if "moved_share" in line else ""))
-
-            # 다음 회차는 이번 회차의 미래를 본다
-            source_id, source_rows, prev = s2_id, now, now
-
-    table = pd.DataFrame(rows)
-    print("\n=== 총 사회적 비용 ===")
-    show = ["seed", "stage", "round", "dwell_total_h", "n_escaped", "escape_h",
-            "total_h", "drop_pct", "wait_mean_min"]
-    print(table.reindex(columns=[c for c in show if c in table])
-          .to_string(index=False, float_format=lambda v: f"{v:,.2f}"))
-
-    # 같은 세계인지 — 다르면 비교가 성립하지 않는다 (#59).
-    #
-    # ⚠ **시드 안에서** 본다. 시드가 다르면 EV 집합이 다른 것이 정상이다 — 전체를
-    #   한 번에 보면 시드를 늘릴 때마다 오경보가 난다 (처음에 그렇게 썼다).
-    #   여기서 잡아야 하는 것은 "같은 시드인데 stage 마다 차가 다르다" 뿐이다
-    bad = {s: g["n_ev_charging"].unique().tolist()
-           for s, g in table.groupby("seed") if g["n_ev_charging"].nunique() > 1}
-    if bad:
-        raise SystemExit(
-            f"\n[중단] 같은 시드인데 단계마다 충전 필요 EV 가 다르다: {bad}\n"
-            "  stage 는 세계를 바꾸지 않는다. 다르면 다른 수요를 비교하는 것이다.")
-
-    _verdict(table, args.rounds)
+    if len(strengths) == 1:
+        _ladder(cfg, seeds, esc, float(strengths[0]))
     return 0
 
 
-def _specs(rows: list[dict]) -> dict:
-    """`describe_shift` 는 휴게소와 도착 시각만 본다 — 물리는 더미여도 된다."""
+def _error_for(cfg, seed: int, run_id: str, spec: ObservedSpec) -> dict[str, float]:
+    """예측 오차를 내려면 그 런의 차량 집합이 필요하다. config 로 다시 만든다."""
 
-    dummy = ArrivalSpec(60.0, 100.0, ())
-    return {str(r["ev_id"]): dummy for r in rows}
+    from evdt.io.db import get_conn
+    from evdt.io.stations import read_station_chargers
+    from evdt.io.vehicles import load_from_db
+    from evdt.runner import build_demand, with_seed
+    from evdt.world.sim import station_specs
+
+    c = with_seed(cfg, seed)
+    with get_conn(default_db_path(), readonly=True) as conn:
+        srows, crows = read_station_chargers(conn, corridor_id=c.corridor_id)
+        vclasses, curves, temps = load_from_db(conn)
+        end_km = float(conn.execute(
+            "SELECT length_km FROM corridor WHERE corridor_id = ?", (c.corridor_id,)
+        ).fetchone()[0])
+    specs = station_specs(srows, crows)
+    keep = {s.station_id for s in specs}
+    stations = [r for r in srows if r["station_id"] in keep]
+    offsets = {r["station_id"]: float(r["offset_km"]) for r in stations}
+    built, _, _ = build_demand(c, stations, vclasses, curves, temps, end_km,
+                               log=lambda *_: None)
+    return forecast_error(run_id, c, built.trips, offsets,
+                          {s.station_id: len(s.chargers) for s in specs}, spec)
 
 
-def _verdict(table: pd.DataFrame, rounds: int) -> None:
-    last = table[(table["stage"] == "S2") & (table["round"] == rounds)]
-    drop = float(last["drop_pct"].mean())
+def _ladder(cfg, seeds, esc: float, strength: float) -> None:
+    """UE · S0 · S1 · S2 · 완전예측 — 공통 시드만 (#119 완료조건)."""
 
-    print("\n  판정 (기준은 결과 보기 전에 정했다, #118)")
-    print(f"    총 사회적 비용 감소 {drop:+.1f}%   기준 ≥ {PASS_DROP_PCT:.0f}%   "
-          f"{'통과' if drop >= PASS_DROP_PCT else '미달'}")
+    cols, have = {}, {}
+    for st in STAGES:
+        ids = {s: make_run_id(cfg.scenario_id, st, s, cfg.policy.participation)
+               for s in seeds}
+        done = []
+        for s, rid in ids.items():
+            try:
+                k = summarize_kpis([rid])
+            except Exception:       # noqa: BLE001 — 없는 run 은 그냥 뺀다
+                continue
+            if not k.empty:
+                done.append(s)
+        have[st] = done
+        cols[st] = ids
 
-    if "moved_share" in last and last["moved_share"].notna().any():
-        mv = float(last["moved_share"].mean())
-        fixed = mv < FIXED_POINT_SHARE
-        print(f"    마지막 회차 배정 변화 {mv:.1%}   "
-              f"{'고정점 — 자기 예측과 일치하는 해다' if fixed else '아직 안 가라앉았다'}")
-        if not fixed:
-            print("      ⚠ 수렴하지 않았으면 이 수치는 **완전 예측의 값이 아니다.** "
-                  "--rounds 를 늘려 보고, 두 값 사이를 오가면 진동이다 (#55·#78·#112)")
-    elif rounds == 1:
-        print("    ⚠ 1회차만 돌렸다 — 이 미래는 **S1 의 미래**다. 상한이 아니라 "
-              "상한 추정치다. --rounds 2 이상으로 고정점을 확인할 것")
+    shared = sorted(set.intersection(*(set(v) for v in have.values())) if all(have.values())
+                    else set())
+    if not shared:
+        print("\n[건너뜀] 5단이 모두 끝낸 시드가 없다: "
+              + " · ".join(f"{st} {len(v)}개" for st, v in have.items()))
+        return
 
-    if drop < PASS_DROP_PCT:
-        print(f"\n  ⇒ **S2 를 접고 S3 로 간다.** 완전히 알아도 {drop:+.1f}% 라면, 남은 "
-              "격차는 정보가 아니라 **결합**에 있다 — 그게 S3(윈도우 내 동시 결정)의 "
-              "전제다. 천장이 낮다는 것을 먼저 안 것이 이 티켓의 성과다")
-    else:
-        print(f"\n  ⇒ **예측에 값이 있다 ({drop:.1f}%).** 관측 가능한 것만으로 "
-              "예측하는 일로 넘어간다 (#119). 그쪽 결과는 이 수치를 천장으로 읽는다")
+    print(f"\n=== 5단 비교 — 공통 시드 {len(shared)}개 {shared} ===")
+    out = {}
+    for st in STAGES:
+        vals = [social_cost(cols[st][s], esc) for s in shared]
+        out[SHORT.get(st, st)] = {k: sum(v[k] for v in vals) / len(vals) for k in vals[0]}
+    d = pd.DataFrame(out).T
+
+    if d["n_ev_charging"].nunique() > 1:
+        raise SystemExit(f"\n[중단] 단계마다 충전 필요 EV 가 다르다: "
+                         f"{d['n_ev_charging'].to_dict()}")
+
+    floor, ceil = d.loc["S0", "total_h"], d.loc["UE", "total_h"]
+    d["메운%"] = (floor - d["total_h"]) / (floor - ceil) * 100.0
+    print(d[["wait_mean_min", "wait_p95_min", "bottleneck_slots", "n_escaped",
+             "total_h", "메운%"]].to_string(float_format=lambda v: f"{v:,.1f}"))
+
+    # ★ 격차 분해 — 이 티켓의 기댓값
+    s2, pr = d.loc["S2", "total_h"], d.loc["완전예측", "total_h"]
+    print(f"\n=== 격차 분해 (DESIGN §8.2) · strength {strength:g} ===")
+    print(f"  S0 (바닥)            {floor:>9,.0f}h")
+    print(f"  S2 (관측 예측)        {s2:>9,.0f}h   S0→UE 격차의 {(floor - s2) / (floor - ceil):.1%} 를 메웠다")
+    print(f"  완전예측 (벤치마크)    {pr:>9,.0f}h   {(floor - pr) / (floor - ceil):.1%}")
+    print(f"  UE (천장)            {ceil:>9,.0f}h   100%")
+    # ⚠ S2 가 완전예측보다 **싸게 나올 수 있다** — 더 많이 내보내서다. 그때 "예측 오차
+    #   손실" 은 음수가 되어 말이 안 된다 (처음에 그대로 찍어서 −1,388h · 198% 가 나왔다)
+    e2, epr, e1 = (d.loc["S2", "n_escaped"], d.loc["완전예측", "n_escaped"],
+                   d.loc["S1", "n_escaped"])
+    print(f"\n  이탈  S2 {e2:,.0f}대  ·  완전예측 {epr:,.0f}대  ·  S1 {e1:,.0f}대")
+
+    if s2 <= pr:
+        print(f"\n  ⚠ **관측 예측이 완전 예측보다 싸게 나왔다** ({s2:,.0f}h < {pr:,.0f}h).")
+        print(f"     예측이 더 좋아서가 아니라 **더 많이 내보내서**다 — 이탈 "
+              f"{e2:,.0f} vs {epr:,.0f}대.")
+        print("     **이 값에서 '예측 오차 손실' 을 읽으면 안 된다.** 아래 손익분기를 볼 것.")
+    elif abs(floor - pr) > 1e-9:
+        share = (s2 - pr) / (floor - pr) * 100.0
+        print(f"\n  **예측 오차 손실 = {s2 - pr:,.0f}h** — 완전 예측이 얻은 것 중 "
+              f"{100 - share:.0f}% 를 관측 예측이 가져왔다")
+
+    # 손익분기 — 순위가 가정 하나에 달려 있는지 본다 (#121 에서 쓴 것과 같은 자)
+    print("\n  === 손익분기 이탈 비용 (이보다 비싸면 이탈 적은 쪽이 이긴다) ===")
+    for left, right in (("S2", "완전예측"), ("S2", "S1"), ("S0", "S1")):
+        wa, ea = d.loc[left, "dwell_total_h"], d.loc[left, "n_escaped"]
+        wb, eb = d.loc[right, "dwell_total_h"], d.loc[right, "n_escaped"]
+        if abs(ea - eb) < 1e-9:
+            continue
+        c = (wb - wa) / (ea - eb) * 60.0
+        flag = "   ← 가정값 바로 옆이다" if abs(c - esc) < 60 else ""
+        print(f"    {left:6} vs {right:6}  {c:7,.0f}분 ({c / 60:.1f}시간){flag}")
+    print(f"    우리가 쓴 값 {esc:,.0f}분 — `docs/platform.md` 가 **근거 없음**으로 "
+          "표시해 둔 값이다")
 
 
 if __name__ == "__main__":
