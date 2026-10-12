@@ -157,9 +157,22 @@ def main() -> int:
     drop = (raw - blur) / raw * 100.0
 
     print("\n  판정 (기준은 결과 보기 전에 정했다, #123)")
-    print(f"    흐림이 날것보다 총 대기 {drop:+.1f}% 낮다   기준 ≥ {PASS_DROP_PCT:.0f}%   "
-          f"{'확인' if drop >= PASS_DROP_PCT else '기각'}")
+    print(f"    흐림이 날것보다 총 대기 {drop:+.1f}% 낮다   기준 ≥ {PASS_DROP_PCT:.0f}%")
     print(f"    (날것 {raw:,.0f}h · 흐림 {blur:,.0f}h · 관측 {obs:,.0f}h)")
+
+    # ⚠ **이탈이 안 맞으면 판정하지 않는다.** 처음에 가드가 걸렸는데도 "확인" 을
+    #   찍었다 — #112 에서 고쳤던 것과 같은 보고 버그다 (검사를 건너뛰고 통과 선언).
+    #   이탈이 48% 더 많으면 대기가 준 것이 정밀도 때문인지 내보냈기 때문인지 모른다
+    if not ok:
+        print(f"\n  ⇒ **판정 보류.** 이탈이 안 맞는다 (날것 {e_raw:,.0f} · 흐림 "
+              f"{e_blur:,.0f}대, {abs(e_blur - e_raw) / max(e_raw, 1):.0%} 차이).")
+        print(f"     대기가 {drop:+.1f}% 준 것이 **정밀도 때문인지 더 내보냈기 때문인지 "
+              "가를 수 없다.**")
+        print("     --blur-scale 을 낮춰 이탈을 맞추고 다시 돌릴 것.")
+        print("\n=== 시드별 총 대기h ===")
+        print(t.pivot(index="seed", columns="엔진", values="총대기h")
+              .reindex(columns=order).to_string(float_format=lambda v: f"{v:,.0f}"))
+        return 0
 
     if drop >= PASS_DROP_PCT:
         covered = (raw - blur) / (raw - obs) * 100.0 if abs(raw - obs) > 1e-9 else float("nan")
