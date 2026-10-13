@@ -77,8 +77,12 @@ MARKER_EVERY_KM = 50
 DECK_VERSION = "9.0.27"
 
 #: 가장 긴 줄이 이 높이(m)가 되게 맞춘다. **정규화 기준은 화면에 적는다** —
-#: 안 적으면 두 런을 비교할 때 높이가 서로 다른 축척이 된다 (#93 이 여기서 깨진다)
-MAX_COLUMN_M = 26_000.0
+#: 안 적으면 두 런을 비교할 때 높이가 서로 다른 축척이 된다 (#93 이 여기서 깨진다).
+#:
+#: 코리도 415km 의 10%. 절대 높이가 아니라 **길이 대비 비율**로 잡는 이유: 줌이
+#: 달라져도 눈에 보이는 비율이 같다. 26km(6%)로 했더니 나란히 보기(#93)에서
+#: 패널이 반으로 좁아지며 줌이 7.5 → 5.6 으로 떨어져 기둥이 11px 밖에 안 됐다
+MAX_COLUMN_M = 41_500.0
 
 #: 기둥 굵기 = 이 값 + 충전기수 × 증가분 (m). 2기와 19기가 눈으로 구분돼야 한다
 COLUMN_BASE_R_M = 2_600.0
@@ -198,6 +202,35 @@ def station_frames(run_id: str, runs_dir: Path) -> dict:
             "run_id": run_id}
 
 
+def same_world(a: dict, b: dict) -> None:
+    """나란히 놓을 두 런이 **같은 세계**인가 (#93 · #59 와 같은 방어).
+
+    다른 시나리오나 다른 시드를 나란히 놓으면 **비교가 아니라 두 그림**이다.
+    run_id 가 `<scenario>__<stage>__p<참여율>__s<시드>` 라서 거기서 바로 읽는다.
+
+    ⚠ run_id 는 세계를 완전히 식별하지 못한다 (#101 — 같은 이름으로 다른 세계를
+    돌릴 수 있다). 여기서는 **스테이지만 다르다**는 것까지만 본다. 그 이상은
+    `stale_reason` 의 몫이고, 그림이 할 일이 아니다.
+    """
+
+    pa, pb = a["run_id"].split("__"), b["run_id"].split("__")
+    if len(pa) != 4 or len(pb) != 4:
+        raise SystemExit(f"\n[중단] run_id 모양이 다르다: {a['run_id']} · {b['run_id']}")
+
+    for i, what in ((0, "시나리오"), (2, "참여율"), (3, "시드")):
+        if pa[i] != pb[i]:
+            raise SystemExit(
+                f"\n[중단] {what}가 다르다: {pa[i]} ≠ {pb[i]}\n"
+                "  다른 세계를 나란히 놓으면 비교가 아니다 (#59). "
+                "스테이지만 다른 두 런을 줄 것")
+    if pa[1] == pb[1]:
+        raise SystemExit(f"\n[중단] 같은 스테이지다 ({pa[1]}). 비교할 것이 없다")
+
+    if a["times"] != b["times"]:
+        raise SystemExit("\n[중단] 두 런의 프레임 시각이 다르다 — 슬라이더 하나로 "
+                         "같이 움직일 수 없다")
+
+
 def station_names(ids: list[str], db: Path) -> dict[str, str]:
     """기둥 툴팁에 쓸 이름. **스냅샷에 없는 유일한 것**이라 DB 에서 가져온다."""
 
@@ -252,8 +285,15 @@ HTML = """<!doctype html>
   #scrub{flex:1;accent-color:#6da7ec}
   #clock{font-variant-numeric:tabular-nums;min-width:52px}
   #bar.off{display:none}
+  #panes{display:flex;height:100%}
+  .pane{position:relative;flex:1;height:100%}
+  .pane + .pane{border-left:1px solid #2c3140}
+  .tag{position:absolute;left:12px;bottom:62px;z-index:8;color:#e8e6e1;
+       font:600 15px system-ui,'Malgun Gothic',sans-serif;
+       background:rgba(19,22,28,.8);padding:5px 10px;border-radius:5px}
+  .tag small{display:block;font-weight:400;color:#9b9892;font-size:11px}
 </style></head><body>
-<div id="map"></div>
+<div id="panes"></div>
 <div id="hud">
   <b>경부고속도로 코리도</b> __LEN__ km<br/>
   <span class="k" style="background:rgb(90,160,255)"></span>상행 (부산 → 서울)<br/>
@@ -275,7 +315,10 @@ const {DeckGL, PathLayer, ScatterplotLayer, TextLayer, WebMercatorViewport} = de
 
 // 창 크기에 맞춰 코리도 전체를 담는다. 줌을 파일에 박으면 다른 화면에서 깨진다
 function fitView() {
-  const vp = new WebMercatorViewport({width: innerWidth, height: innerHeight});
+  // ⚠ **패널 폭**으로 맞춘다. 창 전체 폭을 쓰면 나란히 놓았을 때(#93) 코리도가
+  //   각 패널에서 양옆으로 잘린다
+  const n = Math.max(D.panels.length, 1);
+  const vp = new WebMercatorViewport({width: innerWidth / n, height: innerHeight});
   const f = vp.fitBounds(D.camera.bounds, {padding: 70});
   // 베어링을 돌리면 긴 축이 가로로 눕는다 — 그만큼 여유를 더 둔다
   return {longitude: f.longitude, latitude: f.latitude, zoom: f.zoom - 0.35,
@@ -301,7 +344,10 @@ function baseLayers() {
 // --- 휴게소 기둥 (#89) --------------------------------------------------
 // 높이 = queue_len (양) · 색 = wait_min (세기) · 굵기 = 충전기 수.
 // 셋을 합치면 "19기인 안성과 2기인 옥천의 같은 줄 길이" 가 같은 뜻이 돼 버린다.
-const F = D.frames;              // null 이면 바닥만 (#88)
+//
+// 패널이 둘이면(#93) **척도를 공유한다** — D.elevPerCar 가 두 런의 공통
+// 최대값에서 나온다. 각자 정규화하면 3.4배 차이가 똑같이 보인다.
+const P = D.panels;              // 빈 배열이면 바닥만 (#88)
 let frame = 0, timer = null;
 
 function bandColor(w) {
@@ -310,10 +356,10 @@ function bandColor(w) {
   return C[0];
 }
 
-function columnLayer() {
-  if (!F) return [];
-  const rows = F.stations.map(s => ({
-    position: s.position, name: D.names[s.id] || s.id, chargers: s.chargers,
+function columnLayer(p) {
+  if (!p) return [];
+  const rows = p.stations.map(s => ({
+    position: s.position, name: p.names[s.id] || s.id, chargers: s.chargers,
     queue: s.queue[frame], wait: s.wait[frame],
   }));
   return [new deck.ColumnLayer({
@@ -328,53 +374,88 @@ function columnLayer() {
   })];
 }
 
+const tooltip = ({object}) => {
+  if (!object) return null;
+  if (object.queue !== undefined) {
+    return {text: `${object.name}\n충전기 ${object.chargers}기\n`
+                + `줄 ${object.queue.toFixed(0)}대 · 대기 ${object.wait.toFixed(0)}분`};
+  }
+  if (object.name) {
+    return {text: `${object.name}\n${object.corridor} ${object.offset_km.toFixed(1)}km`};
+  }
+  return null;
+};
+
+// --- 패널 만들기 — 1개(#89) 또는 2개 나란히(#93) -------------------------
+// ★ **카메라를 묶는다.** 각도가 다르면 높이 비교가 눈속임이 된다 (#93).
+//   한쪽을 돌리면 다른 쪽이 같은 viewState 를 받는다
+let view = fitView();
+const decks = [];
+
+(P.length ? P : [null]).forEach((p, i) => {
+  const host = document.createElement('div');
+  host.className = 'pane';
+  const canvas = document.createElement('div');
+  canvas.style.cssText = 'position:absolute;inset:0';
+  host.appendChild(canvas);
+  if (p) {
+    const stage = p.run_id.split('__')[1];
+    host.insertAdjacentHTML('beforeend',
+      `<div class="tag">${stage}<small>${p.run_id}</small></div>`);
+  }
+  panes.appendChild(host);
+
+  decks.push(new DeckGL({
+    container: canvas, controller: true, viewState: view,
+    layers: [...baseLayers(), ...columnLayer(p)],
+    getTooltip: tooltip,
+    onViewStateChange: ({viewState}) => { view = viewState; sync(); },
+  }));
+});
+
+function sync() {
+  decks.forEach((dk, i) => dk.setProps({
+    viewState: view,
+    layers: [...baseLayers(), ...columnLayer(P[i] || null)],
+  }));
+}
+
 function render() {
-  dk.setProps({layers: [...baseLayers(), ...columnLayer()]});
-  if (F) {
-    const t = F.times[frame];
+  sync();
+  if (P.length) {
+    const t = P[0].times[frame];
     clock.textContent = String(Math.floor(t / 60) % 24).padStart(2, '0') + ':'
                       + String(Math.round(t % 60)).padStart(2, '0');
     scrub.value = frame;
   }
 }
 
-const dk = new DeckGL({
-  container: 'map',
-  initialViewState: fitView(),
-  controller: true,
-  layers: baseLayers(),
-  getTooltip: ({object}) => {
-    if (!object) return null;
-    if (object.queue !== undefined) {
-      return {text: `${object.name}\n충전기 ${object.chargers}기\n`
-                  + `줄 ${object.queue.toFixed(0)}대 · 대기 ${object.wait.toFixed(0)}분`};
-    }
-    if (object.name) {
-      return {text: `${object.name}\n${object.corridor} ${object.offset_km.toFixed(1)}km`};
-    }
-    return null;
-  }
-});
-
 // --- 범례 · 스크러버 -----------------------------------------------------
-if (F) {
+if (P.length) {
+  const shared = P.length > 1
+    ? `<span class="muted">(두 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
+      + `각자 정규화하면 두 그림이 똑같아 보인다)</span>`
+    : `<span class="muted">(가장 긴 줄 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이)</span>`;
   legend.innerHTML =
-    '<div style="margin-top:8px"><b>높이</b> = 줄 선 차 수 '
-    + `<span class="muted">(가장 긴 줄 ${F.max_queue.toFixed(0)}대 = 화면 최대 높이)</span></div>`
+    `<div style="margin-top:8px"><b>높이</b> = 줄 선 차 수 ${shared}</div>`
     + '<div><b>색</b> = 지금 가면 기다리는 시간 <span class="muted">(이용률 아님)</span></div>'
     + '<div style="margin:4px 0 2px">'
     + D.rampHex.map((c, i) =>
         `<span class="k" style="background:${c}"></span><span class="muted">${D.binLabels[i]}</span>`
       ).join(' ')
     + '</div><div><b>굵기</b> = 충전기 수 <span class="muted">(2기 ↔ 19기)</span></div>'
-    + `<div class="muted" style="margin-top:5px">${F.run_id}</div>`;
+    + (P.length > 1
+        ? '<div class="muted" style="margin-top:5px">카메라·시간·척도를 두 패널이 공유한다</div>'
+        : '');
 
-  scrub.max = F.times.length - 1;
+  scrub.max = P[0].times.length - 1;
   scrub.oninput = () => { frame = +scrub.value; render(); };
   play.onclick = () => {
     if (timer) { clearInterval(timer); timer = null; play.textContent = '▶'; return; }
     play.textContent = '❚❚';
-    timer = setInterval(() => { frame = (frame + 1) % F.times.length; render(); }, 90);
+    timer = setInterval(() => {
+      frame = (frame + 1) % P[0].times.length; render();
+    }, 90);
   };
 } else {
   bar.classList.add('off');
@@ -385,7 +466,7 @@ if (F) {
 render();
 
 // 창을 줄였다 늘렸다 해도 전체가 보이게 — 발표 중 화면을 바꿔도 깨지지 않는다
-addEventListener('resize', () => dk.setProps({initialViewState: fitView()}));
+addEventListener('resize', () => { view = fitView(); sync(); });
 </script></body></html>
 """
 
@@ -397,6 +478,8 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=PROJECT_ROOT)
     ap.add_argument("--run", default=None,
                     help="run_id. 주면 휴게소 기둥과 시간 스크러버가 붙는다 (#89)")
+    ap.add_argument("--vs", default=None,
+                    help="나란히 놓을 run_id. 카메라·시간·척도를 공유한다 (#93)")
     ap.add_argument("--runs-dir", type=Path, default=None)
     args = ap.parse_args()
 
@@ -413,8 +496,17 @@ def main() -> int:
                              "중심선 변환 상수를 먼저 맞출 것")
 
     sta = stations(db)
-    frames = (station_frames(args.run, args.runs_dir or RUNS_DIR)
-              if args.run else None)
+    runs = [r for r in (args.run, args.vs) if r]
+    panels = [station_frames(r, args.runs_dir or RUNS_DIR) for r in runs]
+    if len(panels) == 2:
+        same_world(panels[0], panels[1])
+
+    # ★ **두 런이 척도를 공유한다** (#93). 각자 자기 최대값으로 정규화하면 S0 의
+    #   가장 긴 줄과 S1 의 가장 긴 줄이 **둘 다 '꼭대기'** 로 그려져서, 3.4배 차이가
+    #   **똑같이 보인다.** 조용히 틀리는 종류라 공통 최대값으로 묶고 화면에 적는다
+    shared_max = max((p["max_queue"] for p in panels), default=0.0)
+    for p in panels:
+        p["names"] = station_names([s["id"] for s in p["stations"]], db)
 
     data = {
         "up": offset_path(cl, +RIBBON_SEP_M / 2),
@@ -422,7 +514,8 @@ def main() -> int:
         "stations": sta,
         "markers": markers(cl),
         "camera": camera(cl),
-        "frames": frames,
+        "panels": panels,
+        "sharedMax": shared_max,
         # 색 구간은 2D 히트맵과 **같은 램프**를 쓴다. 그림마다 다르면 못 겹쳐 본다
         "waitBins": [b for b in WAIT_BINS_MIN[:-1]],
         "binLabels": list(WAIT_BIN_LABELS),
@@ -431,8 +524,7 @@ def main() -> int:
         "colBaseR": COLUMN_BASE_R_M,
         "colPerCharger": COLUMN_PER_CHARGER_M,
         # 가장 긴 줄이 화면 최대 높이가 되게. **기준을 범례에 적는다** (#89 · #93)
-        "elevPerCar": (MAX_COLUMN_M / max(frames["max_queue"], 1.0)) if frames else 0.0,
-        "names": station_names([s["id"] for s in frames["stations"]], db) if frames else {},
+        "elevPerCar": MAX_COLUMN_M / max(shared_max, 1.0),
     }
 
     out = Path(args.out)
@@ -450,11 +542,19 @@ def main() -> int:
     print(f"  부산쪽 끝 ({cl.iloc[0].lat:.4f}, {cl.iloc[0].lon:.4f}) · "
           f"서울쪽 끝 ({cl.iloc[-1].lat:.4f}, {cl.iloc[-1].lon:.4f})")
 
-    if frames:
-        print(f"\n  기둥: {len(frames['stations'])}곳 × {len(frames['times'])}프레임")
-        print(f"  높이 정규화: 가장 긴 줄 {frames['max_queue']:.0f}대 = "
+    for p in panels:
+        print(f"\n  [{p['run_id']}]")
+        print(f"    기둥 {len(p['stations'])}곳 × {len(p['times'])}프레임 · "
+              f"가장 긴 줄 {p['max_queue']:.0f}대")
+        _cross_check(p, p["names"])
+
+    if panels:
+        print(f"\n  높이 정규화: **공통 최대 {shared_max:.0f}대** = "
               f"{MAX_COLUMN_M / 1000:.0f}km  (범례에 적힌다)")
-        _cross_check(frames, data["names"])
+    if len(panels) == 2:
+        lo, hi = sorted(p["max_queue"] for p in panels)
+        print(f"  두 런의 최대 줄이 {hi / max(lo, 1):.1f}배 차이다 — 각자 정규화했으면 "
+              "**두 그림이 똑같아 보였다**")
 
     print("\n  외부 의존: deck.gl CDN 하나. API 키 없음. 빌드 없음")
     return 0
