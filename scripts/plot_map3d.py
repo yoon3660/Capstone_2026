@@ -202,33 +202,41 @@ def station_frames(run_id: str, runs_dir: Path) -> dict:
             "run_id": run_id}
 
 
-def same_world(a: dict, b: dict) -> None:
-    """나란히 놓을 두 런이 **같은 세계**인가 (#93 · #59 와 같은 방어).
+def same_world(panels: list[dict]) -> None:
+    """나란히 놓을 런들이 **같은 세계**인가 (#93 · #59 와 같은 방어).
 
-    다른 시나리오나 다른 시드를 나란히 놓으면 **비교가 아니라 두 그림**이다.
+    다른 시나리오나 다른 시드를 나란히 놓으면 **비교가 아니라 여러 그림**이다.
     run_id 가 `<scenario>__<stage>__p<참여율>__s<시드>` 라서 거기서 바로 읽는다.
+
+    두 칸이든 세 칸이든 같은 규칙이다 — **첫 칸을 기준으로 전부 대조한다.**
 
     ⚠ run_id 는 세계를 완전히 식별하지 못한다 (#101 — 같은 이름으로 다른 세계를
     돌릴 수 있다). 여기서는 **스테이지만 다르다**는 것까지만 본다. 그 이상은
     `stale_reason` 의 몫이고, 그림이 할 일이 아니다.
     """
 
-    pa, pb = a["run_id"].split("__"), b["run_id"].split("__")
-    if len(pa) != 4 or len(pb) != 4:
-        raise SystemExit(f"\n[중단] run_id 모양이 다르다: {a['run_id']} · {b['run_id']}")
+    parts = []
+    for p in panels:
+        bits = p["run_id"].split("__")
+        if len(bits) != 4:
+            raise SystemExit(f"\n[중단] run_id 모양이 다르다: {p['run_id']}")
+        parts.append(bits)
 
-    for i, what in ((0, "시나리오"), (2, "참여율"), (3, "시드")):
-        if pa[i] != pb[i]:
-            raise SystemExit(
-                f"\n[중단] {what}가 다르다: {pa[i]} ≠ {pb[i]}\n"
-                "  다른 세계를 나란히 놓으면 비교가 아니다 (#59). "
-                "스테이지만 다른 두 런을 줄 것")
-    if pa[1] == pb[1]:
-        raise SystemExit(f"\n[중단] 같은 스테이지다 ({pa[1]}). 비교할 것이 없다")
+    head = parts[0]
+    for bits, p in zip(parts[1:], panels[1:], strict=True):
+        for i, what in ((0, "시나리오"), (2, "참여율"), (3, "시드")):
+            if bits[i] != head[i]:
+                raise SystemExit(
+                    f"\n[중단] {what}가 다르다: {head[i]} ≠ {bits[i]}\n"
+                    "  다른 세계를 나란히 놓으면 비교가 아니다 (#59). "
+                    "스테이지만 다른 런들을 줄 것")
+        if p["times"] != panels[0]["times"]:
+            raise SystemExit(f"\n[중단] {p['run_id']} 의 프레임 시각이 다르다 — "
+                             "슬라이더 하나로 같이 움직일 수 없다")
 
-    if a["times"] != b["times"]:
-        raise SystemExit("\n[중단] 두 런의 프레임 시각이 다르다 — 슬라이더 하나로 "
-                         "같이 움직일 수 없다")
+    stages = [b[1] for b in parts]
+    if len(set(stages)) != len(stages):
+        raise SystemExit(f"\n[중단] 스테이지가 겹친다: {stages}. 비교할 것이 없다")
 
 
 def station_names(ids: list[str], db: Path) -> dict[str, str]:
@@ -345,8 +353,8 @@ function baseLayers() {
 // 높이 = queue_len (양) · 색 = wait_min (세기) · 굵기 = 충전기 수.
 // 셋을 합치면 "19기인 안성과 2기인 옥천의 같은 줄 길이" 가 같은 뜻이 돼 버린다.
 //
-// 패널이 둘이면(#93) **척도를 공유한다** — D.elevPerCar 가 두 런의 공통
-// 최대값에서 나온다. 각자 정규화하면 3.4배 차이가 똑같이 보인다.
+// 패널이 여럿이면(#93) **척도를 공유한다** — D.elevPerCar 가 모든 런의 공통
+// 최대값에서 나온다. 각자 정규화하면 몇 배 차이가 똑같이 보인다.
 const P = D.panels;              // 빈 배열이면 바닥만 (#88)
 let frame = 0, timer = null;
 
@@ -433,7 +441,7 @@ function render() {
 // --- 범례 · 스크러버 -----------------------------------------------------
 if (P.length) {
   const shared = P.length > 1
-    ? `<span class="muted">(두 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
+    ? `<span class="muted">(${P.length}개 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
       + `각자 정규화하면 두 그림이 똑같아 보인다)</span>`
     : `<span class="muted">(가장 긴 줄 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이)</span>`;
   legend.innerHTML =
@@ -445,7 +453,7 @@ if (P.length) {
       ).join(' ')
     + '</div><div><b>굵기</b> = 충전기 수 <span class="muted">(2기 ↔ 19기)</span></div>'
     + (P.length > 1
-        ? '<div class="muted" style="margin-top:5px">카메라·시간·척도를 두 패널이 공유한다</div>'
+        ? `<div class="muted" style="margin-top:5px">카메라·시간·척도를 ${P.length}개 패널이 공유한다</div>`
         : '');
 
   scrub.max = P[0].times.length - 1;
@@ -478,8 +486,9 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=PROJECT_ROOT)
     ap.add_argument("--run", default=None,
                     help="run_id. 주면 휴게소 기둥과 시간 스크러버가 붙는다 (#89)")
-    ap.add_argument("--vs", default=None,
-                    help="나란히 놓을 run_id. 카메라·시간·척도를 공유한다 (#93)")
+    ap.add_argument("--vs", action="append", default=[],
+                    help="나란히 놓을 run_id. **여러 번 줄 수 있다** — S0│S1│S2 처럼. "
+                         "카메라·시간·척도를 전부 공유한다 (#93)")
     ap.add_argument("--runs-dir", type=Path, default=None)
     args = ap.parse_args()
 
@@ -496,13 +505,13 @@ def main() -> int:
                              "중심선 변환 상수를 먼저 맞출 것")
 
     sta = stations(db)
-    runs = [r for r in (args.run, args.vs) if r]
+    runs = [r for r in [args.run, *args.vs] if r]
     panels = [station_frames(r, args.runs_dir or RUNS_DIR) for r in runs]
-    if len(panels) == 2:
-        same_world(panels[0], panels[1])
+    if len(panels) > 1:
+        same_world(panels)
 
-    # ★ **두 런이 척도를 공유한다** (#93). 각자 자기 최대값으로 정규화하면 S0 의
-    #   가장 긴 줄과 S1 의 가장 긴 줄이 **둘 다 '꼭대기'** 로 그려져서, 3.4배 차이가
+    # ★ **모든 런이 척도를 공유한다** (#93). 각자 자기 최대값으로 정규화하면 각
+    #   런의 가장 긴 줄이 **전부 '꼭대기'** 로 그려져서, 몇 배 차이가 나도
     #   **똑같이 보인다.** 조용히 틀리는 종류라 공통 최대값으로 묶고 화면에 적는다
     shared_max = max((p["max_queue"] for p in panels), default=0.0)
     for p in panels:
@@ -551,10 +560,11 @@ def main() -> int:
     if panels:
         print(f"\n  높이 정규화: **공통 최대 {shared_max:.0f}대** = "
               f"{MAX_COLUMN_M / 1000:.0f}km  (범례에 적힌다)")
-    if len(panels) == 2:
-        lo, hi = sorted(p["max_queue"] for p in panels)
-        print(f"  두 런의 최대 줄이 {hi / max(lo, 1):.1f}배 차이다 — 각자 정규화했으면 "
-              "**두 그림이 똑같아 보였다**")
+    if len(panels) > 1:
+        qs = sorted(p["max_queue"] for p in panels)
+        print(f"  런별 최대 줄 {' · '.join(f'{q:.0f}' for q in qs)}대 "
+              f"(최대/최소 {qs[-1] / max(qs[0], 1):.1f}배) — 각자 정규화했으면 "
+              "**전부 똑같은 높이로 보였다**")
 
     print("\n  외부 의존: deck.gl CDN 하나. API 키 없음. 빌드 없음")
     return 0

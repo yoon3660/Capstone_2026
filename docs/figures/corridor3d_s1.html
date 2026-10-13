@@ -78,8 +78,8 @@ function baseLayers() {
 // 높이 = queue_len (양) · 색 = wait_min (세기) · 굵기 = 충전기 수.
 // 셋을 합치면 "19기인 안성과 2기인 옥천의 같은 줄 길이" 가 같은 뜻이 돼 버린다.
 //
-// 패널이 둘이면(#93) **척도를 공유한다** — D.elevPerCar 가 두 런의 공통
-// 최대값에서 나온다. 각자 정규화하면 3.4배 차이가 똑같이 보인다.
+// 패널이 여럿이면(#93) **척도를 공유한다** — D.elevPerCar 가 모든 런의 공통
+// 최대값에서 나온다. 각자 정규화하면 몇 배 차이가 똑같이 보인다.
 const P = D.panels;              // 빈 배열이면 바닥만 (#88)
 let frame = 0, timer = null;
 
@@ -169,7 +169,7 @@ function render() {
 // --- 범례 · 스크러버 -----------------------------------------------------
 if (P.length) {
   const shared = P.length > 1
-    ? `<span class="muted">(두 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
+    ? `<span class="muted">(${P.length}개 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
       + `각자 정규화하면 두 그림이 똑같아 보인다)</span>`
     : `<span class="muted">(가장 긴 줄 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이)</span>`;
   legend.innerHTML =
@@ -181,7 +181,7 @@ if (P.length) {
       ).join(' ')
     + '</div><div><b>굵기</b> = 충전기 수 <span class="muted">(2기 ↔ 19기)</span></div>'
     + (P.length > 1
-        ? '<div class="muted" style="margin-top:5px">카메라·시간·척도를 두 패널이 공유한다</div>'
+        ? `<div class="muted" style="margin-top:5px">카메라·시간·척도를 ${P.length}개 패널이 공유한다</div>`
         : '');
 
   scrub.max = P[0].times.length - 1;
