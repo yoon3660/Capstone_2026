@@ -62,3 +62,26 @@ def test_interfaces_module_has_no_internal_dependencies() -> None:
 def test_every_subpackage_has_an_init() -> None:
     for name in ("world", "engine", "io", "viz"):
         assert (SRC / name / "__init__.py").is_file(), f"evdt/{name}/__init__.py 가 없다"
+
+
+# ---------------------------------------------------------------------------
+# 지도 뷰어는 스냅샷만 본다 (#87 · 설계 규칙 4)
+# ---------------------------------------------------------------------------
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+
+#: 지도를 그리는 스크립트. **엔진도 시뮬레이터도 모른다** — 입력은 스냅샷 스트림과
+#: 좌표뿐이다. 이걸 문서로만 두면 "잠깐 run_once 하나만 부르자" 가 들어오고,
+#: 그 순간 뷰어가 어떤 스테이지가 도는지 알게 된다 (#87 이 못 박은 것)
+VIEWER_GLOB = "plot_map*.py"
+
+
+@pytest.mark.parametrize("forbidden", ["evdt.engine", "evdt.world"])
+def test_map_viewer_does_not_import(forbidden: str) -> None:
+    seen = list(SCRIPTS.glob(VIEWER_GLOB))
+    assert seen, f"지도 뷰어를 하나도 못 찾았다: {SCRIPTS}/{VIEWER_GLOB}"
+
+    for py in seen:
+        for mod, lineno in _imported_modules(py):
+            assert not mod.startswith(forbidden), (
+                f"{py.name}:{lineno} 가 {mod} 을 임포트한다. "
+                "지도 뷰어의 입력은 스냅샷 스트림과 좌표뿐이다 (#87)")
