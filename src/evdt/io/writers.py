@@ -82,6 +82,10 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("ev_id", _STR),
         ("vclass_id", _STR),
         ("entry_time_min", _F64),
+        # **포기한 시각** (분). entry_time_min 은 코리도에 들어온 시각이지 나간 시각이
+        # 아니다 — 둘을 혼동하면 "언제 밀려났나" 를 몇 시간 어긋나게 그린다.
+        # ⚠ UE 는 NaN 이다. 하루 단위 계획이라 "그 순간" 이 없다 (ue.escape_rows 참고)
+        ("escape_t_min", _F64),
         ("entry_offset_km", _F64),
         ("dest_offset_km", _F64),
         ("escape_cost_min", _F64),
