@@ -32,6 +32,8 @@ import yaml
 from evdt.config import ScenarioConfig
 from evdt.demand_layers import effective_ev_share, opportunity_charge
 from evdt.engine.forecast import (
+    ArrivalSpec,
+    BlurredForecast,
     ObservedSpec,
     OracleForecast,
     OracleSource,
@@ -185,6 +187,9 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
         # 2회차인 줄 알고 재사용하게 된다 (#101 과 같은 고장)
         "oracle_from_run": None if oracle is None else oracle.source_run_id,
         "oracle_round": None if oracle is None else oracle.round_no,
+        # 개수만 남긴 대조군인가 (#123). 날것과 흐린 것은 **다른 실험**이다
+        "oracle_blur": None if oracle is None else oracle.blur,
+        "oracle_blur_scale": None if oracle is None else oracle.blur_scale,
         # 어떤 예측을 썼나 (#119). 오라클(상한 추정)과 관측 예측은 **다른 실험**인데
         # run_id 는 둘 다 `__S2__` 라서, 적지 않으면 섞어서 재사용하게 된다
         "forecast_kind": ("oracle" if oracle is not None
@@ -701,6 +706,29 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
             forecast = OracleForecast.from_rows(
                 oracle.rows, specs_from_trips(built.trips),
                 source_run_id=oracle.source_run_id, round_no=oracle.round_no)
+            if oracle.blur:
+                # 개수만 남기고 시각·차종을 지운다 — **정확도는 그대로**, 정밀도만 제거.
+                #
+                # ⚠ 대표 수요는 **오라클 자신의 기록**에서 뽑는다. 처음에 예비 SoC →
+                #   목표 SoC(0.20 → 0.80, swing 0.6)를 썼더니 실제 평균 swing 0.251 의
+                #   **2.4배** 라, 대조군이 "같은 정확도" 가 아니라 작업량을 부풀린
+                #   것이 됐다 — 이탈이 49 → 404대로 뛰었다 (#123)
+                n = max(len(oracle.rows), 1)
+                phys = specs_from_trips(built.trips)
+                dflt = next(iter(phys.values()), None)
+                forecast = BlurredForecast(
+                    inner=forecast,
+                    demand=ArrivalSpec(
+                        battery_kwh=sum(phys[str(r["ev_id"])].battery_kwh
+                                        for r in oracle.rows if str(r["ev_id"]) in phys) / n,
+                        vmax_kw=sum(phys[str(r["ev_id"])].vmax_kw
+                                    for r in oracle.rows if str(r["ev_id"]) in phys) / n,
+                        curve=dflt.curve if dflt else (),
+                        charge_power_factor=sum(float(r.get("cold_factor", 1.0))
+                                                for r in oracle.rows) / n),
+                    soc_from=sum(float(r["soc_in"]) for r in oracle.rows) / n,
+                    soc_to=sum(float(r["soc_out"]) for r in oracle.rows) / n,
+                    scale=float(oracle.blur_scale))
             log(f"  예측 — {forecast.describe()}")
             log("  ⚠ 이 미래는 "
                 f"{oracle.source_run_id} 가 만든 미래다. S2 가 차를 다른 데로 보내면 "
@@ -761,10 +789,11 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
         {
             "policy_decide_calls": (out.n_decide_calls, "count"),
             "policy_stranded": (out.n_stranded, "count"),
-            **({} if oracle is None else {
+            **({} if oracle is None or oracle.blur else {
                 "oracle_round": (forecast.round_no, "count"),
                 "oracle_arrivals": (forecast.n_arrivals, "count"),
             }),
+            **({} if oracle is None else {"oracle_blur": (float(oracle.blur), "ratio")}),
             **({} if observed is None else {
                 "forecast_strength": (observed.strength, "ratio"),
             }),

@@ -66,8 +66,8 @@ from typing import Protocol, runtime_checkable
 from evdt.engine.ledger import Arrival
 
 __all__ = ["Forecast", "OracleForecast", "OracleSource", "ObservedForecast",
-           "ObservedSpec", "ArrivalSpec", "describe_shift", "specs_from_trips",
-           "observed_from_entries"]
+           "ObservedSpec", "BlurredForecast", "ArrivalSpec", "describe_shift",
+           "specs_from_trips", "observed_from_entries"]
 
 
 @runtime_checkable
@@ -104,6 +104,12 @@ class OracleSource:
     source_run_id: str
     #: 고정점 회차 (1 = S1 의 미래)
     round_no: int = 1
+    #: 개수만 남기고 시각·차종을 지운다 — 과잉반응 가설의 대조군 (#123).
+    #: 정확도는 그대로고 **정밀도만** 없앤다 (`BlurredForecast`)
+    blur: bool = False
+    #: 흐린 예측의 개수 배율. 흐리면 추정 **수준**도 같이 바뀌어 이탈 수가 달라진다 —
+    #: 이 손잡이로 수준을 맞추고 **동기화 효과만** 떼어낸다 (#123)
+    blur_scale: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,3 +479,67 @@ def observed_from_entries(trips: Sequence, offsets: Mapping[str, float],
         soc_from=float(soc_from), soc_to=float(soc_to),
         strength=float(spec.strength),
     )
+
+
+# ---------------------------------------------------------------------------
+# 정밀도만 지운 예측 — 과잉반응 가설의 대조군 (#123)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class BlurredForecast:
+    """다른 예측의 **개수만** 쓰고 시각·차종은 지운다 (#123).
+
+    ## 무엇을 가르려고 만들었나
+
+    #119 에서 **관측 예측이 오라클을 이겼다.** 설명이 둘 있는데 서로 다르다.
+
+        (A) 과잉반응   오라클이 **정확하고 똑같아서** 전원이 같이 피한다
+        (B) 낡은 정보   오라클이 보는 미래는 S1 의 미래라 그냥 **틀렸다**
+
+    두 설명은 관측 예측 쪽 증거만으로는 안 갈린다 — 관측 예측은 오라클과
+    **두 가지가** 다르기 때문이다. 덜 정확하고(accuracy), 더 흐릿하다(precision).
+
+    **이 클래스가 하나를 고정한다.** 안쪽 예측의 **개수를 그대로** 쓰므로 정확도는
+    같다. 대신 **누가 언제 오는지를 지우고** 창에 고르게 편다 — 관측 예측이 하는 것과
+    같은 모양이다.
+
+        오라클(날것)   맞는 개수 · 맞는 시각 · 맞는 차종
+        오라클(흐림)   맞는 개수 · 지운 시각 · 대표 차종   ← 여기
+        관측 예측      추정 개수 · 지운 시각 · 대표 차종
+
+    **읽는 법**
+
+        흐림 ≈ 관측 ≫ 날것   →  (A) 정밀도가 문제다. 가설 확인
+        흐림 ≈ 날것 ≪ 관측   →  (B) 낡은 정보가 문제다. 가설 기각
+
+    후자면 다른 설명을 찾아야 한다 — 그 경우 `docs/s2_observed.md` §7 을 고친다.
+    """
+
+    inner: Forecast
+    demand: ArrivalSpec
+    soc_from: float
+    soc_to: float
+    #: 개수 배율. 흐리게 하면 추정 **수준**도 바뀌어 이탈 수가 달라지므로, 이걸로
+    #: 수준을 맞추고 **동기화 효과만** 비교한다 (#123)
+    scale: float = 1.0
+
+    def arrivals_between(self, station_id: str, *,
+                         after_min: float, before_min: float) -> tuple[Arrival, ...]:
+        n = int(round(len(self.inner.arrivals_between(
+            station_id, after_min=after_min, before_min=before_min)) * self.scale))
+        if n <= 0:
+            return ()
+        span = float(before_min) - float(after_min)
+        step = span / (n + 1)
+        return tuple(
+            Arrival(ev_id=f"~bl:{station_id}:{i}",
+                    arrival_min=float(after_min) + step * (i + 1),
+                    soc_from=self.soc_from, soc_to=self.soc_to,
+                    battery_kwh=self.demand.battery_kwh, vmax_kw=self.demand.vmax_kw,
+                    curve=self.demand.curve,
+                    charge_power_factor=self.demand.charge_power_factor)
+            for i in range(n)
+        )
+
+    def describe(self) -> str:
+        inner = self.inner.describe() if hasattr(self.inner, "describe") else "?"
+        return f"흐린 예측 (개수만 유지, #123) ← {inner}"

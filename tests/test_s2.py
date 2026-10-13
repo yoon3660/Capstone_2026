@@ -294,3 +294,56 @@ def test_describe_shift_reports_zero_when_nothing_moved():
     f = _oracle([("a", "A", 10.0, 0.2, 0.8), ("b", "B", 20.0, 0.2, 0.8)])
     d = describe_shift(f, f)
     assert d["n_moved"] == 0.0 and d["mean_abs_shift_min"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 정밀도만 지운 대조군 (#123)
+# ---------------------------------------------------------------------------
+def _blurred(inner, scale: float = 1.0):
+    from evdt.engine.forecast import BlurredForecast
+    return BlurredForecast(inner=inner, demand=SPEC, soc_from=0.3, soc_to=0.6, scale=scale)
+
+
+def test_blur_keeps_the_count():
+    """**대조군의 정의다.** 개수(정확도)는 그대로 두고 시각·차종(정밀도)만 지운다.
+
+    개수가 바뀌면 "정밀도를 지웠다" 가 아니라 "예측을 약하게 했다" 가 되고, #123 이
+    가르려는 두 설명이 다시 섞인다.
+    """
+
+    rows = [(f"x{i}", "A", 10.0 + i * 3, 0.2, 0.8) for i in range(7)]
+    inner = _oracle(rows)
+    sharp = inner.arrivals_between("A", after_min=0.0, before_min=100.0)
+    blur = _blurred(inner).arrivals_between("A", after_min=0.0, before_min=100.0)
+    assert len(blur) == len(sharp) == 7
+
+
+def test_blur_erases_who_and_when():
+    """누가 언제 오는지를 지운다 — 창에 고르게 펴고 대표 수요를 쓴다."""
+
+    inner = _oracle([(f"x{i}", "A", 10.0 + i * 3, 0.2, 0.8) for i in range(5)])
+    got = _blurred(inner).arrivals_between("A", after_min=0.0, before_min=100.0)
+
+    assert all(a.ev_id.startswith("~bl:") for a in got), "실제 차 ID 가 남으면 안 된다"
+    assert all(a.soc_from == 0.3 and a.soc_to == 0.6 for a in got), "대표 수요를 써야 한다"
+    gaps = [b.arrival_min - a.arrival_min for a, b in zip(got, got[1:], strict=False)]
+    assert max(gaps) - min(gaps) < 1e-9, "고르게 펴져야 한다"
+
+
+def test_blur_scale_moves_the_level_not_the_shape():
+    """흐리면 추정 **수준**도 바뀌어 이탈 수가 달라진다 — 그걸 맞추는 손잡이 (#123).
+
+    맞추지 않으면 '내보내서 이긴 것' 을 '흐려서 이긴 것' 으로 읽는다.
+    """
+
+    inner = _oracle([(f"x{i}", "A", 10.0 + i, 0.2, 0.8) for i in range(10)])
+    for scale, want in ((0.0, 0), (0.5, 5), (1.0, 10), (2.0, 20)):
+        got = _blurred(inner, scale).arrivals_between("A", after_min=0.0, before_min=100.0)
+        assert len(got) == want
+
+
+def test_blur_scale_zero_gives_nothing():
+    """scale 0 이면 예측이 비고, 따라서 S1 과 같아진다."""
+
+    inner = _oracle([(f"x{i}", "A", 10.0 + i, 0.2, 0.8) for i in range(10)])
+    assert _blurred(inner, 0.0).arrivals_between("A", after_min=0.0, before_min=100.0) == ()
