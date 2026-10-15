@@ -1,4 +1,4 @@
-"""격차 메우기 표 — 각 칸이 S0→UE 의 몇 %를 메웠나 (#121, 설계문서 §8.2).
+"""바닥–천장 격차 축소율 표 — 각 칸이 S0→UE 거리의 몇 %를 좁혔나 (#121, 설계문서 §8.2).
 
     python scripts/gap_table.py --seeds 1-20
 
@@ -10,7 +10,11 @@
     바닥  S0   가장 적은 정보 (앱 화면만)
     천장  UE   전원이 서로의 최종 선택을 안다 (반복 균형)
 
-    메운 비율 = (S0 − 이 칸) / (S0 − UE)
+    격차 축소율 = (S0 − 이 칸) / (S0 − UE)
+
+**상한도 하한도 없다.** 바닥보다 나쁘면 음수, 천장을 이기면 100% 를 넘는다
+(UE 는 이기적 균형이라 조정이 이기는 것이 이론적으로 가능하다). 그래서
+"달성률·도달률" 이 아니라 **축소율** 이다.
 
 **남은 몫이 곧 로드맵이다.** S3·S4 행의 빈칸이 남은 작업 목록이다.
 
@@ -36,7 +40,7 @@
 **24.3%** 이고 완전 예측(28.8%)이 이긴다.
 
 그래서 **손잡이가 있는 칸**(S2 의 strength)은 이탈이 S1 근처가 되게 맞춰야 하고,
-벗어나면 **그 칸의 메운% 를 찍지 않는다.**
+벗어나면 **그 칸의 격차 축소율을 찍지 않는다.**
 
 > S0·S1 은 손잡이가 없다. 이탈 수가 **설정이 아니라 결과**라서 맞출 대상이 아니다.
 > 다만 S0 가 233대를 내보낸다는 사실은 **바닥 자체에 들어가 있으므로** 표에 같이 찍는다.
@@ -70,7 +74,7 @@ FLOOR, CEIL = "S0", "UE"
 
 #: 이탈을 맞출 기준. 손잡이 없는 칸 중 가장 가까운 것
 ESCAPE_REF = "S1"
-#: 이보다 벗어나면 그 칸의 메운% 를 찍지 않는다
+#: 이보다 벗어나면 그 칸의 격차 축소율을 찍지 않는다
 ESCAPE_TOL = 0.35
 
 #: 스테이지가 **반드시 만족해야 하는** params. 안 맞으면 그 런은 뺀다 (#123 §5)
@@ -165,7 +169,7 @@ def main() -> int:
     # ★ **모든 칸이 끝낸 시드만** 쓴다 (#59 · compare_stages3.py 와 같은 규칙).
     #
     #   안 그러면 바닥·천장을 14개 시드로 잡고 S2 를 6개로 재게 되어, **시드 변동이
-    #   메운% 에 섞인다.** 실제로 그랬다 — 같은 런인데 ladder.md 는 30.2%,
+    #   격차 축소율에 섞인다.** 실제로 그랬다 — 같은 런인데 ladder.md 는 30.2%,
     #   run_s2.py 는 28.8% 였다 (바닥·천장의 시드 집합이 달랐다).
     present = [st for st in want if (t.stage == st).any()]
     shared = sorted(set.intersection(*(set(t[t.stage == st].seed) for st in present)))
@@ -196,7 +200,7 @@ def main() -> int:
     print("  UE 는 **참고 천장**이다 — 실시간 엔진이 가질 수 없는 정보를 쓴다 "
           "(DESIGN §1 갱신 2026-10-11)")
 
-    # === 이탈 맞춤 검사 — 메운% 를 찍어도 되는지 먼저 정한다 ================
+    # === 이탈 맞춤 검사 — 격차 축소율을 찍어도 되는지 먼저 정한다 ============
     ref = t[t.stage == ESCAPE_REF]["n_escaped"].mean()
     off, trust = {}, {}
     for st in want:
@@ -210,7 +214,7 @@ def main() -> int:
     for st, v in off.items():
         mark = ""
         if st in TUNABLE:
-            mark = "  ✅" if trust[st] else "  ★ 벗어남 — 메운% 를 찍지 않는다"
+            mark = "  ✅" if trust[st] else "  ★ 벗어남 — 격차 축소율을 찍지 않는다"
         elif st == FLOOR:
             mark = "  (손잡이 없음 — 바닥 자체에 들어간 값이다)"
         print(f"  {st:16} {t[t.stage == st]['n_escaped'].mean():6.1f}대  ({v:+.0%}){mark}")
@@ -223,20 +227,20 @@ def main() -> int:
         for st in want:
             if not have[st]:
                 out.append({"지표": label, "칸": st, "값": None, "±95%": None,
-                            "메운%": None, "이탈": None, "시드": 0})
+                            "격차축소율%": None, "이탈": None, "시드": 0})
                 continue
             m, ci = mean_ci(t[t.stage == st][metric])
             pct = (0.0 if st == FLOOR else 100.0 if st == CEIL
                    else closed(m, base[FLOOR], base[CEIL]))
             out.append({
                 "지표": label, "칸": st, "값": m, "±95%": ci,
-                "메운%": pct if trust[st] else None,
+                "격차축소율%": pct if trust[st] else None,
                 "이탈": t[t.stage == st]["n_escaped"].mean(),
                 "시드": len(have[st]),
             })
     o = pd.DataFrame(out)
 
-    print("\n=== 격차 메우기 ===")
+    print("\n=== 바닥–천장 격차 축소율 ===")
     for label in o["지표"].unique():
         g = o[o["지표"] == label].drop(columns="지표")
         print(f"\n  {label}")
@@ -246,15 +250,15 @@ def main() -> int:
     print("  ※ S3·S4 행의 빈칸이 **남은 작업 목록**이다")
 
     # === 격차 분해 =======================================================
-    tot = o[o["지표"] == "총 사회적 비용(h)"].set_index("칸")["메운%"]
+    tot = o[o["지표"] == "총 사회적 비용(h)"].set_index("칸")["격차축소율%"]
     if pd.notna(tot.get("S2")) and pd.notna(tot.get(BENCH)):
         print("\n=== 격차 분해 (DESIGN §8.2) ===")
-        print(f"  관측 예측이 메운 몫      {tot['S2']:5.1f}%")
-        print(f"  완전 예측이 메운 몫      {tot[BENCH]:5.1f}%")
+        print(f"  관측 예측의 격차 축소율   {tot['S2']:5.1f}%")
+        print(f"  완전 예측의 격차 축소율   {tot[BENCH]:5.1f}%")
         print(f"  **예측 오차 손실**      {tot[BENCH] - tot['S2']:5.1f}%p"
               "   ← 예측이 완벽하지 않아서 잃은 몫")
         print(f"  **남은 몫**            {100 - tot[BENCH]:5.1f}%p"
-              "   ← 정보로는 못 메운다. S3(결합)·S4(롤링)의 과녁")
+              "   ← 정보로는 못 좁힌다. S3(결합)·S4(롤링)의 과녁")
 
         # ⚠ 위의 ±95% 는 **수준**의 신뢰구간이라 서로 겹친다 (S2 ±401h · 벤치 ±235h).
         #   그걸로 "차이가 없다" 고 읽으면 틀린다 — 두 칸은 **같은 시드**를 돌았으므로
