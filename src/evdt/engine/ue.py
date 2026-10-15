@@ -162,6 +162,11 @@ class UEResult:
                 "ev_id": trip.ev_id,
                 "vclass_id": trip.vclass_id,
                 "entry_time_min": trip.entry_min,
+                # ⚠ **UE 에는 "포기한 시각" 이 없다.** 균형은 하루 전체 계획을 한 번에
+                #   고르는 것이라, 운전자가 도중에 마음을 바꾸는 순간이 존재하지 않는다.
+                #   Δt 정책(S0~S2)은 실제로 어느 Δt 에 포기했는지를 적는다.
+                #   여기서 진입 시각이나 추정값을 넣으면 **없는 사건을 그리게 된다**
+                "escape_t_min": float("nan"),
                 "entry_offset_km": trip.entry_offset_km,
                 "dest_offset_km": trip.dest_offset_km,
                 "escape_cost_min": escape_cost_of(trip, escape_cost_min),

@@ -202,33 +202,111 @@ def station_frames(run_id: str, runs_dir: Path) -> dict:
             "run_id": run_id}
 
 
-def same_world(a: dict, b: dict) -> None:
-    """나란히 놓을 두 런이 **같은 세계**인가 (#93 · #59 와 같은 방어).
+def same_world(panels: list[dict]) -> None:
+    """나란히 놓을 런들이 **같은 세계**인가 (#93 · #59 와 같은 방어).
 
-    다른 시나리오나 다른 시드를 나란히 놓으면 **비교가 아니라 두 그림**이다.
+    다른 시나리오나 다른 시드를 나란히 놓으면 **비교가 아니라 여러 그림**이다.
     run_id 가 `<scenario>__<stage>__p<참여율>__s<시드>` 라서 거기서 바로 읽는다.
+
+    두 칸이든 세 칸이든 같은 규칙이다 — **첫 칸을 기준으로 전부 대조한다.**
 
     ⚠ run_id 는 세계를 완전히 식별하지 못한다 (#101 — 같은 이름으로 다른 세계를
     돌릴 수 있다). 여기서는 **스테이지만 다르다**는 것까지만 본다. 그 이상은
     `stale_reason` 의 몫이고, 그림이 할 일이 아니다.
     """
 
-    pa, pb = a["run_id"].split("__"), b["run_id"].split("__")
-    if len(pa) != 4 or len(pb) != 4:
-        raise SystemExit(f"\n[중단] run_id 모양이 다르다: {a['run_id']} · {b['run_id']}")
+    parts = []
+    for p in panels:
+        bits = p["run_id"].split("__")
+        if len(bits) != 4:
+            raise SystemExit(f"\n[중단] run_id 모양이 다르다: {p['run_id']}")
+        parts.append(bits)
 
-    for i, what in ((0, "시나리오"), (2, "참여율"), (3, "시드")):
-        if pa[i] != pb[i]:
-            raise SystemExit(
-                f"\n[중단] {what}가 다르다: {pa[i]} ≠ {pb[i]}\n"
-                "  다른 세계를 나란히 놓으면 비교가 아니다 (#59). "
-                "스테이지만 다른 두 런을 줄 것")
-    if pa[1] == pb[1]:
-        raise SystemExit(f"\n[중단] 같은 스테이지다 ({pa[1]}). 비교할 것이 없다")
+    head = parts[0]
+    for bits, p in zip(parts[1:], panels[1:], strict=True):
+        for i, what in ((0, "시나리오"), (2, "참여율"), (3, "시드")):
+            if bits[i] != head[i]:
+                raise SystemExit(
+                    f"\n[중단] {what}가 다르다: {head[i]} ≠ {bits[i]}\n"
+                    "  다른 세계를 나란히 놓으면 비교가 아니다 (#59). "
+                    "스테이지만 다른 런들을 줄 것")
+        if p["times"] != panels[0]["times"]:
+            raise SystemExit(f"\n[중단] {p['run_id']} 의 프레임 시각이 다르다 — "
+                             "슬라이더 하나로 같이 움직일 수 없다")
 
-    if a["times"] != b["times"]:
-        raise SystemExit("\n[중단] 두 런의 프레임 시각이 다르다 — 슬라이더 하나로 "
-                         "같이 움직일 수 없다")
+    stages = [b[1] for b in parts]
+    if len(set(stages)) != len(stages):
+        raise SystemExit(f"\n[중단] 스테이지가 겹친다: {stages}. 비교할 것이 없다")
+
+
+def escape_frames(run_id: str, runs_dir: Path, times: list[float],
+                  station_ids: list[str]) -> dict:
+    """휴게소가 **밀어낸 차**를 프레임별 누적으로 (#92 의 값어치를 #91 없이).
+
+    ## 왜 이게 가능한가 — 이탈은 휴게소에 귀속된다
+
+    `escape_event` 의 `best_station_id` 가 *"남았다면 여기로 갔을 것"* 이다 (#54).
+    `balked` 행에 **100% 채워져 있다.** 그래서 차량 스냅샷(8.9M 행, #91) 없이도
+    *"어느 휴게소가 몇 대를 밀어냈나"* 를 그릴 수 있다.
+
+    ## ⚠ balked 만 아래로 내린다
+
+        balked    갈 수는 있는데 줄이 이탈 비용보다 길다 — **그 휴게소가 밀어낸 것**
+        no_plan   닿는 휴게소가 아예 없다 — **휴게소 탓이 아니다** (충전기 공백·출발 SoC)
+
+    둘을 합쳐 기둥에 넣으면 *"엔진이 이탈을 줄였다"* 고 할 때 **고칠 수 없는 몫까지
+    성과로 세게 된다** (#54 가 둘을 가른 이유). `no_plan` 은 코리도 전체 수로만 센다.
+
+    ## 위아래가 같은 축척인 이유
+
+    둘 다 **그 시각의 상태(stock)** 다 —
+
+        위   지금 줄 서 있는 차
+        아래 지금까지 밀어낸 차 (누적)
+
+    뜻은 다르지만 단위가 같은 "대" 라서 **1대 = 1대** 로 놓을 수 있다. 그래야
+    *"칠곡은 지금 40대를 세워 두고 지금까지 112대를 돌려보냈다"* 가 길이로 읽힌다.
+    """
+
+    path = runs_dir / run_id / "escape_event.parquet"
+    out = {sid: [0] * len(times) for sid in station_ids}
+    blank = {"balked": out, "no_plan": [0] * len(times), "has_time": False}
+    if not path.is_file():
+        return blank
+
+    esc = pd.read_parquet(path)
+    if "escape_t_min" not in esc.columns or esc["escape_t_min"].isna().all():
+        # 옛 런이거나 UE 다 — 시간축을 못 그린다. 조용히 0 을 그리면 "이탈이 없다"
+        # 로 보이므로 호출자가 화면에 적을 수 있게 알린다
+        return blank
+
+    step = (times[1] - times[0]) if len(times) > 1 else 1.0
+
+    def slot(t: float) -> int:
+        return max(0, min(len(times) - 1, int((float(t) - times[0]) // step)))
+
+    for r in esc.itertuples():
+        if pd.isna(r.escape_t_min):
+            continue
+        i = slot(r.escape_t_min)
+        if r.reason == "balked" and r.best_station_id in out:
+            out[r.best_station_id][i] += 1
+        elif r.reason == "no_plan":
+            blank["no_plan"][i] += 1
+
+    # 누적으로 바꾼다 — "지금까지 몇 대" 가 상태다
+    for sid in out:
+        run = 0
+        for i in range(len(times)):
+            run += out[sid][i]
+            out[sid][i] = run
+    run = 0
+    for i in range(len(times)):
+        run += blank["no_plan"][i]
+        blank["no_plan"][i] = run
+
+    blank["has_time"] = True
+    return blank
 
 
 def station_names(ids: list[str], db: Path) -> dict[str, str]:
@@ -318,8 +396,23 @@ function fitView() {
   // ⚠ **패널 폭**으로 맞춘다. 창 전체 폭을 쓰면 나란히 놓았을 때(#93) 코리도가
   //   각 패널에서 양옆으로 잘린다
   const n = Math.max(D.panels.length, 1);
-  const vp = new WebMercatorViewport({width: innerWidth / n, height: innerHeight});
-  const f = vp.fitBounds(D.camera.bounds, {padding: 70});
+
+  // ⚠ 창이 0 으로 보고될 때가 있다 — 숨은 탭, 꺼진 보조 모니터, 백그라운드 창.
+  //   그대로 fitBounds 에 넣으면 math.gl 이 assert 로 죽고 **스크립트 전체가
+  //   멈춘다** (범례도 슬라이더도 안 뜬다). 발표 중에 나면 치명적이라 막는다.
+  //   resize 가 붙어 있으므로 창이 보이는 순간 제대로 다시 맞춰진다
+  const w = Math.max(innerWidth / n, 200);
+  const h = Math.max(innerHeight, 200);
+
+  const mid = [(D.camera.bounds[0][0] + D.camera.bounds[1][0]) / 2,
+               (D.camera.bounds[0][1] + D.camera.bounds[1][1]) / 2];
+  let f = {longitude: mid[0], latitude: mid[1], zoom: 6};
+  try {
+    f = new WebMercatorViewport({width: w, height: h})
+          .fitBounds(D.camera.bounds, {padding: Math.min(70, w / 5)});
+  } catch (e) {
+    console.warn('fitBounds 실패 — 기본 줌으로 연다', e);
+  }
   // 베어링을 돌리면 긴 축이 가로로 눕는다 — 그만큼 여유를 더 둔다
   return {longitude: f.longitude, latitude: f.latitude, zoom: f.zoom - 0.35,
           pitch: D.camera.pitch, bearing: D.camera.bearing};
@@ -345,8 +438,8 @@ function baseLayers() {
 // 높이 = queue_len (양) · 색 = wait_min (세기) · 굵기 = 충전기 수.
 // 셋을 합치면 "19기인 안성과 2기인 옥천의 같은 줄 길이" 가 같은 뜻이 돼 버린다.
 //
-// 패널이 둘이면(#93) **척도를 공유한다** — D.elevPerCar 가 두 런의 공통
-// 최대값에서 나온다. 각자 정규화하면 3.4배 차이가 똑같이 보인다.
+// 패널이 여럿이면(#93) **척도를 공유한다** — D.elevPerCar 가 모든 런의 공통
+// 최대값에서 나온다. 각자 정규화하면 몇 배 차이가 똑같이 보인다.
 const P = D.panels;              // 빈 배열이면 바닥만 (#88)
 let frame = 0, timer = null;
 
@@ -361,24 +454,44 @@ function columnLayer(p) {
   const rows = p.stations.map(s => ({
     position: s.position, name: p.names[s.id] || s.id, chargers: s.chargers,
     queue: s.queue[frame], wait: s.wait[frame],
+    escaped: (s.escaped || [])[frame] || 0,
   }));
-  return [new deck.ColumnLayer({
-    id: 'col', data: rows, diskResolution: 14, extruded: true, pickable: true,
-    getPosition: d => d.position,
-    getElevation: d => d.queue * D.elevPerCar,
-    getFillColor: d => bandColor(d.wait),
-    getLineColor: [12, 14, 18, 180],
-    getRadius: d => D.colBaseR + d.chargers * D.colPerCharger,
-    radiusUnits: 'meters', elevationScale: 1, stroked: true, lineWidthMinPixels: 1,
-    updateTriggers: {getElevation: frame, getFillColor: frame},
-  })];
+  const radius = d => D.colBaseR + d.chargers * D.colPerCharger;
+
+  return [
+    // 위 — 지금 줄 선 차
+    new deck.ColumnLayer({
+      id: 'col', data: rows, diskResolution: 14, extruded: true, pickable: true,
+      getPosition: d => d.position,
+      getElevation: d => d.queue * D.elevPerCar,
+      getFillColor: d => bandColor(d.wait),
+      getLineColor: [12, 14, 18, 180],
+      getRadius: radius,
+      radiusUnits: 'meters', elevationScale: 1, stroked: true, lineWidthMinPixels: 1,
+      updateTriggers: {getElevation: frame, getFillColor: frame},
+    }),
+    // 아래 — 지금까지 밀어낸 차 (balked 만). **같은 축척**이라 길이로 비교된다.
+    // 색을 대기 램프(파랑)와 다른 계열로 두어 "이건 다른 것" 이 바로 보이게 한다
+    new deck.ColumnLayer({
+      id: 'esc', data: rows.filter(d => d.escaped > 0), diskResolution: 14,
+      extruded: true, pickable: true,
+      getPosition: d => d.position,
+      getElevation: d => -d.escaped * D.elevPerCar,
+      getFillColor: [196, 86, 70, 225],
+      getLineColor: [12, 14, 18, 180],
+      getRadius: radius,
+      radiusUnits: 'meters', elevationScale: 1, stroked: true, lineWidthMinPixels: 1,
+      updateTriggers: {getElevation: frame},
+    }),
+  ];
 }
 
 const tooltip = ({object}) => {
   if (!object) return null;
   if (object.queue !== undefined) {
     return {text: `${object.name}\n충전기 ${object.chargers}기\n`
-                + `줄 ${object.queue.toFixed(0)}대 · 대기 ${object.wait.toFixed(0)}분`};
+                + `줄 ${object.queue.toFixed(0)}대 · 대기 ${object.wait.toFixed(0)}분\n`
+                + `지금까지 밀어낸 차 ${object.escaped}대`};
   }
   if (object.name) {
     return {text: `${object.name}\n${object.corridor} ${object.offset_km.toFixed(1)}km`};
@@ -433,7 +546,7 @@ function render() {
 // --- 범례 · 스크러버 -----------------------------------------------------
 if (P.length) {
   const shared = P.length > 1
-    ? `<span class="muted">(두 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
+    ? `<span class="muted">(${P.length}개 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
       + `각자 정규화하면 두 그림이 똑같아 보인다)</span>`
     : `<span class="muted">(가장 긴 줄 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이)</span>`;
   legend.innerHTML =
@@ -444,8 +557,16 @@ if (P.length) {
         `<span class="k" style="background:${c}"></span><span class="muted">${D.binLabels[i]}</span>`
       ).join(' ')
     + '</div><div><b>굵기</b> = 충전기 수 <span class="muted">(2기 ↔ 19기)</span></div>'
+    + '<div style="margin-top:6px"><span class="k" style="background:rgb(196,86,70)"></span>'
+    + '<b>아래로</b> = 그 휴게소가 <b>밀어낸 차</b> <span class="muted">(지금까지 누적 · '
+    + '위와 같은 축척 1대=1대)</span></div>'
+    + '<div class="muted">줄이 이탈 비용보다 길어 포기한 차(balked)만. '
+    + '닿는 곳이 없어 나간 차(no_plan)는 휴게소 탓이 아니라 제외</div>'
+    + (P.some(p => !p.has_escape_time)
+        ? '<div style="color:#e0a04a;margin-top:4px">⚠ 이탈 시각이 없는 런이 있다 '
+          + '(UE 는 하루 단위 계획이라 "포기한 순간" 이 없다)</div>' : '')
     + (P.length > 1
-        ? '<div class="muted" style="margin-top:5px">카메라·시간·척도를 두 패널이 공유한다</div>'
+        ? `<div class="muted" style="margin-top:5px">카메라·시간·척도를 ${P.length}개 패널이 공유한다</div>`
         : '');
 
   scrub.max = P[0].times.length - 1;
@@ -478,8 +599,9 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=PROJECT_ROOT)
     ap.add_argument("--run", default=None,
                     help="run_id. 주면 휴게소 기둥과 시간 스크러버가 붙는다 (#89)")
-    ap.add_argument("--vs", default=None,
-                    help="나란히 놓을 run_id. 카메라·시간·척도를 공유한다 (#93)")
+    ap.add_argument("--vs", action="append", default=[],
+                    help="나란히 놓을 run_id. **여러 번 줄 수 있다** — S0│S1│S2 처럼. "
+                         "카메라·시간·척도를 전부 공유한다 (#93)")
     ap.add_argument("--runs-dir", type=Path, default=None)
     args = ap.parse_args()
 
@@ -496,17 +618,28 @@ def main() -> int:
                              "중심선 변환 상수를 먼저 맞출 것")
 
     sta = stations(db)
-    runs = [r for r in (args.run, args.vs) if r]
+    runs = [r for r in [args.run, *args.vs] if r]
     panels = [station_frames(r, args.runs_dir or RUNS_DIR) for r in runs]
-    if len(panels) == 2:
-        same_world(panels[0], panels[1])
+    if len(panels) > 1:
+        same_world(panels)
 
-    # ★ **두 런이 척도를 공유한다** (#93). 각자 자기 최대값으로 정규화하면 S0 의
-    #   가장 긴 줄과 S1 의 가장 긴 줄이 **둘 다 '꼭대기'** 로 그려져서, 3.4배 차이가
+    # ★ **모든 런이 척도를 공유한다** (#93). 각자 자기 최대값으로 정규화하면 각
+    #   런의 가장 긴 줄이 **전부 '꼭대기'** 로 그려져서, 몇 배 차이가 나도
     #   **똑같이 보인다.** 조용히 틀리는 종류라 공통 최대값으로 묶고 화면에 적는다
     shared_max = max((p["max_queue"] for p in panels), default=0.0)
     for p in panels:
-        p["names"] = station_names([s["id"] for s in p["stations"]], db)
+        ids = [s["id"] for s in p["stations"]]
+        p["names"] = station_names(ids, db)
+        esc = escape_frames(p["run_id"], args.runs_dir or RUNS_DIR, p["times"], ids)
+        for st in p["stations"]:
+            st["escaped"] = esc["balked"][st["id"]]
+        p["no_plan"] = esc["no_plan"]
+        p["has_escape_time"] = esc["has_time"]
+        p["max_escaped"] = max((v[-1] for v in esc["balked"].values()), default=0)
+
+    # 위(줄)와 아래(밀어낸 차)가 **같은 축척**이다 — 1대 = 1대. 둘 다 "대" 단위의
+    # 상태라 길이로 비교할 수 있다. 축척이 다르면 그 비교가 거짓말이 된다
+    shared_max = max([shared_max, *(p["max_escaped"] for p in panels)], default=0.0)
 
     data = {
         "up": offset_path(cl, +RIBBON_SEP_M / 2),
@@ -551,10 +684,16 @@ def main() -> int:
     if panels:
         print(f"\n  높이 정규화: **공통 최대 {shared_max:.0f}대** = "
               f"{MAX_COLUMN_M / 1000:.0f}km  (범례에 적힌다)")
-    if len(panels) == 2:
-        lo, hi = sorted(p["max_queue"] for p in panels)
-        print(f"  두 런의 최대 줄이 {hi / max(lo, 1):.1f}배 차이다 — 각자 정규화했으면 "
-              "**두 그림이 똑같아 보였다**")
+    for p in panels:
+        if p["max_escaped"]:
+            print(f"  [{p['run_id'].split('__')[1]}] 밀어낸 차 누적 "
+                  f"{sum(v[-1] for v in [s['escaped'] for s in p['stations']]):,}대 · "
+                  f"한 휴게소 최대 {p['max_escaped']}대")
+    if len(panels) > 1:
+        qs = sorted(p["max_queue"] for p in panels)
+        print(f"  런별 최대 줄 {' · '.join(f'{q:.0f}' for q in qs)}대 "
+              f"(최대/최소 {qs[-1] / max(qs[0], 1):.1f}배) — 각자 정규화했으면 "
+              "**전부 똑같은 높이로 보였다**")
 
     print("\n  외부 의존: deck.gl CDN 하나. API 키 없음. 빌드 없음")
     return 0

@@ -184,13 +184,21 @@ def _station_view(sid: str, q: StationQueue, spec: StationSpec, offset_km: float
     )
 
 
-def _escape_row(car: _Car, reason: str, escape_cost_min: float, best: str) -> dict:
+def _escape_row(car: _Car, reason: str, escape_cost_min: float, best: str,
+                t_min: float) -> dict:
     """UE 의 `escape_rows` 와 **같은 컬럼**. 다르면 두 스테이지를 한 표로 못 본다."""
 
     return {
         "ev_id": car.ev.ev_id,
         "vclass_id": car.ev.vclass_id,
         "entry_time_min": car.ev.entry_min,
+        # 정책이 **이 Δt 에** 포기했다. 진입 시각과 몇 시간 차이 날 수 있다.
+        #
+        # ⚠ 진입 시각으로 자른다. 결정은 Δt 창의 **맨 앞**(t) 에서 하는데 차는 그
+        #   창 **안**(t ≤ entry < t+Δt) 에서 들어올 수 있어서, 그냥 t 를 적으면
+        #   **차가 존재하기 전에 포기한 것**이 된다 (중앙 −2분이 나왔다).
+        #   오차는 Δt 미만이라 5분 칸 그림에서는 같은 칸이다
+        "escape_t_min": float(max(t_min, car.ev.entry_min)),
         "entry_offset_km": car.ev.entry_offset_km,
         "dest_offset_km": car.ev.dest_offset_km,
         "escape_cost_min": float(escape_cost_min),
@@ -352,7 +360,7 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                 if kind in ESCAPE_REASON:
                     car.done = True
                     escape_events.append(
-                        _escape_row(car, ESCAPE_REASON[kind], escape_cost_min, best))
+                        _escape_row(car, ESCAPE_REASON[kind], escape_cost_min, best, t))
                     continue
 
                 if kind not in queues:
