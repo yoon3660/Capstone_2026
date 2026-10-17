@@ -139,10 +139,10 @@ def main() -> int:
     m = m.reindex(["UE", "S0", "S1", "S2", "PERFECT_ROLLING"])
     m["총비용h"] = m["체류h"] + m["이탈"] * esc_cost / 60.0
     floor, ceil = m.loc["S0", "총비용h"], m.loc["UE", "총비용h"]
-    m["메운%"] = (floor - m["총비용h"]) / (floor - ceil) * 100.0
+    m["격차축소율%"] = (floor - m["총비용h"]) / (floor - ceil) * 100.0
 
     print(f"\n=== 사다리 (공통 시드 {len(used)}개 {used}) ===")
-    print(m[["총대기h", "평균대기", "p95", "병목", "이탈", "총비용h", "메운%"]]
+    print(m[["총대기h", "평균대기", "p95", "병목", "이탈", "총비용h", "격차축소율%"]]
           .to_string(float_format=lambda v: f"{v:,.1f}"))
 
     # 이탈이 정말 맞았나 — 아니면 위 표를 믿으면 안 된다
@@ -153,7 +153,7 @@ def main() -> int:
     for st, v in off.items():
         print(f"    {st:16} {m.loc[st, '이탈']:5.1f}대  ({v:+.0%})")
     if worst > ESCAPE_TOL:
-        print(f"\n  ⚠ **{worst:.0%} 벌어졌다 — 위 표의 '메운%' 를 믿지 말 것.**")
+        print(f"\n  ⚠ **{worst:.0%} 벌어졌다 — 위 표의 '격차축소율%' 를 믿지 말 것.**")
         print("     --strength 를 조정해 이탈을 맞추고 다시 돌린다.")
     else:
         print(f"\n  ⇒ 최대 {worst:.0%} 차이. 이 비교는 **이탈 통로가 아니라 "
