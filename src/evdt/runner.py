@@ -44,6 +44,7 @@ from evdt.engine.reservation import ReservationLedger
 from evdt.engine.s0 import S0Policy, S0Settings
 from evdt.engine.s1 import S1Policy, S1Settings
 from evdt.engine.s2 import S2Policy, S2Settings
+from evdt.engine.s3 import S3Policy, S3Settings
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
@@ -162,7 +163,8 @@ def departure_soc_mean(cfg: ScenarioConfig) -> float:
 
 
 def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
-               observed: ObservedSpec | None = None) -> dict:
+               observed: ObservedSpec | None = None,
+               s3_window: int | None = None) -> dict:
     """run 표에 남기는 값. **run_id 가 구분하지 못하는 것**을 여기에 적는다.
 
     `run_id` 는 (scenario_id, stage, 참여율, seed) 뿐이라, **같은 이름으로 다른 세계를
@@ -195,19 +197,24 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
         "forecast_kind": ("oracle" if oracle is not None
                           else ("observed" if observed is not None else None)),
         "forecast_strength": None if observed is None else observed.strength,
+        # 윈도우가 몇 대였나 (#139). **run_id 에 안 들어간다** — S3 는 어느 윈도우로
+        # 돌아도 `__S3__` 다. 적지 않으면 윈도우 4 결과를 12 인 줄 알고 재사용한다.
+        # 윈도우는 이탈 수를 흔드는 손잡이라서, 섞이면 이탈 맞춤 자체가 무의미해진다
+        "s3_window": s3_window,
     }
 
 
 def stale_reason(stored: dict, cfg: ScenarioConfig,
                  *, oracle: OracleSource | None = None,
-                 observed: ObservedSpec | None = None) -> str | None:
+                 observed: ObservedSpec | None = None,
+                 s3_window: int | None = None) -> str | None:
     """이미 DONE 인 run 을 지금 config 로 재사용해도 되나. 안 되면 그 이유.
 
     **기록에 있는 키만 본다.** 옛 run 에는 나중에 추가된 키가 없는데, 없다고 전부
     다시 돌리면 쓸 수 있는 결과까지 버린다. 기록된 값이 다르면 그건 확실한 불일치다.
     """
 
-    want = run_params(cfg, oracle=oracle, observed=observed)
+    want = run_params(cfg, oracle=oracle, observed=observed, s3_window=s3_window)
     diffs = [f"{k}: 기록 {stored[k]!r} ≠ 지금 {want[k]!r}"
              for k in want if k in stored and stored[k] != want[k]]
     return " · ".join(diffs) if diffs else None
@@ -215,7 +222,8 @@ def stale_reason(stored: dict, cfg: ScenarioConfig,
 
 def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig,
                  *, oracle: OracleSource | None = None,
-                 observed: ObservedSpec | None = None) -> tuple[bool, str]:
+                 observed: ObservedSpec | None = None,
+                 s3_window: int | None = None) -> tuple[bool, str]:
     """이미 있는 run 을 그대로 써도 되나. 돌려주는 것은 (써도 되나, 이유).
 
     ⚠ **DONE 인 것만으로는 부족하다.** `check_same_world` 는 진입 EV 수만 보는데,
@@ -233,7 +241,8 @@ def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig,
     if row[0] != "DONE":
         return False, str(row[0])
 
-    why = stale_reason(json.loads(row[1] or "{}"), cfg, oracle=oracle, observed=observed)
+    why = stale_reason(json.loads(row[1] or "{}"), cfg, oracle=oracle, observed=observed,
+                       s3_window=s3_window)
     return (False, f"설정이 다르다 — {why}") if why else (True, "DONE")
 
 
@@ -402,7 +411,7 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
-RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "PERFECT_ROLLING")
+RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "PERFECT_ROLLING")
 
 
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
@@ -462,6 +471,7 @@ def run_once(
     gap_plot: bool = True,
     oracle: OracleSource | None = None,
     observed: ObservedSpec | None = None,
+    s3_window: int | None = None,
     log: Log = print,
 ) -> str:
     """한 번 돌린다. run_id 를 돌려준다.
@@ -482,11 +492,20 @@ def run_once(
             f"아직 구현되지 않은 스테이지다: policy.stage={cfg.policy.stage} "
             f"(지금 돌릴 수 있는 것: {', '.join(RUNNABLE_STAGES)})")
 
+    # S3 는 S2 의 `_dwell` 을 물려받으므로 **예측을 쓴다** (#139). 정보 축은 S2 그대로
+    # 두고 결합 축만 올리는 칸이라, 예측을 빼면 그 차이가 결합의 값으로 보고된다
     if ((oracle is not None or observed is not None)
-            and cfg.policy.stage not in ("S2", "PERFECT_ROLLING")):
+            and cfg.policy.stage not in ("S2", "S3", "PERFECT_ROLLING")):
         raise ValueError(
             f"{cfg.policy.stage} 는 예측을 쓰지 않는데 예측 설정이 들어왔다. "
             "조용히 무시하면 '예측을 쓰는 줄 알았는데 안 쓰고 있던' 결과가 나온다")
+
+    # 윈도우는 S3 만 쓴다. 다른 칸이 조용히 받으면 params_json 에 윈도우가 적히고도
+    # 아무 효과가 없어서, 나중에 "윈도우를 바꿨는데 결과가 같다" 를 설명할 수 없다
+    if s3_window is not None and cfg.policy.stage != "S3":
+        raise ValueError(
+            f"`s3_window` 는 S3 만 쓴다 (#139) — {cfg.policy.stage} 에 주면 "
+            "기록에는 남고 효과는 없는 값이 된다")
 
     if oracle is not None and observed is not None:
         raise ValueError(
@@ -535,7 +554,7 @@ def run_once(
         travel=None if ctm is None else ctm.speed_field,
         escape_cost_min=cfg.demand.escape_cost_min,
     )
-    params = run_params(cfg, oracle=oracle, observed=observed)
+    params = run_params(cfg, oracle=oracle, observed=observed, s3_window=s3_window)
 
     with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, runs_dir=runs,
                          overwrite=overwrite, params=params) as run:
@@ -574,7 +593,7 @@ def run_once(
         else:
             charge_events, snapshots, escape_rows, stage_kpis = _run_policy_loop(
                 built, specs, offsets, cfg, settings, range_factor, cpf,
-                oracle, observed, log)
+                oracle, observed, log, s3_window=s3_window)
         # ================================================================
 
         log_sim_result(run.writer, charge_events, snapshots,
@@ -657,7 +676,7 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
 
 def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                      oracle: OracleSource | None, observed: ObservedSpec | None,
-                     log: Log):
+                     log: Log, s3_window: int | None = None):
     """S0 이후 — Δt 마다 정책에게 물어보며 하루를 굴린다 (#59).
 
     **UE 와 같은 것**: 차량 집합(built.trips), 휴게소·충전기, 통행시간(settings.travel),
@@ -667,7 +686,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
 
     stage = cfg.policy.stage
 
-    if stage not in ("S0", "S1", "S2", "PERFECT_ROLLING"):
+    if stage not in ("S0", "S1", "S2", "S3", "PERFECT_ROLLING"):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
     # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
@@ -684,14 +703,14 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
     # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
     # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
     ledger = forecast = None
-    if stage in ("S2", "PERFECT_ROLLING"):
+    if stage in ("S2", "S3", "PERFECT_ROLLING"):
         # 예측은 **S2 부터만** 쓴다. S1 에 주면 안 쓰고도 받는 셈이라 "무엇이
         # 달라졌나" 가 흐려진다 (원장을 S0 에 주지 않는 것과 같은 이유)
         # **어느 예측을 쓰느냐가 곧 스테이지다.** 같은 S2Policy 를 쓰지만 run_id 가
         # 갈라져야 둘을 나란히 놓을 수 있다 (안 그러면 서로 덮어쓴다)
-        if stage == "S2" and observed is None:
+        if stage in ("S2", "S3") and observed is None:
             raise ValueError(
-                "S2 는 **관측 가능한 것만으로 하는 예측**을 쓴다 (#119) — "
+                f"{stage} 는 **관측 가능한 것만으로 하는 예측**을 쓴다 (#119) — "
                 "`observed=ObservedSpec(...)` 가 필요하다. 시뮬레이터의 실제 미래를 "
                 "넣고 싶으면 그건 엔진 칸이 아니라 벤치마크다: "
                 "stage='PERFECT_ROLLING' 으로 `oracle=` 을 줄 것 (#118 · DESIGN §8.2)")
@@ -699,7 +718,13 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
             raise ValueError(
                 "PERFECT_ROLLING 은 시뮬레이터의 실제 미래를 넣는 **벤치마크**다 "
                 "(#118 · DESIGN §8.2) — `oracle=OracleSource(...)` 가 필요하다")
-        policy = S2Policy(S2Settings(**kw))
+        if stage == "S3":
+            # ★ 윈도우는 **이탈 수를 흔드는 손잡이**다. 기본값으로 조용히 돌면 어느
+            #   윈도우의 결과인지 모른 채 사다리에 올라간다 — #101·#123 과 같은 고장
+            policy = S3Policy(S3Settings(
+                **kw, **({} if s3_window is None else {"window": int(s3_window)})))
+        else:
+            policy = S2Policy(S2Settings(**kw))
         ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
 
         if stage == "PERFECT_ROLLING":
@@ -796,6 +821,15 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
             **({} if oracle is None else {"oracle_blur": (float(oracle.blur), "ratio")}),
             **({} if observed is None else {
                 "forecast_strength": (observed.strength, "ratio"),
+            }),
+            # 교환이 **몇 번 돌았고 몇 쌍이 바뀌었나** (#139). 0 이면 순차와 같다는
+            # 뜻이고, 그러면 결과가 안 바뀐 이유가 그 자리에서 설명된다.
+            # `swap_ms` 는 Δt 안에 끝나는지 재는 입력이다 (#77)
+            **({} if stage != "S3" else {
+                "s3_window": (float(policy.settings.window), "count"),
+                "s3_swap_tried": (policy.counters.get("swap_tried", 0.0), "count"),
+                "s3_swap_done": (policy.counters.get("swap_done", 0.0), "count"),
+                "s3_swap_ms": (policy.counters.get("swap_ms", 0.0), "ms"),
             }),
         },
     )

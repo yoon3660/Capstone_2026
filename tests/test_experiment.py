@@ -308,15 +308,19 @@ def test_ue_and_s0_get_the_same_cars(mini):
 
 
 def test_an_unimplemented_stage_stops_instead_of_running_as_ue(mini):
-    """config 에만 있고 코드가 없는 단계는 멈춘다. 조용히 UE 로 돌면 결과를 못 믿는다."""
+    """config 에만 있고 코드가 없는 단계는 멈춘다. 조용히 UE 로 돌면 결과를 못 믿는다.
+
+    대상은 **아직 없는 칸**이어야 한다. S3 가 들어오면서(#139) S4 로 옮겼다 —
+    구현된 칸으로 검사하면 이 테스트가 통과하면서 아무것도 안 지킨다.
+    """
 
     cfg, db, runs = mini
 
     with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
-        with_stage(cfg, "S3")
+        with_stage(cfg, "S4")
 
     data = yaml.safe_load(cfg.raw_yaml)
-    data["policy"]["stage"] = "S3"
+    data["policy"]["stage"] = "S4"
     with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
         run_once(ScenarioConfig.from_dict(data, source="mini"), seed=1,
                  db_path=db, runs_dir=runs, log=lambda _: None)
@@ -334,3 +338,57 @@ def test_ue_never_strands_a_car_after_it_has_charged(mini):
     ue = run_once(cfg, seed=1, db_path=db, runs_dir=runs, gap_plot=False, log=lambda _: None)
 
     assert _kpis(db, [ue])[(ue, "n_escaped_stranded")] == 0
+
+
+# -- S3 의 러너 배선 (#139) -------------------------------------------------
+
+def test_s3_window_is_refused_on_other_stages(mini):
+    """`s3_window` 를 S3 아닌 칸에 주면 멈춘다.
+
+    조용히 무시하면 **params_json 에 윈도우가 적히고도 아무 효과가 없어서**, 나중에
+    "윈도우를 바꿨는데 결과가 같다" 를 설명할 수 없게 된다 — #101 과 같은 고장이다.
+    """
+
+    cfg, db, runs = mini
+    for stage in ("S0", "S1"):
+        with pytest.raises(ValueError, match="s3_window"):
+            run_once(with_stage(cfg, stage), seed=1, db_path=db, runs_dir=runs,
+                     gap_plot=False, log=lambda _: None, s3_window=4)
+
+
+def test_s3_requires_a_forecast(mini):
+    """S3 는 S2 의 체류 질의를 물려받으므로 예측 설정이 없으면 멈춘다."""
+
+    cfg, db, runs = mini
+    with pytest.raises(ValueError, match="관측 가능한 것만으로"):
+        run_once(with_stage(cfg, "S3"), seed=1, db_path=db, runs_dir=runs,
+                 gap_plot=False, log=lambda _: None)
+
+
+def test_s3_window_is_recorded_in_params(mini):
+    """윈도우가 `params_json` 에 남아야 한다.
+
+    **run_id 는 어느 윈도우로 돌아도 `__S3__` 다.** 적지 않으면 윈도우 4 결과를 12 인
+    줄 알고 재사용한다. 윈도우는 이탈 수를 흔드는 손잡이라서 섞이면 이탈 맞춤이
+    무의미해진다 (#139 · `docs/compare_rule.md`).
+    """
+
+    import json
+    import sqlite3
+
+    from evdt.engine.forecast import ObservedSpec
+
+    cfg, db, runs = mini
+    rid = run_once(with_stage(cfg, "S3"), seed=1, db_path=db, runs_dir=runs,
+                   gap_plot=False, log=lambda _: None,
+                   observed=ObservedSpec(strength=0.30), s3_window=6)
+    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
+        params = json.loads(con.execute(
+            "SELECT params_json FROM run WHERE run_id = ?", (rid,)).fetchone()[0])
+    assert params["s3_window"] == 6
+
+    kpis = _kpis(db, [rid])
+    assert kpis[(rid, "s3_window")] == 6
+    # 시도 횟수는 0 일 수 있다 (작은 시나리오) — 키가 **있는지**를 본다
+    assert (rid, "s3_swap_tried") in kpis
+    assert (rid, "s3_swap_done") in kpis
