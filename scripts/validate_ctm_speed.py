@@ -152,14 +152,18 @@ def main() -> int:
     print(f"\n{args.run}   {direction} · {period}")
     print(f"  점수에 쓴 칸 {len(cmp):,} / {total:,}   "
           f"(VDS 속도 없음 {int(missing.sum()):,}칸 · 콘존 {len(gap_zones)}곳)")
-    print(f"\n  속도 MAPE   {mape:6.1f}%   기준 ≤ {PASS_MAPE:.0f}%   "
+    # 자리수: 문서(`docs/data_validation/validation_report.md` §13)가 14.37% · 14.39 ·
+    # +4.92 · 0.0000 으로 인용한다. 1자리로 찍으면 그 수치를 이 스크립트로 확인할 수
+    # 없어서 "저장소에 없는 코드로 산출한 값" 이 된다. 자리수를 문서에 맞춘다.
+    print(f"\n  속도 MAPE   {mape:7.2f}%   기준 ≤ {PASS_MAPE:.0f}%   "
           f"{'통과' if mape <= PASS_MAPE else '미달'}")
-    print(f"  RMSE        {rmse:6.1f} km/h")
-    print(f"  편의        {bias:+6.1f} km/h   (+ 면 CTM 이 빠르다)")
-    print(f"\n  실측 정체 칸 {int(jam_true.sum()):,} ({jam_true.mean():.1%})")
-    print(f"  정체 재현율  {recall:6.2f}    기준 ≥ {PASS_RECALL:.2f}   "
+    print(f"  RMSE        {rmse:7.2f} km/h")
+    print(f"  편의        {bias:+7.2f} km/h   (+ 면 CTM 이 빠르다)")
+    print(f"\n  실측 정체 칸 {int(jam_true.sum()):,} ({jam_true.mean():.1%})"
+          f"   ·  적중 {int((jam_true & jam_model).sum()):,}")
+    print(f"  정체 재현율  {recall:7.4f}    기준 ≥ {PASS_RECALL:.2f}   "
           f"{'통과' if recall >= PASS_RECALL else '미달'}")
-    print(f"  정체 오경보  {false_alarm:6.2f}    기준 ≤ {PASS_FALSE_ALARM:.2f}   "
+    print(f"  정체 오경보  {false_alarm:7.4f}    기준 ≤ {PASS_FALSE_ALARM:.2f}   "
           f"{'통과' if false_alarm <= PASS_FALSE_ALARM else '미달'}")
 
     ok = mape <= PASS_MAPE and recall >= PASS_RECALL and false_alarm <= PASS_FALSE_ALARM

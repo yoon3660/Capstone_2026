@@ -225,9 +225,9 @@ def _ladder(cfg, seeds, esc: float, strength: float) -> None:
                          f"{d['n_ev_charging'].to_dict()}")
 
     floor, ceil = d.loc["S0", "total_h"], d.loc["UE", "total_h"]
-    d["메운%"] = (floor - d["total_h"]) / (floor - ceil) * 100.0
+    d["격차축소율%"] = (floor - d["total_h"]) / (floor - ceil) * 100.0
     print(d[["wait_mean_min", "wait_p95_min", "bottleneck_slots", "n_escaped",
-             "total_h", "메운%"]].to_string(float_format=lambda v: f"{v:,.1f}"))
+             "total_h", "격차축소율%"]].to_string(float_format=lambda v: f"{v:,.1f}"))
 
     # ★ 격차 분해 — 이 티켓의 기댓값
     s2, pr = d.loc["S2", "total_h"], d.loc["완전예측", "total_h"]
