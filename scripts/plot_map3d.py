@@ -354,6 +354,11 @@ HTML = """<!doctype html>
        background:rgba(19,22,28,.82);padding:11px 14px;border-radius:7px;max-width:330px}
   #hud b{color:#fff} .k{display:inline-block;width:11px;height:11px;border-radius:2px;
        vertical-align:-1px;margin-right:6px}
+  #hudfold{position:absolute;right:7px;top:6px;width:22px;height:20px;border:0;
+       border-radius:4px;cursor:pointer;background:#2c3140;color:#e8e6e1;font-size:12px}
+  #hud.min{max-width:none}
+  #hud.min #hudbody{display:none}
+  #hudmini{display:none} #hud.min #hudmini{display:block}
   .muted{color:#9b9892;font-size:12px}
   #bar{position:absolute;left:0;right:0;bottom:0;z-index:9;display:flex;gap:12px;
        align-items:center;padding:11px 18px;background:rgba(19,22,28,.9);
@@ -373,13 +378,20 @@ HTML = """<!doctype html>
 </style></head><body>
 <div id="panes"></div>
 <div id="hud">
-  <b>경부고속도로 코리도</b> __LEN__ km<br/>
+  <button id="hudfold" title="범례 접기/펴기 (h)">−</button>
+  <b>경부고속도로 코리도</b> __LEN__ km
+  <!-- 접어도 **정규화 기준은 남는다.** 그 값이 화면에 없으면 패널 간 높이를
+       비교할 수 없다 — 이 뷰어가 지켜야 하는 규칙이다 (#93) -->
+  <div id="hudmini" class="muted"></div>
+  <div id="hudbody">
+  <br/>
   <span class="k" style="background:rgb(90,160,255)"></span>상행 (부산 → 서울)<br/>
   <span class="k" style="background:rgb(255,140,90)"></span>하행 (서울 → 부산)<br/>
   <span class="k" style="background:rgb(230,230,230)"></span>휴게소 __NSTA__곳<br/>
   <div id="legend"></div>
   <div class="muted" style="margin-top:7px">
     드래그 회전 · 휠 확대 · 두 줄 간격은 기호다(실제 도로폭 아님)
+  </div>
   </div>
 </div>
 <div id="bar">
@@ -549,6 +561,9 @@ if (P.length) {
     ? `<span class="muted">(${P.length}개 런 공통 최대 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이 — `
       + `각자 정규화하면 두 그림이 똑같아 보인다)</span>`
     : `<span class="muted">(가장 긴 줄 ${D.sharedMax.toFixed(0)}대 = 화면 최대 높이)</span>`;
+  // 접었을 때 남길 한 줄 — **정규화 기준**과 색의 뜻만
+  document.getElementById('hudmini').textContent =
+    `높이 = 줄 선 차 수 (공통 최대 ${D.sharedMax.toFixed(0)}대) · 색 = 대기시간(이용률 아님)`;
   legend.innerHTML =
     `<div style="margin-top:8px"><b>높이</b> = 줄 선 차 수 ${shared}</div>`
     + '<div><b>색</b> = 지금 가면 기다리는 시간 <span class="muted">(이용률 아님)</span></div>'
@@ -583,6 +598,16 @@ if (P.length) {
   legend.innerHTML = '<div class="muted" style="margin-top:7px">'
     + '바닥만 그린 상태 — <code>--run</code> 을 주면 휴게소 기둥이 선다 (#89)</div>';
 }
+
+// 범례가 첫 패널을 가린다는 지적이 있었다. 접을 수 있게 하되, 접어도
+// **정규화 기준 한 줄은 남긴다** — 없으면 패널 간 높이 비교가 성립하지 않는다
+const hud = document.getElementById('hud');
+const fold = () => {
+  hud.classList.toggle('min');
+  document.getElementById('hudfold').textContent = hud.classList.contains('min') ? '+' : '−';
+};
+document.getElementById('hudfold').onclick = fold;
+addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') fold(); });
 
 render();
 
