@@ -321,7 +321,20 @@ def station_names(ids: list[str], db: Path) -> dict[str, str]:
     return {str(a): str(b) for a, b in rows}
 
 
-def camera(cl: pd.DataFrame) -> dict:
+#: 배경 지도 — 시도 경계를 단순화해 둔 것. **발표용 맥락이지 분석 자료가 아니다.**
+#: 좌표 정밀도가 약 100m 라 코리도 정렬에 쓰면 안 된다.
+OUTLINE = Path(__file__).resolve().parents[1] / "src/evdt/viz/assets/korea_outline.json"
+
+
+def korea_outline() -> list[list[list[float]]]:
+    """대한민국 시도 경계 링. 파일이 없으면 빈 목록 — **그림은 그래도 그려진다.**"""
+
+    if not OUTLINE.is_file():
+        return []
+    return json.loads(OUTLINE.read_text(encoding="utf-8"))["rings"]
+
+
+def camera(cl: pd.DataFrame, outline: list | None = None) -> dict:
     """코리도 **전체가 보이는** 초기 각도 (완료조건).
 
     ⚠ **줌은 여기서 정하지 않는다.** 발표 노트북의 창 크기를 알 수 없기 때문이다.
@@ -338,9 +351,22 @@ def camera(cl: pd.DataFrame) -> dict:
     dx = (lon1 - lon0) * math.cos(math.radians(midlat))
     bearing = (math.degrees(math.atan2(dx, lat1 - lat0)) + 360) % 360
 
-    return {"bearing": bearing - 90, "pitch": 50,
-            "bounds": [[float(cl["lon"].min()), float(cl["lat"].min())],
-                       [float(cl["lon"].max()), float(cl["lat"].max())]]}
+    lo = [float(cl["lon"].min()), float(cl["lat"].min())]
+    hi = [float(cl["lon"].max()), float(cl["lat"].max())]
+
+    # 바닥만 그릴 때(런 없음)는 **전국이 보이게** 맞춘다 — "코리도가 어디인가" 가
+    # 그 그림의 목적이기 때문이다. 런이 있으면 코리도에 맞춘다: 전국에 맞추면
+    # 기둥이 점으로 줄어든다
+    if outline:
+        xs = [x for r in outline for x, _ in r]
+        ys = [y for r in outline for _, y in r]
+        lo = [min(lo[0], min(xs)), min(lo[1], min(ys))]
+        hi = [max(hi[0], max(xs)), max(hi[1], max(ys))]
+        # ★ 전국을 보여줄 때는 **북쪽을 위로** 둔다. 코리도에 맞춘 베어링으로 돌리면
+        #   한국이 기울어져서 "여기가 어디인가" 가 오히려 안 읽힌다. 기울기도 눕힌다
+        return {"bearing": 0.0, "pitch": 0.0, "bounds": [lo, hi]}
+
+    return {"bearing": bearing - 90, "pitch": 50, "bounds": [lo, hi]}
 
 
 HTML = """<!doctype html>
@@ -433,6 +459,11 @@ function fitView() {
 // --- 바닥 (#88) — 기둥이 바뀌어도 다시 안 만든다 ------------------------
 function baseLayers() {
   return [
+    // 배경 지도 — 맨 먼저 그려서 뒤에 깔린다. 코리도가 전국 어디인지 보이게 한다.
+    // 외부 타일이 아니라 **파일에 박아 둔 경계**다: 발표장 인터넷에 의존하지 않는다
+    ...(D.outline.length ? [new PathLayer({id:'kr', data:D.outline.map(p=>({path:p})),
+      getPath:d=>d.path, getColor:[108,112,124,170], widthMinPixels:1, getWidth:260,
+      parameters:{depthTest:false}})] : []),
     new PathLayer({id:'up', data:[{path:D.up}], getPath:d=>d.path,
       getColor:[90,160,255], widthMinPixels:2, getWidth:900, parameters:{depthTest:false}}),
     new PathLayer({id:'down', data:[{path:D.down}], getPath:d=>d.path,
@@ -628,6 +659,9 @@ def main() -> int:
                     help="나란히 놓을 run_id. **여러 번 줄 수 있다** — S0│S1│S2 처럼. "
                          "카메라·시간·척도를 전부 공유한다 (#93)")
     ap.add_argument("--runs-dir", type=Path, default=None)
+    ap.add_argument("--basemap", choices=("auto", "on", "off"), default="auto",
+                    help="배경 지도(시도 경계). auto = 바닥만 그릴 때만 켠다 — "
+                         "런이 있으면 기둥과 경쟁해서 오히려 안 보인다")
     args = ap.parse_args()
 
     cl = load_centerline(args.root)
@@ -666,12 +700,20 @@ def main() -> int:
     # 상태라 길이로 비교할 수 있다. 축척이 다르면 그 비교가 거짓말이 된다
     shared_max = max([shared_max, *(p["max_escaped"] for p in panels)], default=0.0)
 
+    # 배경 지도는 **"이 코리도가 전국 어디인가"** 를 보여주는 장치다. 런이 있는
+    # 그림의 질문은 그게 아니라 "어느 휴게소가 막히나" 이고, 거기에 전국 경계를
+    # 깔면 선이 늘어 기둥이 묻힌다. 그래서 바닥만 그릴 때만 켠다
+    want_map = args.basemap == "on" or (args.basemap == "auto" and not panels)
+    outline = korea_outline() if want_map else []
+
     data = {
         "up": offset_path(cl, +RIBBON_SEP_M / 2),
         "down": offset_path(cl, -RIBBON_SEP_M / 2),
         "stations": sta,
         "markers": markers(cl),
-        "camera": camera(cl),
+        # 런이 없으면(바닥만) 전국이 보이게 맞춘다 — `camera()` 주석 참조
+        "camera": camera(cl, outline if not panels else None),
+        "outline": outline,
         "panels": panels,
         "sharedMax": shared_max,
         # 색 구간은 2D 히트맵과 **같은 램프**를 쓴다. 그림마다 다르면 못 겹쳐 본다
