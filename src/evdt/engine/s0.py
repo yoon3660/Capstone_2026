@@ -77,6 +77,10 @@ class S0Policy:
     settings: S0Settings
     stage: str = "S0"
 
+    #: 가고 있는 차에게는 **다시 묻지 않는다.** 한 번 고르면 도착할 때까지 간다.
+    #: S4 만 이것을 켜고, 그게 "시간축을 연다" 는 뜻이다 (`interfaces.Policy`).
+    reask_en_route: bool = False
+
     # -- 도달 가능성 ---------------------------------------------------------
     def _reaches_dest(self, ev: EVState, soc: float, offset_km: float,
                       range_factor: float) -> bool:

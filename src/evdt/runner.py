@@ -45,6 +45,7 @@ from evdt.engine.s0 import S0Policy, S0Settings
 from evdt.engine.s1 import S1Policy, S1Settings
 from evdt.engine.s2 import S2Policy, S2Settings
 from evdt.engine.s3 import S3Policy, S3Settings
+from evdt.engine.s4 import S4Policy, S4Settings
 from evdt.engine.ue import UESettings, des_arrivals, solve_and_log
 from evdt.engine.ue_demand import ChargeRule, DemandBuild, build_trip_demands
 from evdt.io.cells import read_cells
@@ -411,7 +412,7 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
-RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "PERFECT_ROLLING")
+RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4", "PERFECT_ROLLING")
 
 
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
@@ -492,19 +493,19 @@ def run_once(
             f"아직 구현되지 않은 스테이지다: policy.stage={cfg.policy.stage} "
             f"(지금 돌릴 수 있는 것: {', '.join(RUNNABLE_STAGES)})")
 
-    # S3 는 S2 의 `_dwell` 을 물려받으므로 **예측을 쓴다** (#139). 정보 축은 S2 그대로
-    # 두고 결합 축만 올리는 칸이라, 예측을 빼면 그 차이가 결합의 값으로 보고된다
+    # S3·S4 는 S2 의 `_dwell` 을 물려받으므로 **예측을 쓴다** (#139·#142). 정보 축은
+    # S2 그대로 두고 결합 축만 올리는 칸이라, 예측을 빼면 그 차이가 결합으로 보고된다
     if ((oracle is not None or observed is not None)
-            and cfg.policy.stage not in ("S2", "S3", "PERFECT_ROLLING")):
+            and cfg.policy.stage not in ("S2", "S3", "S4", "PERFECT_ROLLING")):
         raise ValueError(
             f"{cfg.policy.stage} 는 예측을 쓰지 않는데 예측 설정이 들어왔다. "
             "조용히 무시하면 '예측을 쓰는 줄 알았는데 안 쓰고 있던' 결과가 나온다")
 
     # 윈도우는 S3 만 쓴다. 다른 칸이 조용히 받으면 params_json 에 윈도우가 적히고도
     # 아무 효과가 없어서, 나중에 "윈도우를 바꿨는데 결과가 같다" 를 설명할 수 없다
-    if s3_window is not None and cfg.policy.stage != "S3":
+    if s3_window is not None and cfg.policy.stage not in ("S3", "S4"):
         raise ValueError(
-            f"`s3_window` 는 S3 만 쓴다 (#139) — {cfg.policy.stage} 에 주면 "
+            f"`s3_window` 는 S3·S4 만 쓴다 (#139) — {cfg.policy.stage} 에 주면 "
             "기록에는 남고 효과는 없는 값이 된다")
 
     if oracle is not None and observed is not None:
@@ -686,7 +687,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
 
     stage = cfg.policy.stage
 
-    if stage not in ("S0", "S1", "S2", "S3", "PERFECT_ROLLING"):
+    if stage not in ("S0", "S1", "S2", "S3", "S4", "PERFECT_ROLLING"):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
     # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
@@ -703,12 +704,12 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
     # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
     # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
     ledger = forecast = None
-    if stage in ("S2", "S3", "PERFECT_ROLLING"):
+    if stage in ("S2", "S3", "S4", "PERFECT_ROLLING"):
         # 예측은 **S2 부터만** 쓴다. S1 에 주면 안 쓰고도 받는 셈이라 "무엇이
         # 달라졌나" 가 흐려진다 (원장을 S0 에 주지 않는 것과 같은 이유)
         # **어느 예측을 쓰느냐가 곧 스테이지다.** 같은 S2Policy 를 쓰지만 run_id 가
         # 갈라져야 둘을 나란히 놓을 수 있다 (안 그러면 서로 덮어쓴다)
-        if stage in ("S2", "S3") and observed is None:
+        if stage in ("S2", "S3", "S4") and observed is None:
             raise ValueError(
                 f"{stage} 는 **관측 가능한 것만으로 하는 예측**을 쓴다 (#119) — "
                 "`observed=ObservedSpec(...)` 가 필요하다. 시뮬레이터의 실제 미래를 "
@@ -718,7 +719,11 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
             raise ValueError(
                 "PERFECT_ROLLING 은 시뮬레이터의 실제 미래를 넣는 **벤치마크**다 "
                 "(#118 · DESIGN §8.2) — `oracle=OracleSource(...)` 가 필요하다")
-        if stage == "S3":
+        if stage == "S4":
+            # S4 는 S3 의 알고리즘을 그대로 쓰고 **세계에게 더 많은 차를 달라고 한다**
+            policy = S4Policy(S4Settings(
+                **kw, **({} if s3_window is None else {"window": int(s3_window)})))
+        elif stage == "S3":
             # ★ 윈도우는 **이탈 수를 흔드는 손잡이**다. 기본값으로 조용히 돌면 어느
             #   윈도우의 결과인지 모른 채 사다리에 올라간다 — #101·#123 과 같은 고장
             policy = S3Policy(S3Settings(
@@ -825,7 +830,12 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
             # 교환이 **몇 번 돌았고 몇 쌍이 바뀌었나** (#139). 0 이면 순차와 같다는
             # 뜻이고, 그러면 결과가 안 바뀐 이유가 그 자리에서 설명된다.
             # `swap_ms` 는 Δt 안에 끝나는지 재는 입력이다 (#77)
-            **({} if stage != "S3" else {
+            **({} if stage != "S4" else {
+                "s4_relocated": (float(out.n_relocated), "count"),
+                "s4_lead_min": (float(policy.settings.relocate_lead_min), "min"),
+                "s4_relocate_vetoed": (policy.counters.get("relocate_vetoed", 0.0), "count"),
+            }),
+            **({} if stage not in ("S3", "S4") else {
                 "s3_window": (float(policy.settings.window), "count"),
                 "s3_swap_tried": (policy.counters.get("swap_tried", 0.0), "count"),
                 "s3_swap_done": (policy.counters.get("swap_done", 0.0), "count"),

@@ -146,6 +146,13 @@ class CorridorResult:
     n_answers: int              # decide() 가 실제로 답을 준 횟수 (차 수가 아니다)
     n_arrived: int              # 코리도 안에서 해결하고 목적지까지 간 차
     n_stranded: int             # 정책이 못 닿는 곳을 골라 길에서 멈춘 차 — 0 이어야 한다
+    #: 가던 차를 **다른 휴게소로 돌린** 횟수 (S4 · `reask_en_route`).
+    #: 0 이면 시간축이 아무것도 안 바꿨다는 뜻이고, 그러면 결과가 S3 와 같은
+    #: 이유가 그 자리에서 설명된다.
+    n_relocated: int = 0
+    #: 가던 차를 **다시 물어본** 횟수. `n_relocated` 와 나눠 보면 *"물었는데 안
+    #: 바꿨다"* 와 *"묻지도 않았다"* 를 가를 수 있다.
+    n_reasked: int = 0
 
     @property
     def n_escaped(self) -> int:
@@ -165,6 +172,16 @@ class _Car:
     stops_done: int = 0
     target: str | None = None       # 가고 있는 휴게소
     done: bool = False
+
+    # 주행 중 **지금 위치**를 보간하기 위한 출발 기록 (S4 · `reask_en_route`).
+    # 통행시간 모델이 무엇이든(고정 속도·CTM) 그 모델이 정한 (출발, 도착) 사이를
+    # 선형으로 나눈다 — 모델에 역함수를 요구하지 않으면서 양 끝에서는 정확하다.
+    left_from_km: float = 0.0
+    left_at_min: float = 0.0
+    eta_min: float = 0.0
+    #: 몇 번째 배차인가. **되돌아간 배차를 거르는 데 쓴다** — A→B→A 로 돌리면
+    #: 처음 A 로 넣어 둔 도착이 다시 유효해져 **한 대가 두 번 도착한다**
+    dispatch: int = 0
 
 
 def _station_view(sid: str, q: StationQueue, spec: StationSpec, offset_km: float,
@@ -268,6 +285,8 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
     escape_events: list[dict] = []
     snapshots: list[dict] = []
     n_decide_calls = n_answers = n_arrived = n_stranded = 0
+    n_relocated = 0          # 가던 차를 다른 휴게소로 돌린 횟수 (S4)
+    n_reasked = 0            # 가던 차를 다시 물어본 횟수 (S4) — 배선이 사는지 본다
     step = 0
     next_snapshot = 0.0
 
@@ -301,6 +320,22 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
             if not car.done:
                 asking.append(car)
 
+        # --- 2-b. 가고 있는 차도 다시 묻는다 (S4 · 시간축) ---------------------
+        #
+        # 기본은 안 묻는다. 한 번 고른 차는 도착할 때까지 그대로 간다 — 그래서
+        # S0~S3 는 이미 쓴 예약을 못 바꾼다. 정책이 `reask_en_route` 를 **스스로
+        # 선언**하면 그때만 넣는다. 시뮬레이터는 **어느 스테이지인지 모른다.**
+        en_route: list[_Car] = []
+        if getattr(policy, "reask_en_route", False):
+            for car in cars.values():
+                if car.done or car.target is None or car in asking:
+                    continue
+                if not (car.left_at_min <= t < car.eta_min):
+                    continue          # 아직 안 떠났거나 이미 도착했다
+                en_route.append(car)
+            asking.extend(sorted(en_route, key=lambda c: c.ev.ev_id))
+            n_reasked += len(en_route)
+
         # --- 3~4. 시각 t 의 화면을 보여주고, 대답대로 보낸다 ---------------------
         if asking:
             n_decide_calls += 1
@@ -320,12 +355,27 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                 # 가치를 재려는 실험이 그 자리에서 무의미해진다
                 forecast=forecast,
             )
+            # 주행 중인 차는 **지금** 어디에 있고 SoC 가 얼마인지를 줘야 한다.
+            # 그 차의 `offset_km` 은 마지막 결정 지점이라 과거다 — 그대로 주면
+            # 정책이 이미 지나친 휴게소를 고를 수 있다.
+            def _now(c: _Car, now: float = t) -> tuple[float, float]:
+                if c.target is None or not (c.left_at_min <= now < c.eta_min):
+                    return c.offset_km, c.soc
+                span = max(c.eta_min - c.left_at_min, 1e-9)
+                frac = min(max((now - c.left_at_min) / span, 0.0), 1.0)
+                off = c.left_from_km + (station_offsets[c.target] - c.left_from_km) * frac
+                soc = calculate_arrival_soc(
+                    departure_soc=min(max(c.soc, 0.0), 1.0), battery_kwh=c.ev.battery_kwh,
+                    consumption_kwh_km=c.ev.consumption_kwh_km, range_factor=range_factor,
+                    distance_km=max(off - c.left_from_km, 0.0))
+                return off, soc
+
             answers = policy.decide(
                 [
                     EVState(
                         ev_id=c.ev.ev_id, vclass_id=c.ev.vclass_id, corridor_id=corridor_id,
-                        offset_km=c.offset_km, speed_kmh=cruise_speed_kmh,
-                        soc=c.soc, soc_target=amount.target_soc_cap,
+                        offset_km=_now(c)[0], speed_kmh=cruise_speed_kmh,
+                        soc=_now(c)[1], soc_target=amount.target_soc_cap,
                         battery_kwh=c.ev.battery_kwh, vmax_kw=c.ev.vmax_kw,
                         dest_offset_km=c.ev.dest_offset_km, is_participant=True,
                         consumption_kwh_km=c.ev.consumption_kwh_km,
@@ -341,13 +391,35 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                 world,
             )
 
+            moving = {c.ev.ev_id for c in en_route}
             for car in asking:
                 raw = answers.get(car.ev.ev_id)
+                on_road = car.ev.ev_id in moving
 
                 if raw is None:
+                    if on_road:
+                        continue      # 가던 길 그대로. 다시 묻기 큐에 넣지 않는다
                     # "이번 Δt 에는 못 정했다" — 다음 스텝에 다시 물어본다
                     heapq.heappush(decisions, (t + dt_min, car.ev.ev_id))
                     continue
+
+                if on_road:
+                    # ★ 주행 중인 차에게서는 **휴게소 변경만** 받는다.
+                    #
+                    #   - 같은 답이면 아무것도 안 한다. 도착을 또 밀어 넣으면 한 대가
+                    #     두 번 도착한다
+                    #   - 무충전·이탈은 무시한다. 달리던 차를 중간에 지우는 것은
+                    #     시간축 결합이 아니라 **다른 종류의 변경**이고, 그러면
+                    #     S3→S4 차이에 "중간 포기" 가 섞인다
+                    kind2, _ = read_answer(str(raw))
+                    if kind2 == car.target or kind2 not in queues:
+                        continue
+                    # ★ 차를 **지금 자리로 당겨 놓고** 보낸다. 안 그러면 아래 배차가
+                    #   마지막 결정 지점(과거)에서 거리를 재서 도착이 **너무 이르게**
+                    #   나오고, DES 가 "도착이 거꾸로 들어왔다" 로 멈춘다
+                    car.offset_km, car.soc = _now(car)
+                    car.t_min = t
+                    n_relocated += 1
 
                 n_answers += 1
                 kind, best = read_answer(str(raw))
@@ -381,21 +453,21 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                         f"{policy.stage} 가 앞에 있지 않은 휴게소를 골랐다: {car.ev.ev_id} "
                         f"{car.offset_km:.1f} km → {kind} {off:.1f} km (되돌아가기는 없다)")
 
+                eta = car.t_min + travel.minutes(car.offset_km, off, car.t_min)
                 car.target = kind
-                heapq.heappush(
-                    arrivals,
-                    (car.t_min + travel.minutes(car.offset_km, off, car.t_min),
-                     car.ev.ev_id, kind),
-                )
+                car.left_from_km, car.left_at_min, car.eta_min = car.offset_km, t, eta
+                car.dispatch += 1
+                heapq.heappush(arrivals, (eta, car.ev.ev_id, kind, car.dispatch))
 
         # --- 5. 휴게소 도착 ----------------------------------------------------
         # 같은 스텝·같은 휴게소의 도착은 한 묶음으로 넣는다. 그래야 (도착시각, ev_id)
         # 타이브레이크가 DES 와 같아진다 (world/sim.py::_admit 과 같은 이유).
         batch: dict[str, list[tuple[float, _Car]]] = {}
         while arrivals and arrivals[0][0] < t + dt_min:
-            t_arrive, ev_id, sid = heapq.heappop(arrivals)
+            t_arrive, ev_id, sid, seq = heapq.heappop(arrivals)
             car = cars[ev_id]
-            if not car.done and car.target == sid:
+            # **최신 배차만** 받는다. 휴게소 이름만 보면 되돌아간 배차를 못 거른다
+            if not car.done and car.target == sid and car.dispatch == seq:
                 batch.setdefault(sid, []).append((t_arrive, car))
 
         for sid in sorted(batch):
@@ -489,4 +561,6 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
         n_answers=n_answers,
         n_arrived=n_arrived,
         n_stranded=n_stranded,
+        n_relocated=n_relocated,
+        n_reasked=n_reasked,
     )

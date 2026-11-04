@@ -183,6 +183,19 @@ class Policy(Protocol):
 
     stage: str
 
+    #: **주행 중인 차에게도 다시 물어 달라** (S4, 시간축 결합).
+    #:
+    #: 기본은 `False` — 한 번 휴게소를 고른 차는 도착할 때까지 다시 안 묻는다.
+    #: 그래서 S0~S3 는 **이미 쓴 예약을 못 바꾼다**. 그게 시간축이 닫혀 있다는 뜻이다.
+    #:
+    #: `True` 면 시뮬레이터가 **가고 있는 차도 `decide()` 에 넣는다.** 그 차의
+    #: `offset_km`·`soc` 는 **지금 시각 기준으로 보간한 값**이고, 정책이 다른
+    #: 휴게소를 답하면 경로가 바뀐다.
+    #:
+    #: ⚠ 시뮬레이터는 이 값만 보고 **어느 스테이지인지는 모른다.** `stage` 를 보고
+    #: 분기하면 설계 규칙 2가 깨진다 — 세계가 엔진을 알게 된다.
+    reask_en_route: bool
+
     def decide(self, evs: Sequence[EVState], world: WorldView) -> Mapping[str, str]:
         """{ev_id: station_id} 를 반환한다.
 
