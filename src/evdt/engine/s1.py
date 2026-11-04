@@ -83,50 +83,10 @@ class S1Policy(S0Policy):
         best_id, best_cost, best_arr = "", float("inf"), None
 
         for st in sorted(world.stations.values(), key=lambda s: (s.offset_km, s.station_id)):
-            if not (ev.offset_km < st.offset_km < ev.dest_offset_km):
+            cand = self._candidate(ev, world, ledger, st, rf, opportunity=opportunity)
+            if cand is None:
                 continue
-
-            gap_km = st.offset_km - ev.offset_km
-
-            if not can_reach_station_with_buffer(
-                soc=min(max(ev.soc, 0.0), 1.0), battery_kwh=ev.battery_kwh,
-                consumption_kwh_km=ev.consumption_kwh_km, range_factor=rf,
-                distance_to_station_km=gap_km, buffer_km=self.settings.buffer_km,
-            ):
-                continue
-
-            soc_in = calculate_arrival_soc(
-                departure_soc=min(max(ev.soc, 0.0), 1.0), battery_kwh=ev.battery_kwh,
-                consumption_kwh_km=ev.consumption_kwh_km, range_factor=rf,
-                distance_km=gap_km,
-            )
-            soc_out = self._soc_out(ev, soc_in, st.offset_km, rf, opportunity=opportunity)
-
-            if soc_out <= soc_in + SOC_EPS:
-                continue
-
-            # ★ 차이 1 — **내가 도착할 시각**에 원장이 뭐라고 하는가.
-            #   S0 는 `st.wait_min`(지금 화면)을 썼다. 여기서는 그 시각까지 가는 데
-            #   걸리는 시간을 더해 **그때의 줄**을 묻는다.
-            eta = world.t_min + gap_km / max(ev.speed_kmh, 1e-6) * 60.0
-            arr = Arrival(
-                ev_id=ev.ev_id, arrival_min=eta, soc_from=soc_in, soc_to=soc_out,
-                battery_kwh=ev.battery_kwh, vmax_kw=ev.vmax_kw, curve=ev.curve,
-                charge_power_factor=world.cold_factor,
-            )
-            cost = self._dwell(ledger, st.station_id, arr, world)
-
-            # ★ 여기서 멈추면 **가까운 곳만 고른다.** 줄이 짧다는 이유로 조금만 채우고
-            #   또 서게 되고, 그 두 번째 정차가 비용에 안 들어간다. 실제로 그렇게
-            #   돌렸더니 2회 이상 정차가 S0 547 → S1 629 로 늘고 평균 대기가 S0 보다
-            #   나빠졌다 (#83).
-            #
-            #   코리도에서는 **주행시간이 상수다** — 어느 휴게소를 고르든 목적지까지
-            #   총 거리는 같다. 그래서 선택을 가르는 것은 "또 서야 하는가" 하나다.
-            #   UE 는 계획 전체를 열거해서 이걸 자동으로 본다. S1 은 **한 칸 앞**까지만
-            #   본다 (두 칸 이상은 S2 의 예측이다).
-            if not self._reaches_dest(ev, soc_out, st.offset_km, rf):
-                cost += self._next_stop_cost(ev, world, ledger, st.offset_km, soc_out, eta, rf)
+            cost, arr = cand
 
             if cost < best_cost:
                 best_id, best_cost, best_arr = st.station_id, cost, arr
@@ -147,6 +107,64 @@ class S1Policy(S0Policy):
         ledger.book(ev.ev_id, best_id, best_arr)
         return best_id
 
+
+    def _candidate(self, ev: EVState, world: WorldView, ledger, st, rf: float,
+                   *, opportunity: bool) -> tuple[float, Arrival] | None:
+        """휴게소 하나를 재서 `(비용, 도착)` 을 준다. 못 쓰는 후보면 `None`.
+
+        **원장을 바꾸지 않는다** — 묻기만 한다.
+
+        `_one` 의 루프 본문을 그대로 꺼낸 것이다. 꺼낸 이유는 **S3 가 같은 산술로
+        교환을 재야** 하기 때문이다 (#139). 여기서 다시 쓰면 S2→S3 차이에 "비용 계산이
+        갈라진 몫" 이 섞이고, 그게 결합의 값으로 보고된다.
+        """
+
+        if not (ev.offset_km < st.offset_km < ev.dest_offset_km):
+            return None
+
+        gap_km = st.offset_km - ev.offset_km
+
+        if not can_reach_station_with_buffer(
+            soc=min(max(ev.soc, 0.0), 1.0), battery_kwh=ev.battery_kwh,
+            consumption_kwh_km=ev.consumption_kwh_km, range_factor=rf,
+            distance_to_station_km=gap_km, buffer_km=self.settings.buffer_km,
+        ):
+            return None
+
+        soc_in = calculate_arrival_soc(
+            departure_soc=min(max(ev.soc, 0.0), 1.0), battery_kwh=ev.battery_kwh,
+            consumption_kwh_km=ev.consumption_kwh_km, range_factor=rf,
+            distance_km=gap_km,
+        )
+        soc_out = self._soc_out(ev, soc_in, st.offset_km, rf, opportunity=opportunity)
+
+        if soc_out <= soc_in + SOC_EPS:
+            return None
+
+        # ★ 차이 1 — **내가 도착할 시각**에 원장이 뭐라고 하는가.
+        #   S0 는 `st.wait_min`(지금 화면)을 썼다. 여기서는 그 시각까지 가는 데
+        #   걸리는 시간을 더해 **그때의 줄**을 묻는다.
+        eta = world.t_min + gap_km / max(ev.speed_kmh, 1e-6) * 60.0
+        arr = Arrival(
+            ev_id=ev.ev_id, arrival_min=eta, soc_from=soc_in, soc_to=soc_out,
+            battery_kwh=ev.battery_kwh, vmax_kw=ev.vmax_kw, curve=ev.curve,
+            charge_power_factor=world.cold_factor,
+        )
+        cost = self._dwell(ledger, st.station_id, arr, world)
+
+        # ★ 여기서 멈추면 **가까운 곳만 고른다.** 줄이 짧다는 이유로 조금만 채우고
+        #   또 서게 되고, 그 두 번째 정차가 비용에 안 들어간다. 실제로 그렇게
+        #   돌렸더니 2회 이상 정차가 S0 547 → S1 629 로 늘고 평균 대기가 S0 보다
+        #   나빠졌다 (#83).
+        #
+        #   코리도에서는 **주행시간이 상수다** — 어느 휴게소를 고르든 목적지까지
+        #   총 거리는 같다. 그래서 선택을 가르는 것은 "또 서야 하는가" 하나다.
+        #   UE 는 계획 전체를 열거해서 이걸 자동으로 본다. S1 은 **한 칸 앞**까지만
+        #   본다 (두 칸 이상은 S2 의 예측이다).
+        if not self._reaches_dest(ev, soc_out, st.offset_km, rf):
+            cost += self._next_stop_cost(ev, world, ledger, st.offset_km, soc_out, eta, rf)
+
+        return cost, arr
 
     def _next_stop_cost(self, ev: EVState, world: WorldView, ledger,
                         from_km: float, soc: float, t_min: float, rf: float) -> float:

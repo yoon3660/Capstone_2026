@@ -77,14 +77,25 @@ ESCAPE_REF = "S1"
 #: 이보다 벗어나면 그 칸의 격차 축소율을 찍지 않는다
 ESCAPE_TOL = 0.35
 
-#: 스테이지가 **반드시 만족해야 하는** params. 안 맞으면 그 런은 뺀다 (#123 §5)
-EXPECTED: dict[str, dict] = {
-    "S2": {"forecast_kind": "observed"},
-    BENCH: {"forecast_kind": "oracle", "oracle_blur": False},
-}
+#: S3 의 기본 윈도우 (`engine/s3.py` 의 S3Settings.window 와 같아야 한다)
+S3_WINDOW = 4
 
-#: 손잡이가 있어서 이탈을 맞춰야 하는 칸
-TUNABLE = frozenset({"S2", BENCH})
+#: 스테이지가 **반드시 만족해야 하는** params. 안 맞으면 그 런은 뺀다 (#123 §5)
+#:
+#: S3 의 `s3_window` 를 여기 넣는 이유: **윈도우가 달라도 run_id 는 `__S3__` 다.**
+#: 적지 않으면 윈도우 4 런과 12 런이 한 표에 섞이고, 윈도우는 이탈 수를 흔드는
+#: 손잡이라서 그러면 이탈 맞춤 자체가 무의미해진다 (#101·#123 과 같은 고장).
+def expected(s3_window: int) -> dict[str, dict]:
+    return {
+        "S2": {"forecast_kind": "observed"},
+        "S3": {"forecast_kind": "observed", "s3_window": s3_window},
+        BENCH: {"forecast_kind": "oracle", "oracle_blur": False},
+    }
+
+
+#: 손잡이가 있어서 이탈을 맞춰야 하는 칸. S3 의 손잡이는 **윈도우**다 — 넓히면 더
+#: 많은 차가 같이 결정하고 이탈 수가 달라진다 (#139)
+TUNABLE = frozenset({"S2", "S3", BENCH})
 
 
 def mean_ci(v: pd.Series) -> tuple[float, float]:
@@ -104,7 +115,7 @@ def closed(value: float, floor: float, ceil: float) -> float:
     return float("nan") if abs(span) < 1e-12 else (floor - value) / span * 100.0
 
 
-def collect(cfg, seeds, done, wide, esc_min) -> tuple[pd.DataFrame, list[str]]:
+def collect(cfg, seeds, done, wide, esc_min, s3_window=S3_WINDOW) -> tuple[pd.DataFrame, list[str]]:
     """런을 모은다. **params 가 안 맞는 런은 뺀다** (#123 §5)."""
 
     want = [CEIL, *LADDER, BENCH]
@@ -119,7 +130,8 @@ def collect(cfg, seeds, done, wide, esc_min) -> tuple[pd.DataFrame, list[str]]:
             rid = ids[st]
             if rid not in done:
                 continue
-            bad = {k: (done[rid].get(k), v) for k, v in EXPECTED.get(st, {}).items()
+            bad = {k: (done[rid].get(k), v)
+                   for k, v in expected(s3_window).get(st, {}).items()
                    if done[rid].get(k) != v}
             if bad:
                 dropped.append(f"{rid} — " + " · ".join(
@@ -144,6 +156,9 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_seollal_up_adoption.yaml")
     ap.add_argument("--seeds", default="1-20")
+    # 윈도우가 다른 S3 런이 한 표에 섞이지 않게 **어느 윈도우를 보는지 밝힌다** (#139)
+    ap.add_argument("--s3-window", type=int, default=S3_WINDOW,
+                    help="이 윈도우로 돌린 S3 만 표에 넣는다")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -156,7 +171,8 @@ def main() -> int:
         kpi = pd.read_sql("SELECT run_id, metric, value FROM run_kpi", conn)
     wide = kpi.pivot(index="run_id", columns="metric", values="value")
 
-    t, dropped = collect(cfg, parse_seeds(args.seeds), done, wide, esc_min)
+    t, dropped = collect(cfg, parse_seeds(args.seeds), done, wide, esc_min,
+                         s3_window=args.s3_window)
     if t.empty:
         raise SystemExit("\n[중단] UE·S0·S1 을 모두 끝낸 시드가 없다.")
 
