@@ -852,7 +852,10 @@ def _record_concentration_kpis(run_id: str, db: Path, runs: Path, log: Log) -> N
         # 그래서 이 몫은 `no_plan` 에 있지만 **충전기 공백의 책임이 아니라 배정의
         # 책임이다.** 안 가르면 엔진이 고쳐야 할 과녁을 그만큼 작게 잡게 된다
         # (#54 에서 balked/no_plan 을 가른 것과 같은 이유).
-        n_stranded = con.sql(
+        # ⚠ `con.sql(...)` 은 **Relation** 을 돌려주고, duckdb 2.0 이 거기서
+        #   `fetchone()` 을 없앴다. `execute()` 는 커서 쪽이라 그대로다 — 이
+        #   파일의 다른 30여 곳이 이미 그걸 쓴다
+        n_stranded = con.execute(
             """
             SELECT COUNT(*) FROM escape_event e
             WHERE e.reason = 'no_plan'
@@ -864,8 +867,8 @@ def _record_concentration_kpis(run_id: str, db: Path, runs: Path, log: Log) -> N
         n_slots, ratio_max, worst = 0, 0.0, 0.0
     else:
         hourly = f"({load_sql('station_hourly_wait')})"
-        n_slots = con.sql(f"SELECT COUNT(*) FROM {hourly} WHERE mean_wait_min >= {BOTTLENECK_WAIT_MIN}").fetchone()[0]
-        ratio_max, worst = con.sql(
+        n_slots = con.execute(f"SELECT COUNT(*) FROM {hourly} WHERE mean_wait_min >= {BOTTLENECK_WAIT_MIN}").fetchone()[0]
+        ratio_max, worst = con.execute(
             """
             WITH ch AS (SELECT station_id, SUM(n_units) AS n_ch FROM charger WHERE is_active = 1 GROUP BY 1),
                  ev AS (SELECT station_id, COUNT(*) AS n, AVG(wait_min) AS w FROM charge_event GROUP BY 1),
