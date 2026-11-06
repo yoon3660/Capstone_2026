@@ -35,7 +35,14 @@ pyproj>=3.6
 pyarrow>=16.0
 # #64 validation deliverable is an xlsx; without this the main report cannot be opened
 openpyxl>=3.1
-duckdb>=1.1
+# Upper bound added 2026-11-06. duckdb was the ONLY dependency in this file
+# without one, and 2.0.0 removed Relation.fetchone(), so CI went red on main for
+# two days (runs 41855485680, 42199246108) while everyone's local 1.5.x passed.
+# The four call sites now use execute() (cursor side, unchanged in 2.0).
+#
+# The bound allows 2.0 on purpose: the full suite and verify_setup.py were run
+# against 2.0.0 and pass. It stops the NEXT major, which nobody has vetted yet.
+duckdb>=1.1,<3.0
 
 # plots
 matplotlib>=3.8,<4.0
