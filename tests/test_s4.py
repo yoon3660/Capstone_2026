@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from evdt.engine.forecast import OracleForecast
@@ -265,6 +267,62 @@ def test_only_s4_may_take_a_lead():
     src = inspect.getsource(run_once)
     assert 's4_lead_min is not None and cfg.policy.stage != "S4"' in src, (
         "S4 전용 가드가 없다 — 다른 칸이 조용히 리드를 받는다")
+
+
+# ---------------------------------------------------------------------------
+# ⑤ 스윕이 **사다리를 지우지 않는다** (#142 — 실제로 한 번 지웠다)
+# ---------------------------------------------------------------------------
+#
+# `scripts/sweep_s4_lead.py` 가 처음 돌 때 `--strength` 기본값이 1.0 이어서,
+# 사다리가 쓰는 strength 0.30 의 S3 시드 1 을 `overwrite=True` 로 덮어썼다.
+# `reusable_run` 은 제대로 걸렀다 — **걸린 뒤의 처리가 틀렸다.**
+
+
+def _sweep_src() -> str:
+    from pathlib import Path
+
+    return Path("scripts/sweep_s4_lead.py").read_text(encoding="utf-8")
+
+
+def test_the_sweep_measures_in_the_ladders_world():
+    """스윕의 기본 strength 는 **사다리와 같아야** 한다.
+
+    다르면 스윕은 내부적으로 일관되면서도 사다리 표에 못 올라간다 — 숫자가 있는데
+    쓸 수 없는, 가장 비싼 종류의 결과가 된다.
+    """
+
+    import re
+
+    ladder = re.search(r"^OBSERVED_STRENGTH = ([\d.]+)",
+                       Path("scripts/matched_ladder.py").read_text(encoding="utf-8"),
+                       re.M)
+    sweep = re.search(r"^OBSERVED_STRENGTH = ([\d.]+)", _sweep_src(), re.M)
+    assert ladder and sweep, "두 스크립트 다 OBSERVED_STRENGTH 를 가져야 한다"
+    assert float(ladder.group(1)) == float(sweep.group(1)), (
+        f"스윕 strength {sweep.group(1)} ≠ 사다리 {ladder.group(1)} — 다른 세계를 잰다")
+
+    assert "default=OBSERVED_STRENGTH" in _sweep_src(), (
+        "--strength 기본값이 상수를 안 쓴다 — 상수만 고쳐도 안 따라온다")
+
+
+def test_the_sweep_refuses_to_overwrite_a_mismatched_baseline():
+    """저장된 S3 가 설정과 다르면 **멈춘다.** 다시 돌리는 것이 기본이면 안 된다.
+
+    불일치의 기본 답은 *재실행*이 아니라 *정지*다 — 재실행은 사다리가 쓰는 run 을
+    말없이 지운다 (#123 과 같은 고장).
+    """
+
+    src = _sweep_src()
+    assert "--rebuild-baseline" in src, "덮어쓰기를 명시로 빼는 문이 없다"
+    assert 'why == "없음" or args.rebuild_baseline' in src, (
+        "없던 run 과 '설정이 다른' run 을 같게 다룬다 — 후자는 멈춰야 한다")
+
+
+def test_the_sweep_csv_name_carries_the_strength():
+    """CSV 이름에 strength 가 들어가야 한다 — run_id 함정이 파일에도 있다."""
+
+    assert 's4_lead_strength{args.strength:g}.csv' in _sweep_src(), (
+        "strength 를 바꿔 돌리면 같은 CSV 를 덮어쓴다")
 
 
 def _cfg():
