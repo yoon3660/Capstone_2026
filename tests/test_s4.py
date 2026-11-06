@@ -216,3 +216,60 @@ def test_s4_needs_a_forecast():
     with pytest.raises(RuntimeError):
         _run(S4Policy(S4Settings(**KW)), stations, offsets, [_ev("EV001", 0.0)],
              ledger=_led(stations))
+
+
+# -- ④ 러너 통로 — 리드타임이 기록에 남는가 (#142 스윕) ----------------------
+
+def test_the_lead_is_written_into_the_run_record():
+    """★ `run_id` 는 리드타임을 구분하지 못한다. **그래서 params 에 적어야 한다.**
+
+    S4 는 리드 10분으로 돌아도 60분으로 돌아도 `__S4__` 다. 적지 않으면 리드 60분
+    결과를 10분인 줄 알고 재사용한다 — 윈도우(#139)·오라클(#118)·예측(#119) 에서
+    세 번 같은 함정을 밟았다.
+    """
+
+    from evdt.runner import run_params
+
+    cfg = _cfg()
+    assert run_params(cfg, s4_lead_min=60.0)["s4_lead_min"] == 60.0
+    # 안 주면 None — 옛 run 과 섞이지 않게 키는 늘 있어야 한다
+    assert run_params(cfg)["s4_lead_min"] is None
+    assert "s4_lead_min" in run_params(cfg)
+
+
+def test_a_stored_run_with_a_different_lead_is_stale():
+    """리드가 다른 기록은 **재사용을 거부해야 한다** — 이게 이 통로의 존재 이유다."""
+
+    from evdt.runner import run_params, stale_reason
+
+    cfg = _cfg()
+    stored = run_params(cfg, s4_lead_min=10.0)
+
+    why = stale_reason(stored, cfg, s4_lead_min=60.0)
+    assert why is not None and "s4_lead_min" in why, f"리드 차이를 못 잡았다: {why}"
+    assert stale_reason(stored, cfg, s4_lead_min=10.0) is None
+
+
+def test_only_s4_may_take_a_lead():
+    """S3 에 리드를 주면 터져야 한다 — S3 는 가던 차를 안 물으니 막을 대상이 없다.
+
+    조용히 받으면 `params_json` 에 리드가 적히고도 효과가 0 이라, 나중에 *"리드를
+    바꿨는데 결과가 같다"* 를 설명할 수 없다. `s3_window` 가드와 같은 이유다.
+    """
+
+    import inspect
+
+    from evdt.runner import run_once
+
+    assert "s4_lead_min" in inspect.signature(run_once).parameters
+    src = inspect.getsource(run_once)
+    assert 's4_lead_min is not None and cfg.policy.stage != "S4"' in src, (
+        "S4 전용 가드가 없다 — 다른 칸이 조용히 리드를 받는다")
+
+
+def _cfg():
+    """실제 시나리오 config 하나. params 키만 보므로 어느 것이든 된다."""
+
+    from evdt.runner import load_config
+
+    return load_config("config/scenario_seollal_up_adoption.yaml", stage="S4")

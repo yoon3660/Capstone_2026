@@ -165,7 +165,8 @@ def departure_soc_mean(cfg: ScenarioConfig) -> float:
 
 def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
                observed: ObservedSpec | None = None,
-               s3_window: int | None = None) -> dict:
+               s3_window: int | None = None,
+               s4_lead_min: float | None = None) -> dict:
     """run 표에 남기는 값. **run_id 가 구분하지 못하는 것**을 여기에 적는다.
 
     `run_id` 는 (scenario_id, stage, 참여율, seed) 뿐이라, **같은 이름으로 다른 세계를
@@ -202,20 +203,27 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
         # 돌아도 `__S3__` 다. 적지 않으면 윈도우 4 결과를 12 인 줄 알고 재사용한다.
         # 윈도우는 이탈 수를 흔드는 손잡이라서, 섞이면 이탈 맞춤 자체가 무의미해진다
         "s3_window": s3_window,
+        # 리드타임이 몇 분이었나 (#142). **run_id 에 안 들어간다** — S4 는 어느
+        # 리드타임으로 돌아도 `__S4__` 다. 윈도우와 똑같은 함정이고, 이쪽이 더
+        # 위험하다: 리드타임이 재배정 수를 직접 막는 손잡이라서, 섞이면 "요동이
+        # 제약으로 잡히나" 라는 질문 자체가 답이 안 나온다
+        "s4_lead_min": s4_lead_min,
     }
 
 
 def stale_reason(stored: dict, cfg: ScenarioConfig,
                  *, oracle: OracleSource | None = None,
                  observed: ObservedSpec | None = None,
-                 s3_window: int | None = None) -> str | None:
+                 s3_window: int | None = None,
+                 s4_lead_min: float | None = None) -> str | None:
     """이미 DONE 인 run 을 지금 config 로 재사용해도 되나. 안 되면 그 이유.
 
     **기록에 있는 키만 본다.** 옛 run 에는 나중에 추가된 키가 없는데, 없다고 전부
     다시 돌리면 쓸 수 있는 결과까지 버린다. 기록된 값이 다르면 그건 확실한 불일치다.
     """
 
-    want = run_params(cfg, oracle=oracle, observed=observed, s3_window=s3_window)
+    want = run_params(cfg, oracle=oracle, observed=observed, s3_window=s3_window,
+                      s4_lead_min=s4_lead_min)
     diffs = [f"{k}: 기록 {stored[k]!r} ≠ 지금 {want[k]!r}"
              for k in want if k in stored and stored[k] != want[k]]
     return " · ".join(diffs) if diffs else None
@@ -224,7 +232,8 @@ def stale_reason(stored: dict, cfg: ScenarioConfig,
 def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig,
                  *, oracle: OracleSource | None = None,
                  observed: ObservedSpec | None = None,
-                 s3_window: int | None = None) -> tuple[bool, str]:
+                 s3_window: int | None = None,
+                 s4_lead_min: float | None = None) -> tuple[bool, str]:
     """이미 있는 run 을 그대로 써도 되나. 돌려주는 것은 (써도 되나, 이유).
 
     ⚠ **DONE 인 것만으로는 부족하다.** `check_same_world` 는 진입 EV 수만 보는데,
@@ -243,7 +252,7 @@ def reusable_run(db: Path, run_id: str, cfg: ScenarioConfig,
         return False, str(row[0])
 
     why = stale_reason(json.loads(row[1] or "{}"), cfg, oracle=oracle, observed=observed,
-                       s3_window=s3_window)
+                       s3_window=s3_window, s4_lead_min=s4_lead_min)
     return (False, f"설정이 다르다 — {why}") if why else (True, "DONE")
 
 
@@ -473,6 +482,7 @@ def run_once(
     oracle: OracleSource | None = None,
     observed: ObservedSpec | None = None,
     s3_window: int | None = None,
+    s4_lead_min: float | None = None,
     log: Log = print,
 ) -> str:
     """한 번 돌린다. run_id 를 돌려준다.
@@ -506,6 +516,13 @@ def run_once(
     if s3_window is not None and cfg.policy.stage not in ("S3", "S4"):
         raise ValueError(
             f"`s3_window` 는 S3·S4 만 쓴다 (#139) — {cfg.policy.stage} 에 주면 "
+            "기록에는 남고 효과는 없는 값이 된다")
+
+    # 리드타임은 S4 만 쓴다. S3 는 가고 있는 차를 아예 안 묻기 때문에(reask_en_route
+    # 가 False) 리드타임을 줘도 막을 대상이 없다 — 기록에만 남고 효과가 없다
+    if s4_lead_min is not None and cfg.policy.stage != "S4":
+        raise ValueError(
+            f"`s4_lead_min` 은 S4 만 쓴다 (#142) — {cfg.policy.stage} 에 주면 "
             "기록에는 남고 효과는 없는 값이 된다")
 
     if oracle is not None and observed is not None:
@@ -555,7 +572,8 @@ def run_once(
         travel=None if ctm is None else ctm.speed_field,
         escape_cost_min=cfg.demand.escape_cost_min,
     )
-    params = run_params(cfg, oracle=oracle, observed=observed, s3_window=s3_window)
+    params = run_params(cfg, oracle=oracle, observed=observed, s3_window=s3_window,
+                        s4_lead_min=s4_lead_min)
 
     with RunContext.open(cfg, seed=cfg.vehicles.seed, db_path=db, runs_dir=runs,
                          overwrite=overwrite, params=params) as run:
@@ -594,7 +612,8 @@ def run_once(
         else:
             charge_events, snapshots, escape_rows, stage_kpis = _run_policy_loop(
                 built, specs, offsets, cfg, settings, range_factor, cpf,
-                oracle, observed, log, s3_window=s3_window)
+                oracle, observed, log, s3_window=s3_window,
+                s4_lead_min=s4_lead_min)
         # ================================================================
 
         log_sim_result(run.writer, charge_events, snapshots,
@@ -677,7 +696,8 @@ def _run_ue(built, chargers, specs, settings, cfg, writer, log: Log):
 
 def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                      oracle: OracleSource | None, observed: ObservedSpec | None,
-                     log: Log, s3_window: int | None = None):
+                     log: Log, s3_window: int | None = None,
+                     s4_lead_min: float | None = None):
     """S0 이후 — Δt 마다 정책에게 물어보며 하루를 굴린다 (#59).
 
     **UE 와 같은 것**: 차량 집합(built.trips), 휴게소·충전기, 통행시간(settings.travel),
@@ -722,7 +742,10 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
         if stage == "S4":
             # S4 는 S3 의 알고리즘을 그대로 쓰고 **세계에게 더 많은 차를 달라고 한다**
             policy = S4Policy(S4Settings(
-                **kw, **({} if s3_window is None else {"window": int(s3_window)})))
+                **kw,
+                **({} if s3_window is None else {"window": int(s3_window)}),
+                **({} if s4_lead_min is None
+                   else {"relocate_lead_min": float(s4_lead_min)})))
         elif stage == "S3":
             # ★ 윈도우는 **이탈 수를 흔드는 손잡이**다. 기본값으로 조용히 돌면 어느
             #   윈도우의 결과인지 모른 채 사다리에 올라간다 — #101·#123 과 같은 고장
