@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from evdt.engine.milp import GroupProblem, count_binaries, solve_group
 
 #: A 가 빠르고 B 가 느리다. 둘 다 A 로 가면 뒤차가 기다린다.
@@ -163,3 +165,58 @@ def test_the_binary_count_is_the_candidate_count():
 
     assert count_binaries(CANDS) == 4
     assert count_binaries({"c1": tuple("ABCDEFG")}) == 7
+
+
+# -- 모형 동치성 — `banned` 를 더해도 답이 바뀌지 않는다 -----------------------
+
+def test_adding_banned_variables_never_changes_the_answer():
+    """★ 못 가는 칸을 변수로 더해도 **답과 목적값이 같아야** 한다.
+
+    필터 ablation 이 성립하는 근거다. `all` 은 `feasible` 에 0 으로 묶인 변수를
+    **더하기만** 한다 — 수학적으로 같은 문제다.
+
+    ## 왜 동점을 많이 만들어서 재나
+
+    실제 시나리오에서 `feasible` 과 `all` 이 하루 **115.8h** 갈렸다. 모형이
+    같은데 왜 갈리나를 좁히려고 이 테스트를 썼다. 비용을 굵은 격자에서 뽑아
+    동점을 잔뜩 만들고, 금지 칸 이름이 실제 휴게소 **사이에 끼어들게** 해서
+    변수 번호까지 밀리게 한다.
+
+    **그래도 300/300 같은 답이 나온다.** 즉 그 115.8h 는 이 정식화의 성질이
+    아니라, *"거의 같은 사회적 비용을 내는 배정이 아주 많다"* (#123) 는 세계의
+    성질이 하루에 걸쳐 증폭된 것이다 — `docs/objective.md` §9.
+    """
+
+    import random
+
+    rng = random.Random(7)
+    real = ("A", "B", "C", "D")
+    zs = tuple(f"{c}{k}" for c in "ABCD" for k in range(3))   # 사이에 끼어든다
+    evs = tuple(f"c{i}" for i in range(4))
+    banned = frozenset((i, z) for i in evs for z in zs)
+    differed = 0
+
+    for _ in range(300):
+        cost = {(i, s): float(rng.choice([10.0, 12.0, 14.0]))
+                for i in evs for s in real}
+        delta = {(evs[b], evs[a], s): float(rng.choice([0.0, 2.0, 4.0]))
+                 for s in real for a in range(4) for b in range(a + 1, 4)
+                 if rng.random() < 0.6}
+        wide = dict(cost)
+        wide.update({(i, z): 0.0 for i in evs for z in zs})
+
+        narrow = solve_group(GroupProblem(
+            evs=evs, cands={i: real for i in evs}, cost=cost, dwell=cost, delta=delta))
+        broad = solve_group(GroupProblem(
+            evs=evs, cands={i: real + zs for i in evs}, cost=wide, dwell=wide,
+            delta=delta, banned=banned))
+
+        if not (narrow.solved and broad.solved):
+            continue
+        assert narrow.objective == pytest.approx(broad.objective), (
+            "0 으로 묶은 변수를 더했는데 목적값이 달라졌다")
+        assert not (set(broad.assign.values()) & set(zs)), (
+            f"0 으로 묶은 칸을 골랐다: {broad.assign}")
+        differed += narrow.assign != broad.assign
+
+    assert differed == 0, f"동치 모형인데 배정이 {differed}번 달라졌다"
