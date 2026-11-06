@@ -80,32 +80,53 @@ class S1Policy(S0Policy):
             return ESCAPE_NO_PLAN
 
         ledger = world.require_ledger()
-        best_id, best_cost, best_arr = "", float("inf"), None
+        best_id, best_arr = "", None
+        best_key, best_private = float("inf"), float("inf")
 
         for st in sorted(world.stations.values(), key=lambda s: (s.offset_km, s.station_id)):
             cand = self._candidate(ev, world, ledger, st, rf, opportunity=opportunity)
             if cand is None:
                 continue
-            cost, arr = cand
-            # ★ 체류 밖의 비용 — **S1~S3 는 0 이다.** S4 의 재배정 비용 r_i 가
-            #   여기로 들어온다 (`docs/objective.md` §2b).
+            private, arr = cand
+
+            # ★ **고르는 값**과 **내가 치르는 값**을 가른다 — 둘은 S1 에서만 같다.
+            #
+            #     private  내 체류 (+ 두 번째 정차) — `_candidate` 가 준 그대로
+            #     key      그것 + 체류 밖의 비용. 이걸로 argmin 한다
+            #
+            #   `_extra_cost` 는 S4 의 재배정 비용 r_i (`docs/objective.md` §2b),
+            #   `_mec` 는 #138 의 한계 외부비용이다. **S1~S3 는 둘 다 0** 이라
+            #   key 와 private 가 같고, 그래서 비트 단위 동일성이 유지된다.
             #
             #   왜 그리디도 이걸 봐야 하나: 윈도우에 혼자 있는 차는 그룹 최적화를
             #   아예 안 거친다 (`S3Policy.decide` 가 2대 미만이면 그냥 돌려준다).
-            #   그리디가 r_i 를 못 보면 **그 차들은 공짜로 옮겨 다닌다** —
-            #   목적함수에 항이 있는데 절반의 차에게만 걸리는 상태가 된다
-            cost += self._extra_cost(ev.ev_id, st.station_id)
+            #   그리디가 못 보면 **그 차들에게만 항이 안 걸린다.**
+            key = (private
+                   + self._extra_cost(ev.ev_id, st.station_id)
+                   + self._mec(ledger, st.station_id, arr, world))
 
-            if cost < best_cost:
-                best_id, best_cost, best_arr = st.station_id, cost, arr
+            if key < best_key:
+                best_id, best_key, best_private, best_arr = (
+                    st.station_id, key, private, arr)
 
         if not best_id:
             return ESCAPE_NO_PLAN
 
+        # 고른 자리의 **체류 밖 비용**을 알려 준다 (S1 은 무시한다). 후보마다 재는
+        # 것과 **다른 양**이다 — 차 한 대가 17곳을 재 보고 한 곳을 고르므로,
+        # "실제로 내재화된 외부비용" 은 고른 자리의 것만 세야 한다 (#138)
+        self._chose(best_key - best_private)
+
         # 이탈 비용은 S0 와 **같은 값**을 쓴다. 한쪽만 다르면 이탈 수 차이가 정책
         # 차이로 보고된다. (#78 이 차별 비용을 넣으면 여기도 EVState 를 보게 된다)
+        #
+        # ★ 판단은 **사적 비용**으로 한다. 이탈은 *"나한테 너무 비싸다"* 이지
+        #   *"남에게 비용을 떠넘긴다"* 가 아니다. 사회적 비용으로 재면 **남의 몫
+        #   때문에 내가 여행을 포기**하는 셈이고, 그러면 MEC·S4 의 이탈 수가
+        #   기준 변경 때문에 흔들려서 "이탈을 맞춘 비교" 가 성립하지 않는다
+        #   (`docs/compare_rule.md`).
         escape_cost = self.settings.escape_cost_min
-        if escape_cost > 0 and best_cost > escape_cost:
+        if escape_cost > 0 and best_private > escape_cost:
             # 나가기로 했으면 **원장에서도 빠져야** 한다. 안 그러면 안 올 차 때문에
             # 뒤 차들이 더 붐빈다고 믿는다
             ledger.release(ev.ev_id)
@@ -140,6 +161,31 @@ class S1Policy(S0Policy):
         `_candidate` 안에 넣지 않는 이유도 하나다 — `_group_total` 의 이탈 가드가
         **개인 체류**를 `escape_cost_min` 과 견준다. 거기에 r_i 가 섞이면 "길이
         막혔다" 와 "되돌리기 싫다" 가 같은 값으로 들어간다.
+        """
+
+        return 0.0
+
+    def _chose(self, extra: float) -> None:
+        """고른 자리의 체류 밖 비용. **S1~S4 는 안 쓴다** — MEC 가 센다 (#138)."""
+
+    def _mec(self, ledger, station_id: str, arr: Arrival, world: WorldView) -> float:
+        """한계 외부비용. **S1~S4 는 0 이다** — `MecPolicy` 만 채운다 (#138).
+
+        설계문서 §5.1 이 이것을 **세 번째 종류의 변경**으로 적어 뒀다 — 정보와
+        결합은 그대로 두고 **결정 기준**을 바꾼다. 그래서 자리가 `_one` 의
+        argmin 안에 있고, `_candidate` 안이 아니다.
+
+        ## 왜 `_candidate` 안이 아닌가
+
+        `_candidate` 가 주는 값은 **사적 비용**이고, 그걸 쓰는 곳이 둘 더 있다.
+
+            `_one` 의 이탈 판정      — 이탈은 "나한테 비싸다" 이지 "남에게 떠넘긴다"
+                                      가 아니다
+            `S3Policy._group_total`  — 그룹 합의 이탈 가드가 **개인 체류**를
+                                      `escape_cost_min` 과 견준다
+
+        둘 중 하나에 MEC 가 섞이면 이탈 수가 기준 변경 때문에 흔들리고, 그러면
+        "이탈을 맞춘 비교" 자체가 성립하지 않는다 (`docs/compare_rule.md`).
         """
 
         return 0.0

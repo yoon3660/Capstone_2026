@@ -110,6 +110,33 @@ class ReservationLedger:
             future = [f for f in future if f.ev_id not in self._res]
         return led.evaluate_parts(arr, exclude=arr.ev_id, extra=future)
 
+    def externality(self, station_id: str, arr: Arrival,
+                    *, future: Sequence[Arrival] = ()) -> float:
+        """내가 거기 가면 **남들의 종료 시각 합**이 얼마나 밀리나 (분, §6.1).
+
+        `StationLedger.externality` 를 그대로 쓴다 — **정책이 직접 계산하면 안
+        된다.** 큐 규칙 호출자가 둘뿐이라는 테스트가 있다
+        (`tests/test_queue_rule.py::test_queue_rule_has_at_most_two_callers`).
+        """
+
+        return self.externality_parts(station_id, arr, future=future)[0]
+
+    def externality_parts(self, station_id: str, arr: Arrival,
+                          *, future: Sequence[Arrival] = (),
+                          ) -> tuple[float, dict[str, float]]:
+        """`(외부비용 합, ev_id → 밀린 시간)`. 분포가 고르지 않은 것을 보는 자리다.
+
+        §6.1: *"뒤차 3대 중 1대가 19분을 떠안고 나머지는 1.5분."*
+        **"앞차 수 × 평균 충전시간" 같은 근사로는 이 분포가 안 나온다.**
+        """
+
+        led = self.stations.get(station_id)
+        if led is None:
+            raise KeyError(f"원장에 없는 휴게소다: {station_id}")
+        if future:
+            future = [f for f in future if f.ev_id not in self._res]
+        return led.externality_parts(arr, exclude=arr.ev_id, extra=future)
+
     def booked(self, station_id: str) -> int:
         """그 휴게소에 **아직 안 온** 예약 수. 정책이 몰림을 보는 가장 싼 신호다."""
 
