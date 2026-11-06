@@ -74,10 +74,13 @@ OBSERVED_STRENGTH = 0.30
 #: 한다 — 부동소수 합산 순서까지 같으므로 0 에 가까운 값을 쓴다
 REVERIFY_TOL = 1e-6
 
+#: run_kpi 에 실제로 적히는 이름을 써야 한다. `s3_moves` · `s3_swaps` 처럼 없는
+#: 이름을 쓰면 **조용히 NaN** 이 되고, 표가 비어 있는 이유를 한참 찾게 된다
 METRICS = ("dwell_total_h", "n_escaped", "wait_mean_min", "wait_p95_min",
-           "bottleneck_slots", "n_ev_charging", "s3_moves", "s3_swaps",
-           "exact_gain_min", "exact_groups", "exact_better_groups", "exact_tried",
-           "swap_ms")
+           "bottleneck_slots", "n_ev_charging",
+           "s3_window", "s3_move_tried", "s3_move_done",
+           "s3_swap_tried", "s3_swap_done", "s3_swap_ms",
+           "exact_groups", "exact_better_groups", "exact_tried", "exact_gain_min")
 
 
 def kpis(run_id: str) -> dict[str, float]:
@@ -178,7 +181,7 @@ def _same(a: float, b: float) -> bool:
 
 def _report(t: pd.DataFrame, out: Path, window: int) -> None:
     cols = ["seed", "stage", "dwell_total_h", "n_escaped", "wait_mean_min",
-            "wait_p95_min", "bottleneck_slots", "swap_ms"]
+            "wait_p95_min", "bottleneck_slots", "s3_swap_ms"]
     print("\n=== 휴리스틱 vs 전수 열거 ===")
     print(t[cols].to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
 
@@ -195,7 +198,10 @@ def _report(t: pd.DataFrame, out: Path, window: int) -> None:
               f"   ({d:+,.1f}h)")
         print(f"  이탈         {h['n_escaped']:>10,.0f}  → {x['n_escaped']:>10,.0f}")
         print(f"  병목 칸      {h['bottleneck_slots']:>10,.0f}  → {x['bottleneck_slots']:>10,.0f}")
-        print(f"  계산시간     {h['swap_ms'] / 1000:>10,.1f}s → {x['swap_ms'] / 1000:>10,.1f}s")
+        print(f"  조정시간     {h['s3_swap_ms'] / 1000:>10,.1f}s → "
+              f"{x['s3_swap_ms'] / 1000:>10,.1f}s")
+        print(f"  이동 성공    {h['s3_move_done']:>10,.0f}  → {x['s3_move_done']:>10,.0f}")
+        print(f"  교환 성공    {h['s3_swap_done']:>10,.0f}  → {x['s3_swap_done']:>10,.0f}")
 
         # ★ 같은 그룹을 두 번 풀어 직접 비교한 몫 — 런 단위 차이보다 이게 정확하다
         gain, grp, better, tried = (x["exact_gain_min"], x["exact_groups"],

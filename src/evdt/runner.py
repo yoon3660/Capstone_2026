@@ -507,17 +507,18 @@ def run_once(
     # S3·S4 는 S2 의 `_dwell` 을 물려받으므로 **예측을 쓴다** (#139·#142). 정보 축은
     # S2 그대로 두고 결합 축만 올리는 칸이라, 예측을 빼면 그 차이가 결합으로 보고된다
     if ((oracle is not None or observed is not None)
-            and cfg.policy.stage not in ("S2", "S3", "S4", "PERFECT_ROLLING")):
+            and cfg.policy.stage not in ("S2", "S3", "S4", "S3_EXACT",
+                                         "PERFECT_ROLLING")):
         raise ValueError(
             f"{cfg.policy.stage} 는 예측을 쓰지 않는데 예측 설정이 들어왔다. "
             "조용히 무시하면 '예측을 쓰는 줄 알았는데 안 쓰고 있던' 결과가 나온다")
 
     # 윈도우는 S3 만 쓴다. 다른 칸이 조용히 받으면 params_json 에 윈도우가 적히고도
     # 아무 효과가 없어서, 나중에 "윈도우를 바꿨는데 결과가 같다" 를 설명할 수 없다
-    if s3_window is not None and cfg.policy.stage not in ("S3", "S4"):
+    if s3_window is not None and cfg.policy.stage not in ("S3", "S4", "S3_EXACT"):
         raise ValueError(
-            f"`s3_window` 는 S3·S4 만 쓴다 (#139) — {cfg.policy.stage} 에 주면 "
-            "기록에는 남고 효과는 없는 값이 된다")
+            f"`s3_window` 는 S3·S4·S3_EXACT 만 쓴다 (#139) — {cfg.policy.stage} 에 "
+            "주면 기록에는 남고 효과는 없는 값이 된다")
 
     # 리드타임은 S4 만 쓴다. S3 는 가고 있는 차를 아예 안 묻기 때문에(reask_en_route
     # 가 False) 리드타임을 줘도 막을 대상이 없다 — 기록에만 남고 효과가 없다
@@ -708,7 +709,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
 
     stage = cfg.policy.stage
 
-    if stage not in ("S0", "S1", "S2", "S3", "S4", "PERFECT_ROLLING"):
+    if stage not in ("S0", "S1", "S2", "S3", "S4", "S3_EXACT", "PERFECT_ROLLING"):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
     # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
@@ -868,11 +869,25 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 "s4_lead_min": (float(policy.settings.relocate_lead_min), "min"),
                 "s4_relocate_vetoed": (policy.counters.get("relocate_vetoed", 0.0), "count"),
             }),
-            **({} if stage not in ("S3", "S4") else {
+            **({} if stage not in ("S3", "S4", "S3_EXACT") else {
                 "s3_window": (float(policy.settings.window), "count"),
                 "s3_swap_tried": (policy.counters.get("swap_tried", 0.0), "count"),
                 "s3_swap_done": (policy.counters.get("swap_done", 0.0), "count"),
+                # 이동은 **교환보다 많이 성공한다** (#139 가 이동을 넣은 이유다).
+                # 그런데 KPI 에 안 남고 있었다 — 교환만 보면 "조정이 거의 없었다"
+                # 로 읽힌다
+                "s3_move_tried": (policy.counters.get("move_tried", 0.0), "count"),
+                "s3_move_done": (policy.counters.get("move_done", 0.0), "count"),
                 "s3_swap_ms": (policy.counters.get("swap_ms", 0.0), "ms"),
+            }),
+            # 전수 열거 진단 (#143). *"휴리스틱이 그룹 안에서 얼마나 졌나"* —
+            # `exact_gain_min` 이 0 이면 같은 윈도우에서 MILP 가 할 일이 없다
+            **({} if stage != "S3_EXACT" else {
+                "exact_groups": (policy.counters.get("exact_groups", 0.0), "count"),
+                "exact_better_groups": (
+                    policy.counters.get("exact_better_groups", 0.0), "count"),
+                "exact_tried": (policy.counters.get("exact_tried", 0.0), "count"),
+                "exact_gain_min": (policy.counters.get("exact_gain_min", 0.0), "min"),
             }),
         },
     )
