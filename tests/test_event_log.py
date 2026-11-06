@@ -268,7 +268,9 @@ def test_hour_bucket_floors_instead_of_rounding():
 
     예전 smoke_run 쿼리가 그렇게 해서 9:45 도착이 10시 칸에 들어갔다. 저장된 쿼리는 FLOOR.
     """
-    assert duckdb.sql("SELECT CAST(59.9 / 60 AS INTEGER)").fetchone()[0] == 1
+    # `sql()` 은 Relation 이고 duckdb 2.0 이 거기서 fetchone() 을 없앴다.
+    # `execute()` 는 커서 쪽이라 그대로다
+    assert duckdb.execute("SELECT CAST(59.9 / 60 AS INTEGER)").fetchone()[0] == 1
     assert "FLOOR(t_arrive_min / 60)" in load_sql("station_hourly_wait")
 
 
@@ -308,7 +310,7 @@ def test_snapshot_parquet_carries_coordinates(tmp_path):
     """위경도가 스냅샷에 들어 있어야 렌더러가 master DB 없이 지도에 찍는다."""
     _write_run(tmp_path, "r1", _hand_result())
 
-    lat, lon, n_null = _duck(tmp_path, "r1").sql(
+    lat, lon, n_null = _duck(tmp_path, "r1").execute(
         "SELECT MIN(lat), MIN(lon), COUNT(*) FILTER (WHERE lat IS NULL OR lon IS NULL) FROM snapshot"
     ).fetchone()
 
