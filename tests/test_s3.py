@@ -625,18 +625,35 @@ def test_the_milp_reproduces_the_exact_scorer_when_pairs_are_enough():
         "윈도우 2 에서 근사 오차가 0 이 아니다 — 계수를 잘못 쟀다")
 
 
-def test_the_milp_never_underestimates_the_true_cost():
-    """근사 오차는 **0 이하**다 (`정확한 값 − MILP 목적값`).
+def test_the_approximation_error_is_small_but_its_sign_is_not_guaranteed():
+    """근사 오차는 **작아야** 한다 — 그런데 **부호는 보장되지 않는다.**
 
-    쌍별로 더하면 선행자가 둘 이상일 때 겹침을 **과대 계산**한다. 그래서 MILP
-    목적값은 참값보다 크거나 같다. 부호가 뒤집히면 선행 관계를 잘못 잡은 것이다
-    (뒤차를 선행자로 센 것과 같은 고장).
+    ## ⚠ 처음에 "0 이하" 라고 적었고, 그게 틀렸다
+
+    *"쌍별로 더하면 겹침을 과대 계산하니 MILP 목적값 ≥ 참값"* 이라고 적어 뒀다.
+    `candidate_scope="all"` 로 실제 시나리오를 돌려 보니 **+35.6분**이 나왔다.
+
+    큐는 **열 효과가 더해지지도 않고 겹치지도 않는다.** 둘 다 가능하다.
+
+        과대 — 선행자 둘의 지연이 겹친다. 둘이 같은 충전기를 기다리는 동안
+               내 대기는 **한 번만** 늘어난다. 쌍별로 더하면 두 번 센다
+        과소 — 선행자 하나만으로는 내가 **안 기다린다** (그 차가 끝난 뒤 도착).
+               그런데 둘이 같이 있으면 점유가 길어져 **기다리게 된다.**
+               쌍별 δ 는 각각 0 이므로 합도 0 이고, 참값은 0 보다 크다
+
+    그래서 재는 것은 **크기**다. 윈도우 2 에서는 선행자가 최대 한 대라 정확히
+    0 이고(위 테스트), 그보다 크면 작기만 하면 된다. 그리고 **크기를 믿지 않아도
+    되게** 설계했다 — MILP 해는 언제나 정확한 채점기로 다시 재서 휴리스틱과
+    견준다 (`_milp_group`).
     """
 
     for window in (2, 4):
         _, policy = _congested_run(_milp_kw(window=window))
-        assert policy.counters["milp_approx_err_min"] <= 1e-6, (
-            f"윈도우 {window} 에서 MILP 가 참값보다 싸게 봤다 — 선행 관계가 틀렸다")
+        groups = max(policy.counters["milp_groups"], 1.0)
+        per = abs(policy.counters["milp_approx_abs_min"]) / groups
+        assert per < 5.0, (
+            f"윈도우 {window} 에서 근사 오차가 그룹당 {per:.2f}분이다 — "
+            "작은 값이 아니다. 계수를 잘못 쟀을 가능성이 크다")
 
 
 def test_every_milp_group_is_accounted_for():

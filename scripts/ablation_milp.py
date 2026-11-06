@@ -154,8 +154,9 @@ def _report(t: pd.DataFrame, esc_cost: float, out: Path) -> None:
             per = r["milp_approx_err_min"] / max(r["milp_groups"], 1.0)
             print(f"  {r['setup']:>9} 시드 {r['seed']}: 합 {r['milp_approx_err_min']:,.1f}분 "
                   f"· 그룹당 {per:,.3f}분")
-        print("  ⚠ **0 이하여야 한다** — 쌍별로 더하면 겹침을 과대 계산하므로")
-        print("     MILP 목적값은 참값보다 크거나 같다. 양수면 선행 관계가 틀렸다.")
+        print("  ⚠ **부호는 보장되지 않는다.** 크기만 읽는다 — 큐는 열 효과가")
+        print("     더해지지도 겹치지도 않는다. 선행자 둘의 지연이 겹치면 과대,")
+        print("     둘이 같이 있어야 비로소 기다리게 되면 과소다 (engine/milp.py).")
 
     print("\n=== ④ ablation 두 줄 ===")
     for seed, g in t.groupby("seed"):
