@@ -246,3 +246,143 @@ def test_settings_match_s2_except_the_window():
     s2, s3 = S2Settings(**KW), S3Settings(**KW)
     for f in s2.__dataclass_fields__:
         assert getattr(s3, f) == getattr(s2, f), f"{f} 가 다르다"
+
+
+# -- ③ 전수 열거 (#143) — 휴리스틱이 그룹 안에서 얼마나 지나 --------------------
+#
+# `docs/objective.md` §3.5: 이동 연산자의 후보가 **그룹이 쓰는 휴게소로 제한**되므로
+# 조합이 `window ** window` 이하다. window=4 면 256 — 그냥 다 재면 된다. 그리고
+# 채점기(`_group_total`)가 근사가 아니므로 **참 최적해**가 나온다.
+#
+# 그래서 이 섹션은 두 가지를 지킨다.
+#     ① 기본값으로는 **아무것도 바뀌지 않는다** (S3 는 S3 그대로)
+#     ② 켜면 **휴리스틱보다 나쁠 수 없다** — 이게 유일한 수학적 불변식이다
+
+
+def _crowded():
+    """교환이 실제로 일어나는 설정. `test_swap_actually_happens_and_is_counted` 와 같다."""
+
+    stations = [_spec("A", 150.0), _spec("B", 50.0)]
+    offsets = {"A": 100.0, "B": 110.0}
+    evs = [_ev(f"EV{i:03d}", 0.5 * i, soc0=0.40 + 0.03 * i) for i in range(10)]
+    return stations, offsets, evs
+
+
+def _dwell_total(result) -> float:
+    return sum(float(r["dwell_min"]) for r in result.charge_events)
+
+
+def test_exact_group_is_off_by_default():
+    """기본값이 꺼져 있어야 한다. 켜져 있으면 **사다리의 S3 가 S3 가 아니게 된다.**"""
+
+    assert S3Settings(**KW).exact_group is False
+
+
+def test_s3_is_bit_identical_with_exact_group_explicitly_off():
+    """`exact_group=False` 가 리팩터 전 S3 와 같은 답을 줘야 한다.
+
+    `_exact_group` 을 넣으면서 휴리스틱 루프를 `_improve_group` 으로 뽑아냈다.
+    뽑아내기가 동작을 바꾸면 **사다리 숫자가 조용히 달라진다** — 이 프로젝트에서
+    가장 비싼 고장이다 (#123 · #142).
+    """
+
+    stations, offsets, evs = _crowded()
+    a = _run(S3Policy(S3Settings(**KW, window=4)), stations, offsets, evs,
+             ledger=_ledger(stations), forecast=OracleForecast({}, {}))
+    b = _run(S3Policy(S3Settings(**KW, window=4, exact_group=False)),
+             stations, offsets, evs,
+             ledger=_ledger(stations), forecast=OracleForecast({}, {}))
+
+    assert a.charge_events == b.charge_events
+    assert a.escape_events == b.escape_events
+
+
+def test_exact_is_never_worse_than_the_heuristic():
+    """★ 유일한 불변식 — 전수 열거는 휴리스틱보다 **나쁠 수 없다.**
+
+    왜 성립하나: 이동은 `answers[ev] = there (there in targets)` 뿐이므로 쓰이는
+    휴게소 집합이 **커지지 않는다.** 그래서 휴리스틱의 최종 배정은 열거 공간
+    (group -> 초기 targets) **안에 있다.** 열거는 그 공간의 최소를 고르므로 진다.
+
+    이게 깨지면 열거가 공간을 잘못 만들었거나 가드가 휴리스틱보다 빡빡하다는 뜻이다.
+    """
+
+    stations, offsets, evs = _crowded()
+    heur = S3Policy(S3Settings(**KW, window=4))
+    exact = S3Policy(S3Settings(**KW, window=4, exact_group=True))
+
+    rh = _run(heur, stations, offsets, evs,
+              ledger=_ledger(stations), forecast=OracleForecast({}, {}))
+    rx = _run(exact, stations, offsets, evs,
+              ledger=_ledger(stations), forecast=OracleForecast({}, {}))
+
+    # 그룹 단위로 직접 비교한 몫 — 음수면 열거가 휴리스틱에 졌다는 뜻이다
+    assert exact.counters.get("exact_gain_min", 0.0) >= -1e-9, (
+        "열거가 휴리스틱보다 나쁜 그룹이 있다 — 열거 공간이나 가드가 틀렸다")
+    assert exact.counters.get("exact_groups", 0) > 0, "그룹을 하나도 안 풀었다"
+    assert exact.counters.get("exact_tried", 0) > 0, "조합을 하나도 안 재지 않았다"
+
+    # 런 전체로도 나빠지지 않아야 한다 (그룹 경계가 같으므로 비교가 성립한다)
+    assert _dwell_total(rx) <= _dwell_total(rh) + 1e-6
+
+
+def test_exact_searches_more_than_the_heuristic():
+    """열거가 휴리스틱보다 **더 많이** 재야 한다. 아니면 열거가 안 돌고 있는 것이다."""
+
+    stations, offsets, evs = _crowded()
+    exact = S3Policy(S3Settings(**KW, window=4, exact_group=True))
+    _run(exact, stations, offsets, evs,
+         ledger=_ledger(stations), forecast=OracleForecast({}, {}))
+
+    groups = exact.counters["exact_groups"]
+    tried = exact.counters["exact_tried"]
+    # 그룹당 조합 수는 len(targets) ** len(group) <= 4 ** 4 = 256
+    assert tried > groups, "그룹당 한 가지만 재고 있다"
+    assert tried <= groups * 4 ** 4, f"상한(256/그룹)을 넘었다: {tried} / {groups}"
+
+
+def test_exact_is_deterministic():
+    """같은 입력에 같은 답 — 완료조건이다. 동점을 combo 사전순으로 깨뜨린다."""
+
+    stations, offsets, evs = _crowded()
+    out = []
+    for _ in range(2):
+        p = S3Policy(S3Settings(**KW, window=4, exact_group=True))
+        out.append(_run(p, stations, offsets, evs,
+                        ledger=_ledger(stations),
+                        forecast=OracleForecast({}, {})).charge_events)
+    assert out[0] == out[1]
+
+
+def test_the_exact_run_cannot_overwrite_the_s3_run():
+    """★ `S3_EXACT` 는 **따로 스테이지를 받아야** 한다 — run_id 가 갈라져야 한다.
+
+    `exact_group` 만 켜서 돌리면 같은 `__S3__` 를 덮어쓴다. #123 에서 흐린 오라클이
+    날것을 덮어썼고, #142 에서 스윕이 사다리의 S3 를 덮어썼다. **세 번째는 안 된다.**
+    """
+
+    from evdt.config import VALID_STAGES
+    from evdt.io.run_registry import make_run_id
+    from evdt.runner import RUNNABLE_STAGES
+
+    assert "S3_EXACT" in VALID_STAGES
+    assert "S3_EXACT" in RUNNABLE_STAGES
+    assert make_run_id("sc", "S3", 1, 100) != make_run_id("sc", "S3_EXACT", 1, 100)
+
+
+def test_the_db_accepts_the_exact_stage():
+    """`schema.sql` 의 CHECK 와 `VALID_STAGES` 가 **일치해야** 한다 (config.py 주석).
+
+    안 맞으면 런이 끝나는 **순간에** 터진다 — 계산을 다 하고 나서 버리게 된다.
+    """
+
+    from pathlib import Path
+
+    from evdt.config import VALID_STAGES
+
+    sql = Path("src/evdt/sql/schema.sql").read_text(encoding="utf-8")
+    head, _, rest = sql.partition("CHECK (stage IN (")
+    assert rest, "stage CHECK 를 못 찾았다"
+    check, _, _ = rest.partition("))")
+    for st in VALID_STAGES:
+        assert f"'{st}'" in check, f"schema.sql 의 CHECK 에 {st} 가 없다"

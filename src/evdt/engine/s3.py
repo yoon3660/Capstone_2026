@@ -104,6 +104,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import product
 
 from evdt.engine.ledger import Arrival
 from evdt.engine.s2 import S2Policy, S2Settings
@@ -134,6 +135,17 @@ class S3Settings(S2Settings):
 
     #: 교환 개선 패스 수. 한 패스에서 아무것도 안 바뀌면 거기서 멈춘다
     max_rounds: int = 2
+
+    #: 이동·교환 대신 **그룹을 전수 열거**한다 (#143). **사다리 칸이 아니라 진단이다.**
+    #:
+    #: 후보가 그룹이 쓰는 휴게소로 제한되므로 조합이 `window ** window` 이하이고,
+    #: `window=4` 면 256 이다. 채점기(`_group_total`)가 근사가 아니므로 **참
+    #: 목적함수의 진짜 최적해**가 나온다 — 그래서 이 크기에서 MILP 는 할 일이
+    #: 없다 (`docs/objective.md` §3.5).
+    #:
+    #: 켜면 휴리스틱도 같이 돌려 `exact_gain_min` 에 *"휴리스틱이 얼마나 졌나"* 를
+    #: 남긴다. 기본값 False — 켜면 느리고, 무엇보다 **S3 가 아니게 된다.**
+    exact_group: bool = False
 
 
 @dataclass(frozen=True)
@@ -275,6 +287,162 @@ class S3Policy(S2Policy):
         # 아니라 **이탈 통로로 비용을 흘리는 것**이다 — 이 프로젝트에서 네 번 속았다
         return not (esc > 0 and trial[1] > esc and trial[1] > base[1])
 
+
+    def _improve_group(self, ledger, world: WorldView, group: Sequence[str],
+                       by_id: Mapping[str, EVState], answers: dict[str, str],
+                       base: _Total, n: dict[str, int]) -> _Total:
+        """휴리스틱 — 이동·교환을 **이웃만** 본다. `decide()` 에서 그대로 옮겼다.
+
+        뽑아낸 이유는 `_exact_group` 이 **같은 그룹을 두 번 풀어** 둘을 비교하기
+        때문이다 (#143). 비교할 두 쪽이 같은 `_group_total` 을 써야 하므로 이
+        본문을 복사하면 안 된다 — 복사하면 "휴리스틱이 지는 몫" 에 *"비용 계산이
+        갈라진 몫"* 이 섞인다 (#139 가 `_candidate` 를 S1 에서 꺼낸 것과 같은 이유).
+        """
+        for _ in range(max(1, int(self.settings.max_rounds))):
+            changed = 0
+
+            # ① 이동 — 한 대를 **그룹이 이미 쓰는 다른 휴게소**로 보낸다.
+            #
+            #    교환만으로는 쏠린 배정을 못 바꾼다. 둘이 같은 곳이면 바꿀 것이
+            #    없어서 그 쌍은 건너뛴다. 그런데 **쏠림이 바로 고칠 대상**이다 —
+            #    교환만 두면 "연산자가 손을 못 대는 곳" 을 "개선할 것이 없는 곳"
+            #    으로 보고하게 된다.
+            #
+            #    후보를 그룹이 쓰는 집합으로 제한한다: 조정은 **이미 고려된 곳들
+            #    사이의 재분배**다. 새 휴게소를 열면 그건 정보가 늘어난 것이고,
+            #    그러면 정보 축과 섞인다.
+            targets = sorted({answers[i] for i in group})
+            for ev_id in group:
+                here = answers[ev_id]
+                for there in targets:
+                    if there == here:
+                        continue
+                    n["move_tried"] += 1
+                    answers[ev_id] = there
+                    trial = self._group_total(ledger, world, group, by_id, answers)
+                    if self._accept(base, trial):
+                        base = trial
+                        n["move_done"] += 1
+                        changed += 1
+                        here = there
+                    else:
+                        answers[ev_id] = here
+                        self._rebook(ledger, group, answers, base[3])
+
+            # ② 교환 — 두 대의 배정을 맞바꾼다. 어느 한 대의 단독 이동으로는
+            #    나아지지 않지만 **둘을 동시에 바꾸면** 나아지는 경우를 잡는다
+            for x in range(len(group)):
+                for y in range(x + 1, len(group)):
+                    a, b = group[x], group[y]
+                    if answers[a] == answers[b]:
+                        continue
+                    n["swap_tried"] += 1
+                    answers[a], answers[b] = answers[b], answers[a]
+                    trial = self._group_total(ledger, world, group, by_id, answers)
+                    if self._accept(base, trial):
+                        base = trial
+                        n["swap_done"] += 1
+                        changed += 1
+                    else:
+                        answers[a], answers[b] = answers[b], answers[a]
+                        self._rebook(ledger, group, answers, base[3])
+
+            if not changed:
+                break  # 이 패스에서 아무것도 안 바뀌었다 — 더 돌 이유가 없다
+        return base
+
+    def _exact_group(self, ledger, world: WorldView, group: Sequence[str],
+                     by_id: Mapping[str, EVState], answers: dict[str, str],
+                     base: _Total, n: dict[str, int]) -> _Total:
+        """★ 전수 열거 — 이 그룹의 **참 최적해**를 근사 없이 구한다 (#143).
+
+        사다리 칸이 **아니다.** 진단 도구다 (`exact_group` 기본값 False).
+
+        ## 왜 이게 가능한가 — 조합 수에 상한이 있다
+
+        이동 연산자의 후보는 **그룹이 이미 쓰는 휴게소로 제한된다** (`targets`).
+        그래서 배정 조합이 `len(targets) ** len(group)` 이하이고, `window=4` 면
+        **4^4 = 256** 이다. 256 번은 그냥 다 재면 된다.
+
+        그리고 채점기(`_group_total`)는 **근사가 아니다** — 정확한 Σd_i 를 순차
+        투영으로 계산한다. 즉 **참 목적함수의 진짜 최적해**가 나온다.
+
+        > 그래서 이 크기에서는 MILP 가 할 일이 없다. MILP 의 값은 *"같은 W 를 더
+        > 잘 푸는 것"* 이 아니라 **W 를 키울 수 있게 하는 것**이다
+        > (`docs/objective.md` §3.5).
+
+        ## 무엇을 재는가
+
+        휴리스틱을 **먼저 돌려 보고**, 그리디로 되돌린 뒤 전수 열거한다. 둘의 차를
+        `exact_gain_min` 으로 남긴다 — *"S3 의 이동·교환이 그룹 안에서 얼마나
+        손해 보는가"*. **지금까지 이 숫자가 없었다.**
+
+        비용은 열거만 한 것보다 약 14% 더 든다 (휴리스틱 36회 + 열거 256회).
+        그 값으로 **같은 그룹에 대한 직접 비교**를 얻는다 — 런 단위로 따로 돌려
+        비교하면 그룹 경계가 달라져 섞인다.
+
+        ## 가능해 판정은 휴리스틱과 **같은 규칙**을 쓴다
+
+        `_accept` 의 가드를 그리디 기준으로 그대로 적용한다 — 막다른 길을 새로
+        만들지 않고, 한 대를 이탈비용 위로 밀어내지 않는다. 그래야 "휴리스틱이
+        지는 몫" 이 **탐색 범위 차이**만으로 설명된다.
+        """
+
+        greedy = {i: answers[i] for i in group}
+        targets = sorted({answers[i] for i in group})
+
+        # ① 휴리스틱을 먼저 돌린다 (원장과 answers 가 휴리스틱 해로 남는다)
+        heur = self._improve_group(ledger, world, group, by_id, answers, base, n)
+        heur_assign = {i: answers[i] for i in group}
+
+        # ② 그리디로 되돌린다. `_group_total` 이 원장을 answers 상태로 맞춘다
+        for i in group:
+            answers[i] = greedy[i]
+        start = self._group_total(ledger, world, group, by_id, answers)
+        if start is None:                 # 그리디가 이미 불가능 — 휴리스틱 해로 돌아간다
+            for i in group:
+                answers[i] = heur_assign[i]
+            self._rebook(ledger, group, answers, heur[3])
+            return heur
+
+        # ③ 전수 열거. 가드는 **그리디 기준**으로 고정한다
+        esc = self.settings.escape_cost_min
+        best: _Total | None = None
+        best_combo: tuple[str, ...] | None = None
+
+        for combo in product(targets, repeat=len(group)):
+            for i, s in zip(group, combo, strict=True):
+                answers[i] = s
+            trial = self._group_total(ledger, world, group, by_id, answers)
+            n["exact_tried"] += 1
+            if trial is None:
+                continue
+            if trial[2] > start[2]:                       # 막다른 길을 새로 만든다
+                continue
+            if esc > 0 and trial[1] > esc and trial[1] > start[1]:
+                continue                                  # 한 대를 이탈로 밀어낸다
+            # 동점은 combo 사전순으로 깨뜨린다 — 같은 입력에 같은 답이 나와야 한다
+            if best is None or trial[0] < best[0] - COST_EPS:
+                best, best_combo = trial, combo
+
+        if best is None or best_combo is None:
+            for i in group:
+                answers[i] = heur_assign[i]
+            self._rebook(ledger, group, answers, heur[3])
+            return heur
+
+        # ④ 최적해를 적용하고, 휴리스틱이 얼마나 졌는지 남긴다
+        for i, s in zip(group, best_combo, strict=True):
+            answers[i] = s
+        self._rebook(ledger, group, answers, best[3])
+
+        n["exact_groups"] += 1
+        gain = heur[0] - best[0]
+        if gain > COST_EPS:
+            n["exact_better_groups"] += 1
+        self._bump("exact_gain_min", max(gain, 0.0))
+        return best
+
     # -- 하나뿐인 차이 --------------------------------------------------------
     def decide(self, evs: Sequence[EVState], world: WorldView) -> Mapping[str, str]:
         """★ S2 와의 **단 하나의 차이** — 그리디로 한 번 정하고, **이동·교환**을 본다.
@@ -303,7 +471,8 @@ class S3Policy(S2Policy):
             return answers
 
         t0 = time.perf_counter()
-        n = {"move_tried": 0, "move_done": 0, "swap_tried": 0, "swap_done": 0}
+        n = {"move_tried": 0, "move_done": 0, "swap_tried": 0, "swap_done": 0,
+             "exact_tried": 0, "exact_groups": 0, "exact_better_groups": 0}
 
         for start in range(0, len(ids), window):
             group = ids[start:start + window]
@@ -311,57 +480,10 @@ class S3Policy(S2Policy):
             if base is None:
                 continue
 
-            for _ in range(max(1, int(self.settings.max_rounds))):
-                changed = 0
-
-                # ① 이동 — 한 대를 **그룹이 이미 쓰는 다른 휴게소**로 보낸다.
-                #
-                #    교환만으로는 쏠린 배정을 못 바꾼다. 둘이 같은 곳이면 바꿀 것이
-                #    없어서 그 쌍은 건너뛴다. 그런데 **쏠림이 바로 고칠 대상**이다 —
-                #    교환만 두면 "연산자가 손을 못 대는 곳" 을 "개선할 것이 없는 곳"
-                #    으로 보고하게 된다.
-                #
-                #    후보를 그룹이 쓰는 집합으로 제한한다: 조정은 **이미 고려된 곳들
-                #    사이의 재분배**다. 새 휴게소를 열면 그건 정보가 늘어난 것이고,
-                #    그러면 정보 축과 섞인다.
-                targets = sorted({answers[i] for i in group})
-                for ev_id in group:
-                    here = answers[ev_id]
-                    for there in targets:
-                        if there == here:
-                            continue
-                        n["move_tried"] += 1
-                        answers[ev_id] = there
-                        trial = self._group_total(ledger, world, group, by_id, answers)
-                        if self._accept(base, trial):
-                            base = trial
-                            n["move_done"] += 1
-                            changed += 1
-                            here = there
-                        else:
-                            answers[ev_id] = here
-                            self._rebook(ledger, group, answers, base[3])
-
-                # ② 교환 — 두 대의 배정을 맞바꾼다. 어느 한 대의 단독 이동으로는
-                #    나아지지 않지만 **둘을 동시에 바꾸면** 나아지는 경우를 잡는다
-                for x in range(len(group)):
-                    for y in range(x + 1, len(group)):
-                        a, b = group[x], group[y]
-                        if answers[a] == answers[b]:
-                            continue
-                        n["swap_tried"] += 1
-                        answers[a], answers[b] = answers[b], answers[a]
-                        trial = self._group_total(ledger, world, group, by_id, answers)
-                        if self._accept(base, trial):
-                            base = trial
-                            n["swap_done"] += 1
-                            changed += 1
-                        else:
-                            answers[a], answers[b] = answers[b], answers[a]
-                            self._rebook(ledger, group, answers, base[3])
-
-                if not changed:
-                    break  # 이 패스에서 아무것도 안 바뀌었다 — 더 돌 이유가 없다
+            if self.settings.exact_group:
+                base = self._exact_group(ledger, world, group, by_id, answers, base, n)
+            else:
+                base = self._improve_group(ledger, world, group, by_id, answers, base, n)
 
         for k, v in n.items():
             self._bump(k, float(v))

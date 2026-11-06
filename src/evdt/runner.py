@@ -421,7 +421,8 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
-RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4", "PERFECT_ROLLING")
+RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4",
+                                   "S3_EXACT", "PERFECT_ROLLING")
 
 
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
@@ -724,12 +725,12 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
     # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
     # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
     ledger = forecast = None
-    if stage in ("S2", "S3", "S4", "PERFECT_ROLLING"):
+    if stage in ("S2", "S3", "S4", "S3_EXACT", "PERFECT_ROLLING"):
         # 예측은 **S2 부터만** 쓴다. S1 에 주면 안 쓰고도 받는 셈이라 "무엇이
         # 달라졌나" 가 흐려진다 (원장을 S0 에 주지 않는 것과 같은 이유)
         # **어느 예측을 쓰느냐가 곧 스테이지다.** 같은 S2Policy 를 쓰지만 run_id 가
         # 갈라져야 둘을 나란히 놓을 수 있다 (안 그러면 서로 덮어쓴다)
-        if stage in ("S2", "S3", "S4") and observed is None:
+        if stage in ("S2", "S3", "S4", "S3_EXACT") and observed is None:
             raise ValueError(
                 f"{stage} 는 **관측 가능한 것만으로 하는 예측**을 쓴다 (#119) — "
                 "`observed=ObservedSpec(...)` 가 필요하다. 시뮬레이터의 실제 미래를 "
@@ -746,11 +747,20 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 **({} if s3_window is None else {"window": int(s3_window)}),
                 **({} if s4_lead_min is None
                    else {"relocate_lead_min": float(s4_lead_min)})))
-        elif stage == "S3":
+        elif stage in ("S3", "S3_EXACT"):
             # ★ 윈도우는 **이탈 수를 흔드는 손잡이**다. 기본값으로 조용히 돌면 어느
             #   윈도우의 결과인지 모른 채 사다리에 올라간다 — #101·#123 과 같은 고장
+            #
+            # S3_EXACT 는 이동·교환 대신 **그룹을 전수 열거**한다 (#143). 사다리 칸이
+            # 아니라 진단이다 — *"휴리스틱이 그룹 안에서 얼마나 손해 보는가"* 를 재고,
+            # 그 답이 MILP 를 붙일 가치가 있는지를 가른다 (`docs/objective.md` §3.5).
+            #
+            # **스테이지를 따로 받은 이유**는 run_id 다. `exact_group` 만 켜서 돌리면
+            # 같은 `__S3__` 를 덮어쓴다 — #123 에서 밟았고 #142 에서 또 밟은 함정이다
             policy = S3Policy(S3Settings(
-                **kw, **({} if s3_window is None else {"window": int(s3_window)})))
+                **kw,
+                **({} if s3_window is None else {"window": int(s3_window)}),
+                **({"exact_group": True} if stage == "S3_EXACT" else {})))
         else:
             policy = S2Policy(S2Settings(**kw))
         ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
