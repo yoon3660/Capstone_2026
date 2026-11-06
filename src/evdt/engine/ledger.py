@@ -78,7 +78,21 @@ class StationLedger:
 
     def evaluate(self, arr: Arrival, *, exclude: str | None = None,
                  extra: Sequence[Arrival] = ()) -> float:
-        """이 차가 arr.arrival_min 에 들어오면 머무는 시간(분) = 대기 + 충전. 원장은 그대로.
+        """체류시간(분)만. `evaluate_parts` 의 첫 칸이다 — 계산은 한 곳에만 있다."""
+
+        return self.evaluate_parts(arr, exclude=exclude, extra=extra)[0]
+
+    def evaluate_parts(self, arr: Arrival, *, exclude: str | None = None,
+                       extra: Sequence[Arrival] = ()) -> tuple[float, float]:
+        """이 차가 arr.arrival_min 에 들어오면 `(체류, 대기)` (분). 원장은 그대로.
+
+        체류 = 대기 + 충전이다. **둘을 따로 돌려주는 이유**는 목적함수가 대기를
+        충전보다 무겁게 셀 수 있어야 하기 때문이다 (`Objective.wait_weight`,
+        설계문서 §6.3 의 1.0~1.5 민감도). 여기서 갈라 주지 않으면 정책이 대기만
+        따로 알 길이 없고, 그러면 그 민감도를 아예 못 돌린다.
+
+        충전시간은 **배정된 충전기 출력에 따라 달라진다** — 그래서 큐 규칙을
+        거치지 않고는 가를 수 없다. `assign` 이 이미 둘을 다 들고 있다.
 
         FIFO 라서 **먼저 온 차들만** 답을 정한다. exclude 에 준 차가 원장에서 그보다
         앞에 있으면 그 차를 빼고 다시 쌓는다 — 자기 자신과 줄을 설 수는 없다.
@@ -126,4 +140,4 @@ class StationLedger:
             state = chargers_after(state, [one])
 
         (a,) = assign([arr], state)
-        return a.end_min - float(arr.arrival_min)
+        return a.end_min - float(arr.arrival_min), a.wait_min

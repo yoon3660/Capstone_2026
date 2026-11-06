@@ -51,6 +51,23 @@ S4 골격(#142)은 시드 1 에서 **S3 보다 나빴다**.
 > 때 이미 431h 를 잃고 있어서, 리드타임을 돌려 얻은 선은 교란 두 개의 합이다.
 > 먼저 ①을 없애야 그 질문을 물을 수 있다.
 
+## ★ ①과 ②를 둘 다 없앴다 (#143) — **이 스윕을 다시 돌려야 한다**
+
+위 표의 두 겹은 **사후 거부 구현의 성질**이었다. #143 이 둘을 없앴다.
+
+| | 그때 | 지금 |
+|---|---|---|
+| ② 사후 거부의 비일관 | 계획을 세운 **뒤** 한 대만 되돌렸다 | **계획에서 고정한다** — 결정변수에서 빼고 원장에는 남긴다 |
+| ① 윈도우 오염 | 고정된 차가 후보로 들어와 그룹을 흔들었다 | 고정된 차는 **그룹에 안 들어간다** |
+
+그래서 이제 **`--leads inf` 가 정의상 S3 다** (`S4Policy` 가 전부 고정하면 S3 의
+입력과 같아진다). `tests/test_s4.py::test_locking_everything_reproduces_s3` 가
+그것을 지킨다 — 즉 위 표의 **+431.4h 는 더 이상 재현되지 않아야 한다.**
+
+> ⚠ 그리고 위 숫자들은 전부 **옛 그룹 채점기**로 잰 것이다. #143 이
+> `_group_total` 이 윈도우 안 상호작용을 한 번도 안 세고 있던 것을 찾았다.
+> `params_json` 의 `group_scorer` 가 없어서, 옛 run 은 `stale_reason` 이 막는다.
+
 ## ⚠ run_id 가 리드타임을 구분하지 못한다
 
 S4 는 어느 리드타임으로 돌아도 `__S4__` 다. 그래서 이 스윕은 **같은 run_id 를
@@ -143,9 +160,15 @@ def kpis(run_id: str, escape_cost_min: float) -> dict[str, float]:
         "wait_p95_min": g("wait_p95_min"),
         "bottleneck_slots": g("bottleneck_slots"),
         "n_ev_charging": g("n_ev_charging"),
-        # ★ 리드타임이 실제로 무엇을 막았나
+        # ★ 리드타임이 실제로 무엇을 막았나.
+        #
+        # ⚠ #143 이 **사후 거부를 없앴다.** `s4_relocate_vetoed` 는 더 이상
+        # 없다 — 임박한 차는 계획에서 **고정**되므로 거부할 일이 생기지 않는다.
+        # 대신 셋을 본다: 고정 / 옮길 수 있었던 / 실제로 옮긴.
+        "s4_locked": g("s4_locked"),
+        "s4_reassignable": g("s4_reassignable"),
         "s4_relocated": g("s4_relocated"),
-        "s4_relocate_vetoed": g("s4_relocate_vetoed"),
+        "s4_reassign_cost_min": g("s4_reassign_cost_min"),
         "s4_lead_min": g("s4_lead_min"),
         "s3_swaps": g("s3_swaps"),
         "s3_moves": g("s3_moves"),
@@ -239,7 +262,8 @@ def _save(rows: list[dict], out) -> None:
 
 def _report(t: pd.DataFrame, out) -> None:
     cols = ["seed", "stage", "lead_min", "total_h", "dwell_total_h", "n_escaped",
-            "wait_mean_min", "bottleneck_slots", "s4_relocated", "s4_relocate_vetoed"]
+            "wait_mean_min", "bottleneck_slots", "s4_locked", "s4_reassignable",
+            "s4_relocated"]
 
     print("\n=== 리드타임 스윕 ===")
     print(t[cols].to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
@@ -256,7 +280,7 @@ def _report(t: pd.DataFrame, out) -> None:
             flag = "  ⚠ 이탈 차이 큼 — 비교 성립 안 함" if abs(de) > ESCAPE_TOL else ""
             print(f"  리드 {r['lead_min']:>4.0f}분  {d:+8.1f}h  "
                   f"(이탈 {de:+.0f}, 재배정 {r['s4_relocated']:,.0f}, "
-                  f"거부 {r['s4_relocate_vetoed']:,.0f}){flag}")
+                  f"고정 {r['s4_locked']:,.0f}){flag}")
 
     print(f"\nCSV: {out}")
     print("\n⚠ DB 에는 **마지막 리드타임의 run 만** 남는다 (run_id 가 리드타임을")

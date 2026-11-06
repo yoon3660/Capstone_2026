@@ -111,12 +111,15 @@ def test_settings_match_s3_except_the_lead():
 
 # -- ② 효과 — 실제로 옮기는가 -------------------------------------------------
 
-def test_the_lead_time_puts_a_car_back(monkeypatch):
-    """★ 도착이 임박한 차가 옮겨지면 **원래 자리로 되돌린다.**
+def _driving_world():
+    """A 로 가고 있는 차 한 대. **B 가 더 좋아서 옮길 이유가 있다.**
 
-    전체 시뮬레이션이 아니라 `decide()` 를 직접 부른다. 재배정은 **정보가 바뀔 때**
-    일어나는데(아래 주석) 장난감 세계에는 바뀔 정보가 없어서, 시뮬레이션으로는
-    이 분기를 못 밟는다.
+    지금 100분, 100km 지점. A 는 160km(50kW 1대) 라서 160분에 닿고, B 는
+    200km(200kW 2대) 다. 그래서 *"옮기면 이득, 그런데 값을 치러야 한다"* 를
+    한 대로 잴 수 있다.
+
+    `decide()` 를 직접 부르는 이유: 재배정은 **정보가 바뀔 때** 일어나는데
+    장난감 세계에는 바뀔 정보가 없어서 시뮬레이션으로는 이 분기를 못 밟는다.
     """
 
     from evdt.engine.ledger import Arrival
@@ -143,29 +146,76 @@ def test_the_lead_time_puts_a_car_back(monkeypatch):
         vmax_kw=200.0, dest_offset_km=300.0, is_participant=True,
         consumption_kwh_km=CONSUMPTION, curve=FLAT)
 
-    # 이 차는 **A 로 가고 있고 곧 닿는다** (지금 100분, 도착 160km → 160분)
     ledger.book("EV001", "A", Arrival(
         ev_id="EV001", arrival_min=160.0, soc_from=0.35, soc_to=0.8,
         battery_kwh=BATTERY, vmax_kw=200.0, curve=FLAT, charge_power_factor=1.0))
 
-    # 리드타임이 여유보다 크면(60분 남았는데 120분 요구) **되돌려야 한다**
-    blocked = S4Policy(S4Settings(**KW, window=4, relocate_lead_min=120.0))
-    ans = blocked.decide([ev], world)
-    assert ans["EV001"] == "A", "임박한 차가 옮겨졌다"
-    assert blocked.counters.get("relocate_vetoed", 0) >= 0
+    return ev, world, ledger
 
-    # 리드타임이 0 에 가까우면 막지 않는다 — 정책이 고른 그대로 둔다
-    ledger2 = _led(stations)
-    ledger2.book("EV001", "A", Arrival(
-        ev_id="EV001", arrival_min=160.0, soc_from=0.35, soc_to=0.8,
-        battery_kwh=BATTERY, vmax_kw=200.0, curve=FLAT, charge_power_factor=1.0))
-    world2 = WorldView(
-        t_min=100.0, stations=world.stations, temp_c=20.0, cold_factor=1.0,
-        range_factor=1.0, ledger=ledger2, forecast=OracleForecast({}, {}))
-    free = S4Policy(S4Settings(**KW, window=4, relocate_lead_min=0.1))
-    ans2 = free.decide([ev], world2)
-    assert ans2["EV001"] in ("A", "B")
-    assert free.counters.get("relocate_vetoed", 0) == 0, "안 막아야 하는데 막았다"
+
+def test_a_car_inside_the_hard_lock_is_pinned_not_vetoed():
+    """★ 도착이 임박한 차는 **계획에서 고정된다** — 사후에 되돌리지 않는다.
+
+    #142 가 사후 거부로 구현했을 때 **재배정 0회인데 S3 보다 431h 나빴다.**
+    계획이 "이 차가 비켜 준다" 를 전제로 남을 옮기고, 그 차만 되돌렸기 때문이다.
+
+    그래서 두 가지를 같이 본다.
+
+        답이 σ₀ 인가              — 안 옮겼나
+        **원장이 그대로인가**     — 계산에서 사라지지 않았나
+
+    둘째가 핵심이다. 고정된 차를 원장에서도 빼면 남은 차들이 *"거기가 한산하다"*
+    고 잘못 보고, 그 위에 세운 계획이 또 틀린 전제를 갖는다.
+    """
+
+    ev, world, ledger = _driving_world()
+    before = ledger.reservation("EV001")
+
+    # 60분 남았는데 120분을 요구한다 → 고정
+    pinned = S4Policy(S4Settings(**KW, window=4, hard_lock_min=120.0))
+    assert pinned.decide([ev], world)["EV001"] == "A", "고정한 차가 옮겨졌다"
+    assert pinned.counters["locked"] == 1.0
+    assert pinned.counters["reassignable"] == 0.0
+    assert ledger.reservation("EV001") == before, "고정한 차의 예약이 바뀌었다"
+
+
+def test_the_reassignment_cost_decides_whether_a_car_moves():
+    """★ $r_i$ 가 **목적함수 안에** 있다 — 비싸지면 안 옮긴다.
+
+    같은 세계·같은 차인데 `reassign_base` 만 바꾼다. 옮기는 이득은 고정이므로
+    **값이 이득보다 커지는 순간 안 옮겨야** 한다. 이것이 사후 거부와 다른 점이다:
+    거부는 "옮긴 뒤 되돌리기" 이고, 비용은 "옮길지 말지를 계획에서 정하기" 다.
+    """
+
+    def where(reassign_base: float) -> str:
+        ev, world, _ = _driving_world()
+        policy = S4Policy(S4Settings(
+            **KW, window=4, hard_lock_min=0.1, reassign_base=reassign_base))
+        return policy.decide([ev], world)["EV001"]
+
+    assert where(0.0) == "B", "공짜인데 안 옮겼다 — 옮길 이유가 있는 세계가 아니다"
+    assert where(5.0) == "B", "5분은 이득보다 작다"
+    assert where(1.0e6) == "A", "값이 이득보다 큰데 옮겼다 — r_i 가 안 걸렸다"
+
+
+def test_the_greedy_pass_also_pays_the_reassignment_cost():
+    """$r_i$ 가 **윈도우에 혼자 있는 차에게도** 걸려야 한다.
+
+    `S3Policy.decide` 는 2대 미만이면 그룹 최적화를 아예 건너뛴다. 그래서 r_i 를
+    그룹 채점기에만 넣으면 **혼자인 차는 공짜로 옮겨 다닌다** — 목적함수에 항이
+    있는데 절반의 차에게만 걸리는 상태다. 실제로 처음 구현이 그랬다.
+
+    위 테스트가 차 **한 대**로 돌기 때문에 이미 이 경로를 밟는다. 여기서는
+    *"그리디가 보는 자리에 훅이 있다"* 를 코드로 고정한다 — 지워지면 위 테스트가
+    왜 깨지는지 찾는 데 오래 걸린다.
+    """
+
+    import inspect
+
+    from evdt.engine.s1 import S1Policy
+
+    assert "_extra_cost" in inspect.getsource(S1Policy._one), (
+        "그리디 argmin 에서 `_extra_cost` 가 사라졌다 — 혼자인 차가 공짜로 옮겨진다")
 
 
 def test_relocation_needs_changing_information():
@@ -185,7 +235,7 @@ def test_relocation_needs_changing_information():
 
     s3 = _run(S3Policy(S3Settings(**KW, window=10)), stations, offsets, evs,
               ledger=_led(stations), forecast=fc)
-    s4 = _run(S4Policy(S4Settings(**KW, window=10, relocate_lead_min=0.5)),
+    s4 = _run(S4Policy(S4Settings(**KW, window=10, hard_lock_min=0.5)),
               stations, offsets, evs, ledger=_led(stations), forecast=fc)
 
     assert s4.n_reasked > 0, "가고 있는 차를 묻기는 해야 한다"
@@ -201,7 +251,7 @@ def test_a_driving_car_is_never_sent_backwards():
     stations, offsets = _world()
     evs = [_ev(f"EV{i:03d}", 1.5 * i, soc0=0.46 + 0.01 * i) for i in range(12)]
 
-    out = _run(S4Policy(S4Settings(**KW, window=12, relocate_lead_min=0.5)),
+    out = _run(S4Policy(S4Settings(**KW, window=12, hard_lock_min=0.5)),
                stations, offsets, evs, ledger=_led(stations),
                forecast=OracleForecast({}, {}))
 
@@ -331,3 +381,142 @@ def _cfg():
     from evdt.runner import load_config
 
     return load_config("config/scenario_seollal_up_adoption.yaml", stage="S4")
+
+
+def test_locking_everything_reproduces_s3():
+    """★ `hard_lock_min = inf` 면 **S3 와 같은 답**이 나와야 한다.
+
+    `docs/objective.md` §2b 가 요구한 검산이다 — *"$r_i = M$ 을 모든 가던 차에
+    주면 그 차들은 못 움직이고, 그러면 S3 와 같은 답이 나와야 한다."*
+
+    **사후 거부 구현은 이 검산을 통과하지 못했다.** 리드타임을 100,000분으로 줘서
+    재배정을 0회로 만들었는데도 S3 보다 431h 나빴다 (`engine/s4.py` 모듈 문서).
+    계획을 세운 뒤에 되돌렸기 때문이다. 지금은 **계획에서 고정**하므로 통과한다.
+
+    ## 이 세계에서는 "안 움직인다" 쪽도 같다
+
+    장난감 세계에는 Δt 마다 바뀔 정보가 없어서 고정을 풀어도 재배정이 0 이다
+    (`test_relocation_needs_changing_information`). 그래서 이 테스트는
+    **배선 검산**이다 — 고정 경로가 실제로 돌았는지를 `locked` 로 확인한다.
+    """
+
+    stations, offsets = _world()
+    evs = [_ev(f"EV{i:03d}", 1.5 * i, soc0=0.46 + 0.01 * i) for i in range(10)]
+    fc = OracleForecast({}, {})
+
+    s3 = _run(S3Policy(S3Settings(**KW, window=10)), stations, offsets, evs,
+              ledger=_led(stations), forecast=fc)
+    locked = S4Policy(S4Settings(**KW, window=10, hard_lock_min=float("inf")))
+    s4 = _run(locked, stations, offsets, evs, ledger=_led(stations), forecast=fc)
+
+    assert locked.counters["locked"] > 0, "고정 경로를 한 번도 안 밟았다"
+    assert locked.counters["reassignable"] == 0.0, "전부 고정인데 옮길 수 있는 차가 있다"
+    assert s4.n_relocated == 0
+    assert ([e["station_id"] for e in s4.charge_events]
+            == [e["station_id"] for e in s3.charge_events]), "S3 를 재현하지 못했다"
+    assert (sum(e["wait_min"] for e in s4.charge_events)
+            == sum(e["wait_min"] for e in s3.charge_events))
+
+
+def test_an_en_route_car_is_never_allowed_to_bail_out():
+    """★ 가던 차가 이탈을 답하면 **원래 예약으로 되돌린다.**
+
+    시뮬레이터는 가던 차의 이탈 답을 무시한다 (의도된 설계 — "중간 포기" 는
+    시간축 결합이 아니다). 그런데 `S1Policy._one` 은 이탈을 고를 때 **원장에서
+    예약을 뺀다.** 둘이 겹치면
+
+        정책: 예약을 뺐다        세계: 차는 원래 휴게소로 계속 간다
+        ⇒ 뒤 차들은 그 자리가 비었다고 보는데 실제로는 그 차가 거기 선다
+
+    이탈 비용을 1분으로 두면 어느 휴게소든 그 위라서 반드시 이탈을 고른다.
+    """
+
+    ev, world, ledger = _driving_world()
+    before = ledger.reservation("EV001")
+
+    policy = S4Policy(S4Settings(
+        **KW, window=4, hard_lock_min=0.1, escape_cost_min=1.0))
+    answer = policy.decide([ev], world)["EV001"]
+
+    assert answer == "A", f"가던 차가 이탈 답을 냈다: {answer!r}"
+    assert policy.counters["enroute_opt_out_blocked"] == 1.0
+    assert ledger.reservation("EV001") == before, (
+        "예약이 사라졌다 — 예약 없는 차가 도착한다")
+
+
+def test_the_objective_values_live_in_one_place():
+    """목적함수의 값이 **`Objective` 하나에서** 나와야 한다 (§7 의 민감도 손잡이).
+
+    흩어 두면 민감도를 돌릴 때 무엇을 움직였는지 알 수 없다.
+    """
+
+    from evdt.engine.objective import Objective
+
+    settings = S4Settings(**KW, hard_lock_min=20.0, reassign_base=3.0,
+                          wait_weight=1.25)
+    assert settings.objective == Objective(
+        time_value=1.0, wait_weight=1.25, reassign_base=3.0, hard_lock_min=20.0)
+
+
+def test_s4_settings_refuse_a_terminal_penalty():
+    """terminal penalty 는 #144 다 — 넣은 척하면 안 된다."""
+
+    with pytest.raises(NotImplementedError, match="#144"):
+        S4Settings(**KW, terminal_weight=0.5)
+
+
+# -- ⑤ 러너 통로 (#143) ------------------------------------------------------
+
+def test_engine_opts_are_written_down_as_one_sorted_line():
+    """엔진 설정이 `params_json` 에 남아야 한다 — 손잡이가 늘어도 통로는 하나다."""
+
+    from evdt.runner import run_params
+
+    cfg = _cfg()
+    spec = run_params(cfg, engine_opts={"solver": "milp", "reassign_base": 5.0})
+    assert spec["engine_opts"] == "reassign_base=5.0,solver=milp", spec["engine_opts"]
+    assert run_params(cfg)["engine_opts"] is None
+    assert "engine_opts" in run_params(cfg)
+
+
+def test_an_unknown_engine_opt_stops_instead_of_being_ignored():
+    """철자가 틀리면 **그 자리에서** 멈춘다.
+
+    조용히 무시하면 `params_json` 에는 적히고 효과는 없다 — 나중에 *"손잡이를
+    돌렸는데 결과가 같다"* 를 설명할 수 없다. 이 프로젝트에 다섯 번 있었다.
+    """
+
+    import pytest as _pytest
+
+    from evdt.engine.s4 import S4Settings
+    from evdt.runner import engine_settings
+
+    assert engine_settings({"solver": "milp", "window": "6"}, S4Settings) == {
+        "solver": "milp", "window": 6}
+    with _pytest.raises(ValueError, match="없는 엔진 설정"):
+        engine_settings({"solvr": "milp"}, S4Settings)
+
+
+def test_a_run_scored_by_the_blind_scorer_is_not_reused():
+    """★ 옛 S3·S4 run 은 **재사용하지 않는다** (#143).
+
+    `group_scorer` 가 없는 run 은 윈도우 안 상호작용을 한 번도 안 세는 채점기로
+    돌았다. 다른 칸들은 "기록에 없으면 안 버린다" 가 맞지만 (나중에 추가된 키라서),
+    여기서는 **옛 run 이 틀린 값**이다 — 조용히 쓰면 틀린 기준선 위에 사다리를
+    쌓는다 (#55 와 같은 고장).
+    """
+
+    from evdt.runner import load_config, run_params, stale_reason
+
+    cfg = _cfg()
+    fresh = run_params(cfg)
+    assert stale_reason(fresh, cfg) is None, "방금 만든 기록이 안 맞는다"
+
+    old = {k: v for k, v in fresh.items() if k != "group_scorer"}
+    why = stale_reason(old, cfg)
+    assert why is not None and "group_scorer" in why, f"옛 채점기를 못 잡았다: {why}"
+
+    # S0~S2 는 그룹 채점기를 안 쓰므로 **버리지 않는다**
+    s2 = load_config("config/scenario_seollal_up_adoption.yaml", stage="S2")
+    assert stale_reason({k: v for k, v in run_params(s2).items()
+                         if k != "group_scorer"}, s2) is None

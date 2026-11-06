@@ -92,12 +92,23 @@ class ReservationLedger:
         거기서 안 보인다** — 이 원장만 전체 예약을 안다. 그래서 여기서 뺀다.
         """
 
+        return self.dwell_parts_if_i_go(station_id, arr, future=future)[0]
+
+    def dwell_parts_if_i_go(self, station_id: str, arr: Arrival,
+                            *, future: Sequence[Arrival] = ()) -> tuple[float, float]:
+        """`dwell_if_i_go` 와 같은 질문인데 `(체류, 대기)` 를 돌려준다.
+
+        목적함수가 대기를 충전보다 무겁게 셀 수 있어야 해서 갈라 준다
+        (`Objective.wait_weight`). 체류 하나만 필요하면 `dwell_if_i_go` 를 쓴다 —
+        **계산은 이 함수 한 곳에만 있다.**
+        """
+
         led = self.stations.get(station_id)
         if led is None:
             raise KeyError(f"원장에 없는 휴게소다: {station_id}")
         if future:
             future = [f for f in future if f.ev_id not in self._res]
-        return led.evaluate(arr, exclude=arr.ev_id, extra=future)
+        return led.evaluate_parts(arr, exclude=arr.ev_id, extra=future)
 
     def booked(self, station_id: str) -> int:
         """그 휴게소에 **아직 안 온** 예약 수. 정책이 몰림을 보는 가장 싼 신호다."""
