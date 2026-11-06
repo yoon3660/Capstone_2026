@@ -107,6 +107,10 @@ def get_conn(
 #:
 #: NOT NULL 컬럼은 SQLite 규칙상 DEFAULT 가 있어야 추가할 수 있다. 기존 행에는
 #: 그 기본값이 들어가므로, "모르는 값" 으로 읽히는 기본값을 골라야 한다.
+#: `run.stage` 의 CHECK 는 이 목록과 일치해야 한다. 어긋나면 런이 **끝나는
+#: 순간에** 터진다 — 계산을 다 하고 나서 버리게 된다
+from evdt.config import VALID_STAGES  # noqa: E402
+
 MIGRATIONS: list[tuple[str, str, str]] = [
     (
         "cell",
@@ -119,6 +123,88 @@ MIGRATIONS: list[tuple[str, str, str]] = [
 
 def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row["name"] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+
+
+def _table_sql(conn: sqlite3.Connection, table: str) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return (row[0] or "") if row else ""
+
+
+def migrate_stage_check(conn: sqlite3.Connection) -> bool:
+    """`run.stage` 의 CHECK 에 빠진 스테이지가 있으면 **테이블을 다시 만든다**.
+
+    돌려주는 것: 다시 만들었나.
+
+    ## 왜 필요한가
+
+    `schema.sql` 은 `CREATE TABLE IF NOT EXISTS` 다. 그래서 **이미 있는 DB 의 CHECK
+    는 영원히 안 바뀐다.** 스테이지를 하나 더하면 새 DB 에서는 되고 기존 DB 에서는
+    런이 끝나는 순간 터진다.
+
+        sqlite3.IntegrityError: CHECK constraint failed: stage IN (...)
+
+    #143 에서 `S3_EXACT` 를 더하면서 실제로 그랬다. #138 의 `MEC` 도 같은 길을
+    갈 것이므로, 한 번 제대로 만들어 둔다.
+
+    ## SQLite 에서 CHECK 는 ALTER 로 못 바꾼다
+
+    표준 절차는 **테이블을 다시 만드는 것**이다. 조심할 곳이 둘이다.
+
+    1. `run_kpi` 가 `REFERENCES run(run_id) ON DELETE CASCADE` 다. 외래키를 켠 채로
+       `run` 을 지우면 **KPI 가 전부 같이 지워진다.** 그래서 `foreign_keys=OFF` 로
+       두고 바꾼다 (그 PRAGMA 는 트랜잭션 안에서는 무시되므로 **밖에서** 꺼야 한다)
+    2. `UNIQUE (scenario_id, stage, seed, participation)` 과 인덱스를 다시 만들어야
+       한다 — 안 만들면 중복 실험을 막는 장치가 조용히 사라진다 (설계문서 §9.3)
+
+    ## 새 DDL 을 **손으로 쓰지 않는다**
+
+    처음에는 새 테이블의 CREATE 문을 직접 적었다. 틀렸다 — 살아 있는 테이블에는
+    `code_dirty` · `output_dir` · `error_message` 처럼 나중에 더해진 칸이 있고,
+    `participation` 은 REAL 이며 (`INTEGER` 로 적었다) 칸마다 CHECK 가 더 붙어
+    있었다. **손으로 적은 스키마는 실제 스키마와 반드시 어긋난다.**
+
+    그래서 **그 테이블의 DDL 을 읽어 와서 스테이지 목록만 바꿔 끼운다.** 칸·기본값·
+    CHECK·UNIQUE 가 전부 그대로 따라오고, 나중에 칸이 더 생겨도 이 함수는 그대로
+    맞는다.
+    """
+
+    sql = _table_sql(conn, "run")
+    if not sql:
+        return False
+
+    head, sep, rest = sql.partition("CHECK (stage IN (")
+    if not sep:
+        return False
+    check, close, tail = rest.partition("))")
+    if not close:
+        return False
+    if all(f"'{st}'" in check for st in VALID_STAGES):
+        return False                      # 빠진 것이 없다
+
+    stages = ", ".join(f"'{st}'" for st in VALID_STAGES)
+    new_ddl = head + sep + f"\n                       {stages}\n                   " + close + tail
+
+    # 테이블 이름만 임시로 바꾼다. `CREATE TABLE run (` 를 정확히 한 번 갈아 끼운다
+    for pat in ('CREATE TABLE "run" (', "CREATE TABLE run ("):
+        if new_ddl.count(pat) == 1:
+            new_ddl = new_ddl.replace(pat, "CREATE TABLE run_migrating (", 1)
+            break
+    else:
+        return False
+
+    cols = [row["name"] for row in conn.execute('PRAGMA table_info("run")')]
+    quoted = ", ".join(f'"{c}"' for c in cols)
+
+    conn.executescript(
+        f"{new_ddl};\n"
+        f"INSERT INTO run_migrating ({quoted}) SELECT {quoted} FROM run;\n"
+        "DROP TABLE run;\n"
+        "ALTER TABLE run_migrating RENAME TO run;\n"
+        "CREATE INDEX IF NOT EXISTS idx_run_scenario_stage ON run (scenario_id, stage);\n"
+    )
+    return True
 
 
 def apply_migrations(conn: sqlite3.Connection) -> list[str]:
@@ -154,8 +240,27 @@ def init_db(db_path: str | Path | None = None, *, schema_path: Path | None = Non
         added = apply_migrations(conn)
         found = set(table_names(conn))
 
+    # ⚠ stage CHECK 는 테이블을 다시 만들어야 바뀐다. `run_kpi` 가 CASCADE 로
+    #   매달려 있어서 외래키를 **끈 채로** 해야 하고, 그 PRAGMA 는 트랜잭션 안에서
+    #   무시되므로 `get_conn` 밖에서 따로 연다
+    rebuilt = False
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            rebuilt = migrate_stage_check(conn)
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+        if rebuilt:
+            bad = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if bad:
+                raise SchemaError(
+                    f"run 테이블을 다시 만든 뒤 외래키가 깨졌다: {bad[:5]}")
+
     for column in added:
         print(f"[스키마 변경] 컬럼 추가: {column}")
+    if rebuilt:
+        print("[스키마 변경] run.stage CHECK 를 다시 만들었다 (스테이지 추가)")
 
     missing = [t for t in EXPECTED_TABLES if t not in found]
     if missing:
