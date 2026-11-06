@@ -1024,7 +1024,11 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                     policy.counters.get("milp_approx_err_min", 0.0), "min"),
                 "milp_approx_abs_min": (
                     policy.counters.get("milp_approx_abs_min", 0.0), "min"),
+                # `milp_binaries` 는 금지 칸까지 센 전체이고 `milp_cands` 는 **고를
+                # 수 있는 것**만이다. 둘의 비가 **한 런 안에서** 필터의 기여다
                 "milp_binaries": (policy.counters.get("milp_binaries", 0.0), "count"),
+                "milp_cands": (policy.counters.get("milp_cands", 0.0), "count"),
+                "milp_rows": (policy.counters.get("milp_rows", 0.0), "count"),
                 "milp_pairs": (policy.counters.get("milp_pairs", 0.0), "count"),
                 "milp_solve_s": (policy.counters.get("milp_solve_s", 0.0), "s"),
                 "milp_scope": (SCOPE_CODE[policy.settings.candidate_scope], "code"),

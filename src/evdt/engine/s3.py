@@ -629,8 +629,8 @@ class S3Policy(S2Policy):
                 st = world.stations.get(sid)
                 if st is None:
                     continue
-                cand = (None if st is None else
-                        self._candidate(ev, world, ledger, st, rf, opportunity=opportunity))
+                cand = self._candidate(ev, world, ledger, st, rf,
+                                       opportunity=opportunity)
                 if cand is None:
                     if wide:            # 필터를 끈 자리 — 변수는 만들고 0 으로 묶는다
                         opts.append(sid)
@@ -744,6 +744,10 @@ class S3Policy(S2Policy):
 
         sol = solve_group(problem, time_limit_s=float(self.settings.milp_time_limit_s))
         self._bump("milp_solve_s", sol.solve_time_s)
+        # 완료조건이 **변수와 제약을 둘 다** 요구한다 (#143). 제약 수는 모형이
+        # 커지는 모양을 보여 준다 — 변수는 |C_i| 로 늘고 제약은 선행쌍으로 늘어서
+        # 둘이 다른 속도로 커진다
+        self._bump("milp_rows", float(sol.n_constraints))
         n["milp_groups"] += 1
         if sol.time_limit_hit:
             n["milp_timeouts"] += 1

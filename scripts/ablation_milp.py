@@ -91,7 +91,7 @@ METRICS = ("dwell_total_h", "n_escaped", "wait_mean_min", "bottleneck_slots",
            "milp_groups", "milp_better_groups", "milp_tied_groups",
            "milp_lost_groups", "milp_rejected_groups", "milp_timeouts",
            "milp_gain_min", "milp_approx_err_min", "milp_approx_abs_min",
-           "milp_binaries", "milp_pairs", "milp_solve_s",
+           "milp_binaries", "milp_cands", "milp_rows", "milp_pairs", "milp_solve_s",
            "exact_groups", "exact_better_groups", "exact_tried", "exact_gain_min")
 
 
@@ -133,7 +133,8 @@ def _report(t: pd.DataFrame, esc_cost: float, out: Path) -> None:
     print(t[cols].to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
 
     print("\n=== ② 후보 필터링 전후 — 변수 수 ===")
-    size = ["setup", "milp_binaries", "milp_pairs", "milp_groups", "milp_solve_s"]
+    size = ["setup", "milp_binaries", "milp_cands", "milp_rows", "milp_pairs",
+            "milp_groups", "milp_solve_s"]
     m = t[t["setup"].str.startswith("milp")]
     if not m.empty:
         print(m[size].to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
