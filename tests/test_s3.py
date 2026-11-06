@@ -657,18 +657,32 @@ def test_every_milp_group_is_accounted_for():
         c["milp_better"] + c["milp_tied"] + c["milp_lost"] + c["milp_rejected"]), c
 
 
-def test_turning_the_candidate_filter_off_grows_the_model(capsys):
+def test_turning_the_candidate_filter_off_grows_the_model():
     """#143 완료조건 — **ablation 한 줄**: 필터를 끄면 변수가 얼마나 늘어나나.
 
-    후보 필터(진행 방향 + SoC 도달성)를 끄면 코리도의 모든 휴게소가 변수가 된다.
-    여기는 휴게소가 둘뿐이라 2배지만, 경부선 35곳에서는 차당 2~4곳 → 35곳이다.
+    후보 필터(진행 방향 + SoC 도달성)를 끄면 **못 가는 휴게소도 변수가 된다.**
+    경부선 35곳에서는 차당 2~4곳 → 35곳이다.
 
-    **답은 같아야 한다.** 못 가는 칸은 0 으로 묶여 있으므로 고를 수 없다. 즉
-    필터의 기여는 *"답을 바꾸는 것"* 이 아니라 **"모형을 작게 만드는 것"** 이고,
-    그게 §5.3 이 요구한 ablation 의 결론이다.
+    **답은 같아야 한다.** 못 가는 칸은 0 으로 묶여 있으므로 고를 수 없다
+    (`GroupProblem.banned`). 즉 필터의 기여는 *"답을 바꾸는 것"* 이 아니라
+    **"모형을 작게 만드는 것"** 이다.
+
+    ## ⚠ 비교는 `feasible` ↔ `all` 이다 — `group` 과 견주면 섞인다
+
+    `candidate_scope="all"` 은 **두 가지를 동시에** 한다.
+
+        (a) 못 가는 휴게소를 변수로 만든다          ← 필터를 끈 것
+        (b) **갈 수 있는** 휴게소를 그룹 밖까지 넓힌다  ← 후보 범위 확장
+
+    (b)는 **축이 달라지는 변경**이다 (`docs/objective.md` §3.6 의 *"C_i 를
+    넓히면 축이 섞인다"*). 처음에 `group` ↔ `all` 로 재 놓고 *"필터를 끄면 답이
+    같다"* 를 확인하려 했는데, **그건 확인되지 않는다** — 실제 시나리오에서
+    6,425.3h → 6,412.6h 로 달라졌고 그 차는 **필터가 아니라 새로 열린 휴게소**가
+    만든 것이다. 장난감 세계는 휴게소가 둘뿐이라 둘 다 그룹 안에 있어서 그
+    구분이 보이지 않았다.
     """
 
-    narrow_out, narrow = _congested_run(_milp_kw(window=4))
+    narrow_out, narrow = _congested_run(_milp_kw(window=4, candidate_scope="feasible"))
     wide_out, wide = _congested_run(_milp_kw(window=4, candidate_scope="all"))
 
     assert wide.counters["milp_binaries"] > narrow.counters["milp_binaries"], (

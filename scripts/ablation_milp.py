@@ -16,8 +16,15 @@
 |---|---|---|---|
 | `local` | 이동·교환 | 그룹이 쓰는 곳 | 기준선. 지금 사다리의 S3 |
 | `milp` | MILP (HiGHS) | 그룹이 쓰는 곳 | **같은 범위를 전역으로** 푼다 |
-| `milp-all` | MILP | **코리도 전체** | ablation ① — 필터를 끄면 |
+| `milp-feas` | MILP | 코리도 전체 (**필터 통과만**) | 후보 범위를 그룹 밖까지 넓히면 |
+| `milp-all` | MILP | 코리도 전체 (**필터 끔**) | ablation ① — 필터를 끄면 |
 | `exact` | 전수 열거 | 그룹이 쓰는 곳 | ablation ② — **근사를 끄면** |
+
+⚠ **필터 ablation 은 `milp-feas` ↔ `milp-all` 이다.** `milp` ↔ `milp-all` 로
+재면 두 가지가 섞인다 — 필터를 끈 것과 **후보 범위를 넓힌 것**. 후자는 축이
+달라지는 변경이다 (`docs/objective.md` §3.6 의 *"C_i 를 넓히면 축이 섞인다"*).
+실제로 섞어서 재 보니 답이 달라졌다 (6,425.3h → 6,412.6h) — **필터 탓이 아니라
+새 휴게소가 열린 탓**이다.
 
 `exact` 가 *"근사를 끈 것"* 인 이유: MILP 의 근사는 쌍별 겹침 과대계산이고
 (`engine/milp.py`), 전수 열거는 그 근사 없이 **정확한 채점기로 모든 조합을**
@@ -74,6 +81,7 @@ OBSERVED_STRENGTH = 0.30
 SETUPS: tuple[tuple[str, dict], ...] = (
     ("local", {}),
     ("milp", {"solver": "milp"}),
+    ("milp-feas", {"solver": "milp", "candidate_scope": "feasible"}),
     ("milp-all", {"solver": "milp", "candidate_scope": "all"}),
     ("exact", {"solver": "exact"}),
 )
@@ -130,7 +138,7 @@ def _report(t: pd.DataFrame, esc_cost: float, out: Path) -> None:
     if not m.empty:
         print(m[size].to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
         for seed, g in m.groupby("seed"):
-            narrow = g[g["setup"] == "milp"]
+            narrow = g[g["setup"] == "milp-feas"]
             wide = g[g["setup"] == "milp-all"]
             if narrow.empty or wide.empty:
                 continue
@@ -138,6 +146,7 @@ def _report(t: pd.DataFrame, esc_cost: float, out: Path) -> None:
             ratio = w["milp_binaries"] / max(n["milp_binaries"], 1.0)
             print(f"  시드 {seed}: 필터 켜면 {n['milp_binaries']:,.0f} 개 · "
                   f"끄면 {w['milp_binaries']:,.0f} 개 (**{ratio:.1f}배**)")
+            print("  (둘 다 후보 범위는 코리도 전체다 — **필터만** 다르다)")
 
     print("\n=== ③ 근사 오차 — (정확한 Σd) − (MILP 목적값) ===")
     if not m.empty:
@@ -174,7 +183,19 @@ def _report(t: pd.DataFrame, esc_cost: float, out: Path) -> None:
                   f"({r['total_h']:,.1f} vs {base['total_h']:,.1f}) · "
                   f"계산시간 {slow:.2f}배 ({r['wall_s']:.0f}s vs {base['wall_s']:.0f}s)")
 
-        line("milp-all", "필터를 끄면")
+        # ⚠ **둘을 가른다.** `candidate_scope="all"` 은 (a) 못 가는 휴게소를
+        #   변수로 만들고 (b) **갈 수 있는** 휴게소를 그룹 밖까지 넓힌다.
+        #   섞으면 "필터를 끄면 답이 같다" 를 확인할 수 없다
+        if {"milp-feas", "milp-all"} <= set(by.index):
+            a, b = by.loc["milp-feas"], by.loc["milp-all"]
+            ratio = b["milp_binaries"] / max(a["milp_binaries"], 1.0)
+            print(f"  시드 {seed} · **필터를 끄면** (feasible → all): 변수 "
+                  f"{a['milp_binaries']:,.0f} → {b['milp_binaries']:,.0f} "
+                  f"(**{ratio:.1f}배**) · 계산시간 {b['wall_s'] / max(a['wall_s'], 1e-9):.2f}배 "
+                  f"· 총 사회적 비용 {b['total_h'] - a['total_h']:+.1f}h "
+                  "(**0 이어야 한다** — 못 가는 칸은 0 으로 묶여 있다)")
+
+        line("milp-feas", "후보 범위를 그룹 밖까지 넓히면")
         line("exact", "근사를 끄면 (전수 열거)")
 
         if {"milp", "exact"} <= set(by.index):
