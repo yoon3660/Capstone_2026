@@ -386,3 +386,71 @@ def test_the_db_accepts_the_exact_stage():
     check, _, _ = rest.partition("))")
     for st in VALID_STAGES:
         assert f"'{st}'" in check, f"schema.sql 의 CHECK 에 {st} 가 없다"
+
+
+# -- ④ 윈도우 스윕이 **사다리를 지우지 않는다** (#143) ------------------------
+#
+# S3 는 어느 윈도우로 돌아도 run_id 가 `__S3__` 다. 그래서 윈도우 스윕을 실제 DB
+# 에서 돌리면 **사다리의 S3(윈도우 4)를 윈도우 12 결과로 덮어쓴다.**
+#
+#     #123  흐린 오라클이 날것을 덮어썼다
+#     #142  리드타임 스윕이 사다리의 S3 를 덮어썼다
+#
+# 세 번째는 안 만든다. `sweep_window.py` 는 **실제 DB 를 복사한 샌드박스**에서
+# 돈다. 이 테스트들이 그 성질을 지킨다.
+
+
+def _sweep_src() -> str:
+    from pathlib import Path
+
+    return Path("scripts/sweep_window.py").read_text(encoding="utf-8")
+
+
+def test_the_window_sweep_runs_in_a_sandbox():
+    """★ 스윕이 **실제 DB 에 쓰지 않는다** — `run_once` 에 `db_path` 를 넘겨야 한다.
+
+    안 넘기면 `default_db_path()` 로 가고, run_id 가 윈도우를 구분하지 못하므로
+    사다리의 S3 가 마지막 윈도우의 결과로 남는다.
+    """
+
+    src = _sweep_src()
+    assert "def sandbox(" in src, "샌드박스를 만드는 곳이 없다"
+    assert "db_path=db" in src, "run_once 에 샌드박스 DB 를 안 넘긴다"
+    assert "runs_dir=runs" in src, "parquet 도 샌드박스로 보내야 한다"
+
+
+def test_the_sandbox_starts_with_no_runs():
+    """샌드박스는 **세계만** 물려받고 결과는 새로 만든다.
+
+    실제 DB 를 복사하면 등록된 런 640개가 같이 온다. 그러면 재사용 판정이 그걸 보고
+    *"재사용"* 이라고 말하고, **실제 DB 의 윈도우 4 결과를 윈도우 12 의 결과로
+    보고하게 된다.** 복사 직후 `run` 을 비워야 한다.
+    """
+
+    assert 'DELETE FROM run' in _sweep_src(), (
+        "복사한 DB 의 run 을 비우지 않는다 — 남의 결과를 재사용한다")
+
+
+def test_the_window_sweep_measures_in_the_ladders_world():
+    """스윕의 기본 strength 가 **사다리와 같아야** 한다 (#142 에서 한 번 틀렸다)."""
+
+    import re
+    from pathlib import Path
+
+    ladder = re.search(r"^OBSERVED_STRENGTH = ([\d.]+)",
+                       Path("scripts/matched_ladder.py").read_text(encoding="utf-8"),
+                       re.M)
+    sweep = re.search(r"^OBSERVED_STRENGTH = ([\d.]+)", _sweep_src(), re.M)
+    assert ladder and sweep
+    assert float(ladder.group(1)) == float(sweep.group(1)), (
+        f"스윕 strength {sweep.group(1)} != 사다리 {ladder.group(1)}")
+    assert "default=OBSERVED_STRENGTH" in _sweep_src()
+
+
+def test_the_window_sweep_saves_every_point():
+    """점마다 CSV 에 저장해야 한다 — DB 에는 **마지막 윈도우만** 남는다."""
+
+    src = _sweep_src()
+    body = src.partition("for w in windows:")[2]
+    assert "to_csv" in body.partition("_report(")[0], (
+        "루프 안에서 저장하지 않는다 — 중간에 끊기면 앞 점이 사라진다")
