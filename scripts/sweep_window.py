@@ -154,6 +154,54 @@ def main() -> int:
     return 0
 
 
+def _paired(t: pd.DataFrame) -> None:
+    """★ **대응 비교** — 같은 시드끼리 짝지어 차를 내고 t 신뢰구간을 낸다.
+
+    런 단위로 평균을 내고 비교하면 안 된다. 시드 사이 변동이 윈도우 효과보다
+    크기 때문이다 — #121 · #139 가 그걸로 두 번 속았다. **같은 시드 안에서는 세계가
+    같으므로**, 시드마다 차를 내고 그 차들의 분포를 보면 변동이 상쇄된다.
+
+    기준은 **가장 작은 윈도우**다 (보통 1 = 결합 없음 = S2 와 비트 단위로 같다).
+    """
+
+    from scipy import stats
+
+    windows = sorted(t["window"].unique())
+    base_w = windows[0]
+    wide = t.pivot(index="seed", columns="window",
+                   values=["total_h", "dwell_total_h", "n_escaped"])
+
+    print(f"\n=== 대응 비교 (기준 윈도우 {base_w:.0f}) ===")
+    print("윈도우   n          총 사회적 비용 차 (95% CI)        이탈 차     판정")
+
+    for w in windows[1:]:
+        d = (wide["total_h"][w] - wide["total_h"][base_w]).dropna()
+        de = (wide["n_escaped"][w] - wide["n_escaped"][base_w]).dropna()
+        n = len(d)
+        if n < 2:
+            continue
+        m, sd = float(d.mean()), float(d.std(ddof=1))
+        half = float(stats.t.ppf(0.975, n - 1)) * sd / n ** 0.5
+        lo, hi = m - half, m + half
+
+        if hi < 0:
+            verdict = "★ 이 윈도우가 낫다"
+        elif lo > 0:
+            verdict = "이 윈도우가 나쁘다"
+        else:
+            verdict = "0 과 구분 안 됨"
+        esc = f"{de.mean():+.1f}"
+        if abs(de.mean()) > ESCAPE_TOL:
+            esc += " ⚠"
+        print(f"{w:>5.0f} {n:>4}   {m:>+9.1f}h  [{lo:>+8.1f}, {hi:>+8.1f}]"
+              f"   {esc:>9}     {verdict}")
+
+    print("\n⚠ 이탈 차가 ±5 를 넘으면(⚠) 비교가 성립하지 않는다 — "
+          "`docs/compare_rule.md`.")
+    print("   총 사회적 비용은 이탈을 120분으로 환산해 품은 값이라 그대로 쓰지만,")
+    print("   **격차 축소율은 보고하지 않는다.**")
+
+
 def _report(t: pd.DataFrame, out: Path) -> None:
     cols = ["seed", "window", "total_h", "dwell_total_h", "n_escaped",
             "wait_mean_min", "bottleneck_slots", "s3_move_done", "s3_swap_done",
@@ -161,18 +209,22 @@ def _report(t: pd.DataFrame, out: Path) -> None:
     print("\n=== 윈도우 스윕 ===")
     print(t[cols].to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
 
-    for seed, g in t.groupby("seed"):
-        g = g.sort_values("window")
-        base = g.iloc[0]
-        print(f"\n--- 시드 {seed}: 윈도우 {base['window']:.0f} 대비 "
-              f"(총 사회적 비용 {base['total_h']:,.1f}h) ---")
-        for _, r in g.iloc[1:].iterrows():
-            d = r["total_h"] - base["total_h"]
-            de = r["n_escaped"] - base["n_escaped"]
-            flag = "  ⚠ 이탈 차이 큼" if abs(de) > ESCAPE_TOL else ""
-            print(f"  윈도우 {r['window']:>3.0f}  {d:+9.1f}h  "
-                  f"(이탈 {de:+.0f}, 이동 {r['s3_move_done']:,.0f}, "
-                  f"교환 {r['s3_swap_done']:,.0f}, {r['wall_s']:,.0f}s){flag}")
+    if t["seed"].nunique() <= 3:
+        for seed, g in t.groupby("seed"):
+            g = g.sort_values("window")
+            base = g.iloc[0]
+            print(f"\n--- 시드 {seed}: 윈도우 {base['window']:.0f} 대비 "
+                  f"(총 사회적 비용 {base['total_h']:,.1f}h) ---")
+            for _, r in g.iloc[1:].iterrows():
+                d = r["total_h"] - base["total_h"]
+                de = r["n_escaped"] - base["n_escaped"]
+                flag = "  ⚠ 이탈 차이 큼" if abs(de) > ESCAPE_TOL else ""
+                print(f"  윈도우 {r['window']:>3.0f}  {d:+9.1f}h  "
+                      f"(이탈 {de:+.0f}, 이동 {r['s3_move_done']:,.0f}, "
+                      f"교환 {r['s3_swap_done']:,.0f}, {r['wall_s']:,.0f}s){flag}")
+        print("\n⚠ 시드가 적다 — **방향만** 본다. 판정은 시드를 늘려서 한다.")
+    else:
+        _paired(t)
 
     print(f"\nCSV: {out}")
     print("\n미리 정한 갈림길 (스크립트 머리말):")
