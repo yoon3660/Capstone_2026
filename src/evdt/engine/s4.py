@@ -145,6 +145,36 @@ class S4Policy(S3Policy):
     #: 못 보기 때문이고(채점기가 안 넘겨 준다), 어차피 차마다 한 값이다.
     rcost: dict[str, float] = field(default_factory=dict)
 
+    # -- "가던 차" 를 무엇으로 아는가 ------------------------------------------
+    def _heading_to(self, ev: EVState, world: WorldView, station_id: str) -> bool:
+        """내 예약 휴게소가 **아직 내 앞에 있나.** 있으면 그리로 가고 있는 중이다.
+
+        ## ⚠ 도착 시각으로 판단하면 안 된다 — 재서 알았다
+
+        처음에는 *"예약의 ETA 가 미래면 가던 차"* 로 봤다. 실제 시나리오에서
+        **`hard_lock_min = inf` 인데 재배정이 524회** 나왔다 (전부 고정이면 0 이어야
+        한다). 원인은 **정책의 ETA 와 시뮬레이터의 ETA 가 다르다**는 것이다.
+
+            시뮬레이터:  eta = car.t_min + 통행시간      ← 충전이 끝난 **그 시각**
+            정책:        eta = world.t_min + 통행시간    ← **묻는 시각**
+
+        `car.t_min` 은 Δt 버킷 안에서 `t` 보다 최대 Δt(5분) 뒤일 수 있다. 그래서
+        **도착까지 5분 미만 남은 차**는 정책의 ETA 가 이미 지나간 것으로 보이고,
+        그 차를 "새로 묻는 차" 로 분류해 **$r_i$ 없이 공짜로 옮기게** 된다.
+        하필 **절대 옮겨서는 안 되는 차들**이다.
+
+        그래서 시각이 아니라 **위치**로 판단한다. 기하는 통행시간 모형에 의존하지
+        않는다 — 예약 휴게소가 내 앞에 있으면 나는 그리로 가고 있다. 한 번 서고
+        다시 묻는 차는 **서 있는 그 휴게소**가 예약이라 `offset` 이 같고, 그래서
+        걸리지 않는다.
+
+        (고정 여부 판단에는 여전히 정책의 ETA 를 쓴다. 그건 정책이 가진 유일한
+        추정이고, 목적함수가 쓰는 것과 **같은 값**이어야 한다 — `_eta`.)
+        """
+
+        station = world.stations.get(station_id)
+        return station is not None and station.offset_km > ev.offset_km + 1e-9
+
     # -- 목적함수의 두 자리를 채운다 ------------------------------------------
     def _extra_cost(self, ev_id: str, station_id: str) -> float:
         """$r_i\\,(1 - x_{i,\\sigma_0(i)})$ — **원래 예약에서 떼어낼 때만** 든다."""
@@ -229,8 +259,13 @@ class S4Policy(S3Policy):
 
         ## "가던 차" 를 어떻게 아나
 
-        **예약의 ETA 가 미래인 차**다. 한 번 서고 다시 묻는 차에게도 묵은 예약이
-        남아 있지만(시뮬레이터가 `mark()` 를 안 부른다) 그 ETA 는 과거다. 그걸
+        **예약 휴게소가 아직 내 앞에 있는 차**다 (`_heading_to`). 시각이 아니라
+        **위치**로 본다 — 시각으로 보면 정책의 ETA 와 시뮬레이터의 ETA 가 최대 Δt
+        어긋나서, 도착이 임박한 차를 "새로 묻는 차" 로 분류해 **$r_i$ 없이 공짜로
+        옮기게** 된다. 재서 알았다 (고정 inf 인데 재배정 524회).
+
+        한 번 서고 다시 묻는 차에게도 묵은 예약이 남아 있지만(시뮬레이터가
+        `mark()` 를 안 부른다) 그 휴게소는 **서 있는 자리**라서 앞에 없다. 그걸
         "가던 길" 로 오해하면 **이미 지나친 휴게소로 되돌리는 답**이 나온다.
         """
 
@@ -246,7 +281,7 @@ class S4Policy(S3Policy):
 
         for ev in sorted(evs, key=lambda e: e.ev_id):
             res = ledger.reservation(ev.ev_id)
-            if res is None or float(res.eta_min) <= t:
+            if res is None or not self._heading_to(ev, world, res.station_id):
                 free.append(ev)                      # 새로 묻는 차
                 continue
 

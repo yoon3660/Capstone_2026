@@ -84,6 +84,17 @@ __all__ = ["GroupProblem", "GroupSolution", "solve_group"]
 #: 상태 문자열. PuLP 의 `LpStatus` 를 그대로 쓴다 ('Optimal' · 'Infeasible' · …).
 OPTIMAL = "Optimal"
 
+#: 2단계 동점 깨기에서 1단계 목적값을 묶는 허용오차 (분).
+#:
+#: HiGHS 의 최적성 허용오차보다 **크고**, 의미 있는 개선의 하한(`COST_EPS` = 1e-9)
+#: 보다 **작아야** 한다. 크면 2단계가 더 나쁜 해를 고를 수 있고, 작으면 1단계 해가
+#: 2단계에서 비가능해가 되어 아무것도 못 푼다.
+TIE_TOL = 1.0e-7
+
+#: 사전순 가중치가 이 값을 넘으면 **순위 합**으로 떨어진다. double 의 정밀도
+#: (~1e15) 안에서 1단계 제약과 같이 풀려야 하므로 여유를 둔다.
+TIE_WEIGHT_MAX = 1.0e12
+
 
 @dataclass(frozen=True)
 class GroupProblem:
@@ -137,6 +148,28 @@ class GroupSolution:
         return self.assign is not None and self.status == OPTIMAL
 
 
+def _tie_weight(car_idx: int, cand_idx: int, n_cars: int, problem) -> float:
+    """동점을 깨뜨리는 **순위 가중치.** 작을수록 선호된다.
+
+    `S3Policy._exact_group` 은 동점을 **combo 사전순**으로 깬다 (앞 차의 후보
+    번호가 먼저, 그 다음 차, …). 여기서도 같게 맞춘다 — 두 solver 가 같은 동점에서
+    다른 답을 내면 "어느 쪽이 더 잘 푸나" 에 그 몫이 섞인다.
+
+    사전순을 하나의 선형 목적함수로 만들려면 자리값이 필요하다.
+
+        가중치(차 a, 후보 b) = b · M^(대수 − 1 − a)        M = max |C_i|
+
+    $M^{n-1}$ 이 `TIE_WEIGHT_MAX` 를 넘으면 (윈도우가 크고 후보가 많을 때)
+    **순위 합**으로 떨어진다. 그때는 사전순이 아니지만 여전히 **정해진 규칙**이고,
+    그게 "solver 가 알아서 고르는 것" 보다 낫다.
+    """
+
+    m = max((len(v) for v in problem.cands.values()), default=1)
+    if m ** max(n_cars - 1, 0) <= TIE_WEIGHT_MAX:
+        return float(cand_idx) * float(m) ** (n_cars - 1 - car_idx)
+    return float(cand_idx)
+
+
 def _solver(time_limit_s: float):
     """HiGHS 를 **단일 스레드·조용히** 부른다.
 
@@ -155,12 +188,16 @@ def _solver(time_limit_s: float):
         return pulp.HiGHS(msg=False, timeLimit=time_limit_s)
 
 
-def solve_group(problem: GroupProblem, *, time_limit_s: float = 5.0) -> GroupSolution:
+def solve_group(problem: GroupProblem, *, time_limit_s: float = 5.0,
+                tie_break: bool = True) -> GroupSolution:
     """`problem` 을 풀어 배정을 돌려준다. 못 풀면 `assign is None`.
 
     변수·제약을 **정렬된 순서로** 만든다. 이름도 번호로 붙인다 — ev_id 를 이름에
     넣으면 PuLP 가 특수문자를 치환해 이름이 충돌할 수 있고, 그러면 같은 입력에
     다른 모형이 된다.
+
+    `tie_break` 가 참이면 **두 번 푼다** — 목적값을 묶고 사전순으로 동점을 깬다.
+    끄는 쪽은 *"동점 깨기가 무엇을 바꾸나"* 를 재는 자리에만 쓴다.
     """
 
     evs = tuple(problem.evs)
@@ -183,10 +220,11 @@ def solve_group(problem: GroupProblem, *, time_limit_s: float = 5.0) -> GroupSol
     y = {k: prob.add_variable(f"y_{n}", lowBound=0.0, upBound=1.0)
          for n, k in enumerate(pairs)}
 
-    prob += (
+    objective = (
         pulp.lpSum(problem.cost[i, s] * v for (i, s), v in x.items())
         + pulp.lpSum(problem.delta[k] * v for k, v in y.items())
     )
+    prob += objective
 
     n_con = 0
     for k in sorted(problem.banned):                # 필터 ablation — 0 으로 묶는다
@@ -221,6 +259,39 @@ def solve_group(problem: GroupProblem, *, time_limit_s: float = 5.0) -> GroupSol
 
     t0 = time.perf_counter()
     status = pulp.LpStatus[prob.solve(_solver(time_limit_s))]
+
+    if status == OPTIMAL and tie_break:
+        # ★★ 2단계 — **동점을 사전순으로 깨뜨린다.**
+        #
+        # 이것이 없으면 안 되는 이유를 재서 알았다. 실제 시나리오에서 한 차의 비용이
+        # 세 휴게소에서 **소수점 9자리까지 같았다** (6.482695101) — 줄이 없으면
+        # 체류가 충전시간뿐이고, 충전시간은 **휴게소와 무관**하기 때문이다. 즉 이
+        # 목적함수는 구조적으로 **대량 동점**이다.
+        #
+        # 그 동점에서 solver 가 어느 쪽을 고르는지는 모형 크기에 따라 달라진다.
+        # `candidate_scope` 를 `feasible` ↔ `all` 로 바꿔 보니 (**수학적으로 같은
+        # 문제**인데) 하루 결과가 **115.8h** 갈렸다. 각 설정은 결정적이었다 —
+        # 즉 재현은 되는데 **같은 문제의 다른 표현에 강건하지 않았다.**
+        #
+        # ⚠ ε 를 더하는 방법은 쓸 수 없다. 의미 있는 차이의 하한이 `COST_EPS`
+        #   (1e-9) 인데 HiGHS 의 최적성 허용오차가 그보다 크다 — 그보다 작은 ε 는
+        #   동점을 깨지 못하고, 큰 ε 는 참 최적해를 바꾼다. 그래서 **목적값을 묶고
+        #   다시 푼다.**
+        #
+        # 깨뜨리는 규칙은 `S3Policy._exact_group` 과 **같다** (combo 사전순).
+        # 두 solver 가 같은 동점에서 다른 답을 내면 비교에 그 몫이 섞인다.
+        z = float(pulp.value(prob.objective))
+        prob += objective <= z + TIE_TOL
+        n_con += 1
+        prob.setObjective(pulp.lpSum(
+            _tie_weight(a, b, len(evs), problem) * v
+            for (i, s), v in x.items()
+            for a, b in ((evs.index(i), problem.cands[i].index(s)),)))
+        status = pulp.LpStatus[prob.solve(_solver(time_limit_s))]
+        if status == OPTIMAL:
+            # 1단계의 목적값을 돌려줘야 한다 — 지금 `prob.objective` 는 순위 합이다
+            prob.setObjective(objective)
+
     took = time.perf_counter() - t0
 
     n_bin = len(x)

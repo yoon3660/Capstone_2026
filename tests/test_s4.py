@@ -520,3 +520,69 @@ def test_a_run_scored_by_the_blind_scorer_is_not_reused():
     s2 = load_config("config/scenario_seollal_up_adoption.yaml", stage="S2")
     assert stale_reason({k: v for k, v in run_params(s2).items()
                          if k != "group_scorer"}, s2) is None
+
+
+def test_a_car_about_to_arrive_is_still_treated_as_en_route():
+    """★ **정책의 ETA 가 이미 지나 보여도** 가던 차는 가던 차다.
+
+    ## 이것을 놓쳐서 고정이 새어 나갔다
+
+    처음에는 *"예약의 ETA 가 미래면 가던 차"* 로 분류했다. 실제 시나리오에서
+    **`hard_lock_min = inf` 인데 재배정이 524회** 나왔다 — 전부 고정이면 0 이어야
+    한다. 원인은 두 ETA 가 다르다는 것이다.
+
+        시뮬레이터:  eta = car.t_min + 통행시간    ← 충전이 끝난 **그 시각**
+        정책:        eta = world.t_min + 통행시간  ← **묻는 시각**
+
+    `car.t_min` 은 Δt 버킷 안에서 `t` 보다 최대 Δt 뒤일 수 있다. 그래서 **도착까지
+    Δt 미만 남은 차**는 정책 눈에 이미 도착한 것으로 보이고, "새로 묻는 차" 로
+    분류돼 **$r_i$ 없이 공짜로 옮겨진다.** 하필 **절대 옮겨서는 안 되는 차들**이다.
+
+    그래서 시각이 아니라 **위치**로 본다. 여기서는 예약 ETA 를 **과거**(t − 20분)로
+    두고도 고정되는지 확인한다 — 휴게소 A 는 여전히 차 앞에 있다.
+    """
+
+    from evdt.engine.ledger import Arrival
+
+    ev, world, ledger = _driving_world()
+    # 예약 ETA 를 **과거**로 바꿔 끼운다 (지금 100분, ETA 80분). 휴게소 A 는
+    # 160km 로 차(100km) 앞에 그대로 있다
+    ledger.release("EV001")
+    ledger.book("EV001", "A", Arrival(
+        ev_id="EV001", arrival_min=80.0, soc_from=0.35, soc_to=0.8,
+        battery_kwh=BATTERY, vmax_kw=200.0, curve=FLAT, charge_power_factor=1.0))
+
+    locked = S4Policy(S4Settings(**KW, window=4, hard_lock_min=float("inf")))
+    assert locked.decide([ev], world)["EV001"] == "A", "ETA 가 지났다고 옮겨 버렸다"
+    assert locked.counters["locked"] == 1.0, (
+        "ETA 로 분류하고 있다 — 도착 임박한 차가 고정에서 새어 나간다")
+
+
+def test_a_car_standing_at_its_reserved_station_is_not_en_route():
+    """반대쪽 — **서 있는 자리**가 예약인 차는 가던 차가 아니다.
+
+    시뮬레이터가 `mark()` 를 안 불러서 한 번 선 차에게도 묵은 예약이 남는다. 그걸
+    "가던 길" 로 오해하면 **이미 지나친 휴게소로 되돌리는 답**이 나오고, 그러면
+    시뮬레이터가 *"앞에 있지 않은 휴게소를 골랐다"* 로 멈춘다.
+    """
+
+    from evdt.engine.ledger import Arrival
+
+    ev, world, ledger = _driving_world()
+    ledger.release("EV001")
+    # 차는 100km 에 있고, 예약은 **거기 있는** 휴게소다 (A 를 100km 로 본다)
+    import dataclasses
+
+    from evdt.interfaces import WorldView
+    at_here = {"A": dataclasses.replace(world.stations["A"], offset_km=100.0),
+               "B": world.stations["B"]}
+    here = WorldView(t_min=100.0, stations=at_here, temp_c=20.0, cold_factor=1.0,
+                     range_factor=1.0, ledger=ledger, forecast=world.forecast)
+    ledger.book("EV001", "A", Arrival(
+        ev_id="EV001", arrival_min=100.0, soc_from=0.35, soc_to=0.8,
+        battery_kwh=BATTERY, vmax_kw=200.0, curve=FLAT, charge_power_factor=1.0))
+
+    policy = S4Policy(S4Settings(**KW, window=4, hard_lock_min=float("inf")))
+    policy.decide([ev], here)
+    assert policy.counters["locked"] == 0.0, (
+        "서 있는 자리를 '가던 길' 로 봤다 — 뒤쪽 휴게소로 되돌리는 답이 나온다")

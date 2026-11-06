@@ -220,3 +220,62 @@ def test_adding_banned_variables_never_changes_the_answer():
         differed += narrow.assign != broad.assign
 
     assert differed == 0, f"동치 모형인데 배정이 {differed}번 달라졌다"
+
+
+# -- 동점 깨기 (#143) ---------------------------------------------------------
+
+def test_exact_ties_are_broken_lexicographically():
+    """★ 비용이 **정확히 같을 때** 후보 번호가 작은 쪽을 고른다.
+
+    ## 왜 이것이 필요한가 — 이 목적함수는 구조적으로 동점이 많다
+
+    실제 시나리오에서 한 차의 비용이 **세 휴게소에서 소수점 9자리까지 같았다**
+    (6.482695101). 줄이 없으면 체류가 충전시간뿐이고, **충전시간은 휴게소와
+    무관**하기 때문이다 — SoC 와 차종만으로 정해진다.
+
+    그 동점에서 solver 가 어느 쪽을 고를지는 모형 크기에 따라 달라졌다.
+    `candidate_scope` 를 `feasible` ↔ `all` (수학적으로 **같은 문제**) 로 바꾸니
+    하루 결과가 **115.8h** 갈렸다. 각 설정은 결정적이었다 — 재현은 되는데
+    **같은 문제의 다른 표현에 강건하지 않았다.**
+
+    깨뜨리는 규칙은 `S3Policy._exact_group` 과 **같다** (사전순). 두 solver 가
+    같은 동점에서 다른 답을 내면 "어느 쪽이 더 잘 푸나" 에 그 몫이 섞인다.
+    """
+
+    evs = ("c1", "c2")
+    cands = {i: ("A", "B", "C") for i in evs}
+    flat = {(i, s): 10.0 for i in evs for s in ("A", "B", "C")}
+
+    sol = solve_group(GroupProblem(evs=evs, cands=cands, cost=flat, dwell=flat))
+    assert sol.solved and sol.objective == 20.0
+    assert sol.assign == {"c1": "A", "c2": "A"}, (
+        f"동점인데 사전순 첫 후보를 고르지 않았다: {sol.assign}")
+
+
+def test_the_tie_break_never_worsens_the_real_objective():
+    """동점 깨기가 **참 목적값을 바꾸면 안 된다.**
+
+    2단계는 1단계 목적값을 `TIE_TOL` 로 묶고 푼다. 묶은 값이 너무 느슨하면 더
+    나쁜 해를 "동점" 으로 받아들인다. 동점이 **아닌** 문제를 줘서 확인한다.
+    """
+
+    from evdt.engine.milp import TIE_TOL
+
+    # A 가 분명히 싸다. 동점 깨기가 B 로 끌고 가면 안 된다
+    cost = {("c1", "A"): 10.0, ("c1", "B"): 10.0 + 1000 * TIE_TOL,
+            ("c2", "A"): 10.0, ("c2", "B"): 10.0 + 1000 * TIE_TOL}
+    sol = solve_group(GroupProblem(
+        evs=EVS, cands={i: ("A", "B") for i in EVS}, cost=cost, dwell=cost))
+    assert sol.assign == {"c1": "A", "c2": "A"}
+    assert sol.objective == pytest.approx(20.0)
+
+
+def test_the_tie_break_can_be_turned_off_to_measure_it():
+    """끌 수 있어야 한다 — *"동점 깨기가 무엇을 바꾸나"* 를 재는 자리다."""
+
+    evs = ("c1", "c2")
+    flat = {(i, s): 10.0 for i in evs for s in ("A", "B", "C")}
+    p = GroupProblem(evs=evs, cands={i: ("A", "B", "C") for i in evs},
+                     cost=flat, dwell=flat)
+    off = solve_group(p, tie_break=False)
+    assert off.solved and off.objective == 20.0      # 목적값은 같다
