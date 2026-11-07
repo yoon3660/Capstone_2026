@@ -87,6 +87,14 @@ class S1Policy(S0Policy):
             if cand is None:
                 continue
             cost, arr = cand
+            # ★ 체류 밖의 비용 — **S1~S3 는 0 이다.** S4 의 재배정 비용 r_i 가
+            #   여기로 들어온다 (`docs/objective.md` §2b).
+            #
+            #   왜 그리디도 이걸 봐야 하나: 윈도우에 혼자 있는 차는 그룹 최적화를
+            #   아예 안 거친다 (`S3Policy.decide` 가 2대 미만이면 그냥 돌려준다).
+            #   그리디가 r_i 를 못 보면 **그 차들은 공짜로 옮겨 다닌다** —
+            #   목적함수에 항이 있는데 절반의 차에게만 걸리는 상태가 된다
+            cost += self._extra_cost(ev.ev_id, st.station_id)
 
             if cost < best_cost:
                 best_id, best_cost, best_arr = st.station_id, cost, arr
@@ -107,6 +115,34 @@ class S1Policy(S0Policy):
         ledger.book(ev.ev_id, best_id, best_arr)
         return best_id
 
+
+    def _eta(self, ev: EVState, world: WorldView, st) -> float:
+        """$\\eta_{i,s}$ — 내가 그 휴게소에 **도착하는 시각** (분).
+
+        **배정에 의존하지 않는다.** 휴게소를 고정하면 정해진다 — 그래서 FIFO 줄
+        순서를 미리 알 수 있고, 그게 `_group_total` 이 올바른 순서로 잴 수 있는
+        근거이자 MILP 가 쌍별로 끝날 수 있는 근거다 (`docs/objective.md` §3).
+
+        식이 한 곳에만 있어야 한다. 두 곳에 쓰면 채점 순서와 도착 시각이 갈라지고,
+        그러면 원장이 틀린 미래를 예측한다 (설계 규칙 1 과 같은 종류).
+        """
+
+        gap_km = st.offset_km - ev.offset_km
+        return world.t_min + gap_km / max(ev.speed_kmh, 1e-6) * 60.0
+
+    def _extra_cost(self, ev_id: str, station_id: str) -> float:
+        """체류 밖의 비용. **S1~S3 는 0 이다** (목적함수가 Σd_i 그대로다).
+
+        S4 가 여기에 재배정 비용 $r_i$ 를 넣는다. 자리를 `_one` 과 `_group_total`
+        **둘 다 보이는 곳**에 둔 이유: 한쪽만 보면 그리디와 그룹 최적화가 서로 다른
+        목적함수를 풀게 되고, 그 불일치가 "결합의 값" 으로 보고된다.
+
+        `_candidate` 안에 넣지 않는 이유도 하나다 — `_group_total` 의 이탈 가드가
+        **개인 체류**를 `escape_cost_min` 과 견준다. 거기에 r_i 가 섞이면 "길이
+        막혔다" 와 "되돌리기 싫다" 가 같은 값으로 들어간다.
+        """
+
+        return 0.0
 
     def _candidate(self, ev: EVState, world: WorldView, ledger, st, rf: float,
                    *, opportunity: bool) -> tuple[float, Arrival] | None:
@@ -144,7 +180,7 @@ class S1Policy(S0Policy):
         # ★ 차이 1 — **내가 도착할 시각**에 원장이 뭐라고 하는가.
         #   S0 는 `st.wait_min`(지금 화면)을 썼다. 여기서는 그 시각까지 가는 데
         #   걸리는 시간을 더해 **그때의 줄**을 묻는다.
-        eta = world.t_min + gap_km / max(ev.speed_kmh, 1e-6) * 60.0
+        eta = self._eta(ev, world, st)
         arr = Arrival(
             ev_id=ev.ev_id, arrival_min=eta, soc_from=soc_in, soc_to=soc_out,
             battery_kwh=ev.battery_kwh, vmax_kw=ev.vmax_kw, curve=ev.curve,
