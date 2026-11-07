@@ -310,18 +310,21 @@ def test_ue_and_s0_get_the_same_cars(mini):
 def test_an_unimplemented_stage_stops_instead_of_running_as_ue(mini):
     """config 에만 있고 코드가 없는 단계는 멈춘다. 조용히 UE 로 돌면 결과를 못 믿는다.
 
-    대상은 **아직 없는 칸**이어야 한다. S3·S4 가 들어오면서(#139·#142) **MEC(#138)** 로 옮겼다 — config 는 받지만
-    아직 구현이 없는 칸이다 —
+    대상은 **아직 없는 칸**이어야 한다. 한 칸이 구현될 때마다 옮겨 왔다 —
+    S3·S4 가 들어오면서 MEC 로, **MEC 가 들어오면서(#138) `PAPER` 로.**
     구현된 칸으로 검사하면 이 테스트가 통과하면서 아무것도 안 지킨다.
+
+    `PAPER` 는 `config.VALID_STAGES` 에는 있고 `runner.RUNNABLE_STAGES` 에는 없다.
+    그 둘이 갈라져 있는 것이 이 방어의 전부다.
     """
 
     cfg, db, runs = mini
 
     with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
-        with_stage(cfg, "MEC")
+        with_stage(cfg, "PAPER")
 
     data = yaml.safe_load(cfg.raw_yaml)
-    data["policy"]["stage"] = "MEC"
+    data["policy"]["stage"] = "PAPER"
     with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
         run_once(ScenarioConfig.from_dict(data, source="mini"), seed=1,
                  db_path=db, runs_dir=runs, log=lambda _: None)
@@ -393,3 +396,43 @@ def test_s3_window_is_recorded_in_params(mini):
     # 시도 횟수는 0 일 수 있다 (작은 시나리오) — 키가 **있는지**를 본다
     assert (rid, "s3_swap_tried") in kpis
     assert (rid, "s3_swap_done") in kpis
+    # 이동 카운터도 남아야 한다. #139 가 이동을 넣은 이유가 "교환만으로는 쏠린
+    # 배정을 못 바꾼다" 였는데, KPI 에 교환만 있으면 그 이동이 안 보인다
+    assert (rid, "s3_move_tried") in kpis
+    assert (rid, "s3_move_done") in kpis
+
+
+def test_s3_exact_runs_end_to_end_and_records_the_gap(mini):
+    """★ `S3_EXACT` 가 **끝까지** 돌고 열거 KPI 를 남기는지 (#143).
+
+    이 테스트가 있는 이유는 비용이다. 스테이지를 하나 더하면 `runner.py` 안의
+    **스테이지 목록 네 군데**를 다 고쳐야 한다 — 실행 가능 목록, 예측 가드,
+    윈도우 가드, 정책 분기, 그리고 KPI 기록. 처음에 두 군데를 빼먹었고, 그게
+    **9분짜리 런이 끝나는 순간에** 터졌다.
+
+    작은 시나리오로 끝까지 돌려 두면 그 종류의 누락이 CI 에서 잡힌다.
+    """
+
+    from evdt.engine.forecast import ObservedSpec
+
+    cfg, db, runs = mini
+    rid = run_once(with_stage(cfg, "S3_EXACT"), seed=1, db_path=db, runs_dir=runs,
+                   gap_plot=False, log=lambda _: None,
+                   observed=ObservedSpec(strength=0.30), s3_window=4)
+
+    # run_id 가 S3 와 **갈라져야** 한다 — 안 갈라지면 사다리의 S3 를 덮어쓴다
+    assert "S3_EXACT" in rid
+
+    kpis = _kpis(db, [rid])
+    for metric in ("exact_groups", "exact_better_groups", "exact_tried",
+                   "exact_gain_min"):
+        assert (rid, metric) in kpis, f"{metric} 이 안 남았다"
+
+    # 열거는 휴리스틱보다 **나쁠 수 없다** — 되찾은 체류가 음수면 배선이 틀렸다
+    assert kpis[(rid, "exact_gain_min")] >= 0.0
+
+    # 그룹이 하나라도 있었다면 조합을 그룹 수보다 많이 재야 한다
+    groups = kpis[(rid, "exact_groups")]
+    if groups > 0:
+        assert kpis[(rid, "exact_tried")] > groups
+        assert kpis[(rid, "exact_tried")] <= groups * 4 ** 4

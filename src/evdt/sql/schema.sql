@@ -198,6 +198,7 @@ CREATE TABLE IF NOT EXISTS run (
                        'MEC',              -- 한계 외부비용 순차 배정 (S1 변형 / fallback)
                        'PAPER',            -- 기반 논문 재현 (사다리의 한 칸)
                        'PERFECT_ROLLING',  -- 완전 예측 롤링
+                       'S3_EXACT',         -- S3 그룹을 전수 열거 (#143, 진단)
                        'ORACLE'            -- 사후 최적해
                    )),
     seed           INTEGER NOT NULL CHECK (seed >= 0),

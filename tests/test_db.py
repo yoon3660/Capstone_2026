@@ -225,3 +225,106 @@ def test_cell_lanes_source_defaults_to_assumed(seeded_db) -> None:
         ).fetchone()[0]
 
     assert source == "assumed"
+
+
+def test_an_existing_db_gets_a_new_stage_in_the_check(tmp_path) -> None:
+    """★ 기존 DB 의 `run.stage` CHECK 에 **빠진 스테이지가 채워진다** (#143).
+
+    `schema.sql` 은 `CREATE TABLE IF NOT EXISTS` 다. 그래서 이미 있는 DB 의 CHECK 는
+    영원히 안 바뀐다 — 스테이지를 더하면 새 DB 에서는 되고 **기존 DB 에서는 런이
+    끝나는 순간** 터진다.
+
+        sqlite3.IntegrityError: CHECK constraint failed: stage IN (...)
+
+    #143 에서 `S3_EXACT` 를 더하면서 실제로 그랬고, 9분짜리 런을 버렸다. #138 의
+    `MEC` 도 같은 길을 간다.
+
+    그리고 이 마이그레이션은 **테이블을 다시 만든다.** 그래서 잃을 수 있는 것이
+    많다 — 이 테스트가 지키는 것이 그 목록이다.
+    """
+    import json
+
+    from evdt.config import VALID_STAGES
+    from evdt.io.db import init_db
+    from evdt.paths import SCHEMA_PATH
+
+    # S3_EXACT 가 없던 시절의 스키마를 만든다
+    old = SCHEMA_PATH.read_text(encoding="utf-8").replace(
+        "                       'S3_EXACT',         -- S3 그룹을 전수 열거 (#143, 진단)\n", "")
+    assert "'S3_EXACT'" not in old, "옛 스키마를 못 만들었다 — 주석 줄이 바뀌었나"
+
+    db = tmp_path / "old.db"
+    with get_conn(db) as conn:
+        conn.executescript(old)
+        conn.execute(
+            "INSERT INTO corridor (corridor_id, name, direction, origin_name, dest_name, "
+            "length_km) VALUES ('c', '경부', 'DOWN', 'S', 'B', 400.0)")
+        conn.execute(
+            "INSERT INTO scenario (scenario_id, corridor_id, label, day_type, sim_start_min, "
+            "sim_end_min, ev_share, demand_multiplier, temp_c, config_path, config_yaml, "
+            "config_hash) VALUES ('sc', 'c', 'n', 'SEOLLAL_PEAK', 0, 1440, 0.1, 1.0, 0.0, "
+            "'p', 'y', 'h')")
+        conn.execute(
+            "INSERT INTO run (run_id, scenario_id, stage, seed, participation, "
+            "code_version, output_dir, params_json, status) "
+            "VALUES ('r1', 'sc', 'S3', 1, 1.0, 'abc', 'runs/r1', ?, 'DONE')",
+            (json.dumps({"s3_window": 4}),))
+        conn.execute(
+            "INSERT INTO run_kpi (run_id, metric, value, unit) "
+            "VALUES ('r1', 'dwell_total_h', 6288.27, 'h')")
+
+    with get_conn(db) as conn:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO run (run_id, scenario_id, stage, seed, participation, "
+                "code_version, output_dir) VALUES ('r2','sc','S3_EXACT',2,1.0,'a','b')")
+
+    init_db(db)
+
+    with get_conn(db) as conn:
+        ddl = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='run'").fetchone()[0]
+
+        # ① 빠진 스테이지가 다 들어왔다
+        for st in VALID_STAGES:
+            assert f"'{st}'" in ddl, f"{st} 가 CHECK 에 없다"
+
+        # ② **데이터가 그대로다.** run_kpi 는 CASCADE 로 매달려 있어서, 외래키를 켠
+        #    채로 run 을 지우면 전부 사라진다
+        assert conn.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM run_kpi").fetchone()[0] == 1
+        row = conn.execute(
+            "SELECT params_json, status, code_version FROM run WHERE run_id='r1'").fetchone()
+        assert json.loads(row[0])["s3_window"] == 4
+        assert (row[1], row[2]) == ("DONE", "abc")
+
+        # ③ 칸·CHECK·UNIQUE 가 보존됐다. 손으로 적은 DDL 로 다시 만들면 여기서
+        #    조용히 사라진다 — 실제로 첫 구현이 participation 을 INTEGER 로 적었다
+        for keep in ("code_dirty", "output_dir", "error_message",
+                     "participation  REAL", "CHECK (seed >= 0)",
+                     "UNIQUE (scenario_id, stage, seed, participation)"):
+            assert keep in ddl, f"{keep} 가 사라졌다"
+
+        # ④ 인덱스도 다시 만들어졌다
+        idx = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE tbl_name='run' AND type='index'")}
+        assert "idx_run_scenario_stage" in idx
+
+        assert not conn.execute("PRAGMA foreign_key_check").fetchall()
+
+        # ⑤ 이제 새 스테이지가 들어가고, **엉뚱한 값은 여전히 막힌다**
+        conn.execute(
+            "INSERT INTO run (run_id, scenario_id, stage, seed, participation, "
+            "code_version, output_dir) VALUES ('r2','sc','S3_EXACT',2,1.0,'a','b')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO run (run_id, scenario_id, stage, seed, participation, "
+                "code_version, output_dir) VALUES ('r3','sc','NOPE',3,1.0,'a','b')")
+
+
+def test_the_stage_migration_is_idempotent(seeded_db) -> None:
+    """이미 맞는 DB 에는 **아무것도 하지 않는다.** 매번 테이블을 다시 만들면 안 된다."""
+    from evdt.io.db import migrate_stage_check
+
+    with get_conn(seeded_db) as conn:
+        assert migrate_stage_check(conn) is False

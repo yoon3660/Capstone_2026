@@ -32,7 +32,12 @@ from evdt.replay import describe as describe_period
 # run.stage 의 허용값 (schema.sql 의 CHECK 와 반드시 일치해야 한다)
 VALID_STAGES: tuple[str, ...] = (
     "UE", "S0", "S1", "S2", "S3", "S4",
-    "MEC", "PAPER", "PERFECT_ROLLING", "ORACLE",
+    "MEC", "PAPER", "PERFECT_ROLLING",
+    # S3 의 그룹을 **전수 열거**한 진단 런 (#143). 같은 S3Policy 를 쓰지만 run_id 가
+    # 갈라져야 S3 를 덮어쓰지 않는다 — PERFECT_ROLLING 이 S2Policy 를 쓰면서 따로
+    # 스테이지를 받은 것과 **같은 이유**다 (runner.py 의 그 주석 참조)
+    "S3_EXACT",
+    "ORACLE",
 )
 VALID_DAY_TYPES: tuple[str, ...] = (
     "SEOLLAL_PEAK", "CHUSEOK_PEAK", "WEEKEND_BASE", "WEEKDAY_BASE",
