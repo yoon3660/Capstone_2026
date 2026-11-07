@@ -310,18 +310,21 @@ def test_ue_and_s0_get_the_same_cars(mini):
 def test_an_unimplemented_stage_stops_instead_of_running_as_ue(mini):
     """config 에만 있고 코드가 없는 단계는 멈춘다. 조용히 UE 로 돌면 결과를 못 믿는다.
 
-    대상은 **아직 없는 칸**이어야 한다. S3·S4 가 들어오면서(#139·#142) **MEC(#138)** 로 옮겼다 — config 는 받지만
-    아직 구현이 없는 칸이다 —
+    대상은 **아직 없는 칸**이어야 한다. 한 칸이 구현될 때마다 옮겨 왔다 —
+    S3·S4 가 들어오면서 MEC 로, **MEC 가 들어오면서(#138) `PAPER` 로.**
     구현된 칸으로 검사하면 이 테스트가 통과하면서 아무것도 안 지킨다.
+
+    `PAPER` 는 `config.VALID_STAGES` 에는 있고 `runner.RUNNABLE_STAGES` 에는 없다.
+    그 둘이 갈라져 있는 것이 이 방어의 전부다.
     """
 
     cfg, db, runs = mini
 
     with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
-        with_stage(cfg, "MEC")
+        with_stage(cfg, "PAPER")
 
     data = yaml.safe_load(cfg.raw_yaml)
-    data["policy"]["stage"] = "MEC"
+    data["policy"]["stage"] = "PAPER"
     with pytest.raises(ValueError, match="구현되지 않은 스테이지"):
         run_once(ScenarioConfig.from_dict(data, source="mini"), seed=1,
                  db_path=db, runs_dir=runs, log=lambda _: None)

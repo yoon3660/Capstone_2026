@@ -40,6 +40,7 @@ from evdt.engine.forecast import (
     observed_from_entries,
     specs_from_trips,
 )
+from evdt.engine.mec import MecPolicy, MecSettings
 from evdt.engine.reservation import ReservationLedger
 from evdt.engine.s0 import S0Policy, S0Settings
 from evdt.engine.s1 import S1Policy, S1Settings
@@ -497,7 +498,7 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
 RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4",
-                                   "S3_EXACT", "PERFECT_ROLLING")
+                                   "S3_EXACT", "MEC", "PERFECT_ROLLING")
 
 #: KPI 는 숫자만 받는다. solver 와 후보 범위를 코드로 적어 둔다 (#143) — 문자열로
 #: 넣을 칸이 없는데, 이 둘이 적혀 있지 않으면 "어느 solver 의 결과인가" 를
@@ -615,10 +616,10 @@ def run_once(
 
     # 엔진 설정(solver·후보 범위·재배정 비용)은 그룹 최적화를 쓰는 칸만 받는다 (#143).
     # 다른 칸이 조용히 받으면 위의 둘과 똑같은 고장이 된다
-    if engine_opts and cfg.policy.stage not in ("S3", "S4", "S3_EXACT"):
+    if engine_opts and cfg.policy.stage not in ("S3", "S4", "S3_EXACT", "MEC"):
         raise ValueError(
-            f"`engine_opts` 는 S3·S4·S3_EXACT 만 쓴다 (#143) — {cfg.policy.stage} 에 "
-            "주면 기록에는 남고 효과는 없는 값이 된다")
+            f"`engine_opts` 는 S3·S4·S3_EXACT·MEC 만 쓴다 (#143 · #138) — "
+            f"{cfg.policy.stage} 에 주면 기록에는 남고 효과는 없는 값이 된다")
 
     if oracle is not None and observed is not None:
         raise ValueError(
@@ -803,7 +804,8 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
 
     stage = cfg.policy.stage
 
-    if stage not in ("S0", "S1", "S2", "S3", "S4", "S3_EXACT", "PERFECT_ROLLING"):
+    if stage not in ("S0", "S1", "S2", "S3", "S4", "S3_EXACT", "MEC",
+                     "PERFECT_ROLLING"):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
     # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
@@ -909,6 +911,14 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 entry_soc_mean=departure_soc_mean(cfg),
                 spec=observed)
             log(f"  예측 — {forecast.describe()}")
+    elif stage == "MEC":
+        # ★ **기준 축** (#138). 정보도 결합도 S1 그대로고 **고르는 값**만 바꾼다
+        #   (사적 비용 → 사회적 비용). 그래서 S1 과 **같은 자리**에 둔다 — 원장을
+        #   쓰고 예측을 안 쓴다. 한 줄이라도 다른 자리에 두면 그 차이가 기준의
+        #   차이로 보고된다
+        policy = MecPolicy(MecSettings(
+            **kw, **engine_settings(engine_opts, MecSettings)))
+        ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
     elif stage == "S1":
         policy = S1Policy(S1Settings(**kw))
         ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
@@ -979,6 +989,20 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 # 차가 도착한다** (`S4Policy._one`)
                 "s4_opt_out_blocked": (
                     policy.counters.get("enroute_opt_out_blocked", 0.0), "count"),
+            }),
+            # 기준 축 (#138). **셋이 같이 있어야 읽을 수 있다** —
+            #   mec_chosen_min   고른 자리의 외부비용 합 = **실제로 내재화된 양**
+            #   mec_probed_min   후보마다 재 본 값의 합 (수십 배 크다. 내재화가 아니다)
+            #   mec_calls·mec_ms 원장 질의가 얼마나 비싸졌나 (#77 이 요구한 값)
+            **({} if stage != "MEC" else {
+                "mec_weight": (float(policy.settings.mec_weight), "ratio"),
+                "mec_chosen_min": (policy.counters.get("mec_chosen_min", 0.0), "min"),
+                "mec_chosen_nonzero": (
+                    policy.counters.get("mec_chosen_nonzero", 0.0), "count"),
+                "mec_probed_min": (policy.counters.get("mec_probed_min", 0.0), "min"),
+                "mec_calls": (policy.counters.get("mec_calls", 0.0), "count"),
+                "mec_nonzero": (policy.counters.get("mec_nonzero", 0.0), "count"),
+                "mec_ms": (policy.counters.get("mec_ms", 0.0), "ms"),
             }),
             **({} if stage not in ("S3", "S4", "S3_EXACT") else {
                 "s3_window": (float(policy.settings.window), "count"),
