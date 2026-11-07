@@ -453,9 +453,11 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                         f"{policy.stage} 가 앞에 있지 않은 휴게소를 골랐다: {car.ev.ev_id} "
                         f"{car.offset_km:.1f} km → {kind} {off:.1f} km (되돌아가기는 없다)")
 
-                eta = car.t_min + travel.minutes(car.offset_km, off, car.t_min)
+                # A completion from the preceding step cannot dispatch into that step.
+                departure = max(t, car.t_min)
+                eta = departure + travel.minutes(car.offset_km, off, departure)
                 car.target = kind
-                car.left_from_km, car.left_at_min, car.eta_min = car.offset_km, t, eta
+                car.left_from_km, car.left_at_min, car.eta_min = car.offset_km, departure, eta
                 car.dispatch += 1
                 heapq.heappush(arrivals, (eta, car.ev.ev_id, kind, car.dispatch))
 
