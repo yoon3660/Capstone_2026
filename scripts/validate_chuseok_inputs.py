@@ -118,7 +118,7 @@ def main():
         path = ROOT / f"config/scenario_chuseok_{direction.lower()}.yaml"
         cfg = load_config(path)
         load_config(path.with_stem(path.stem + "_adoption"))
-        section = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/validate_sections.py"),
+        section = subprocess.run([sys.executable, "-X", "utf8", "-B", str(ROOT / "scripts/validate_sections.py"),
                                   "--config", str(path)], cwd=ROOT, check=True,
                                  capture_output=True, encoding="utf-8")
         (args.out / f"validate_sections_{direction.lower()}.txt").write_text(section.stdout, encoding="utf-8")
