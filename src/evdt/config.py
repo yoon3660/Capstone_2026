@@ -443,7 +443,10 @@ class ScenarioConfig:
         그림만 보고도 재현인지 가정인지 알 수 있어야 한다.
         """
 
-        return f"{describe_period(self.demand.period)} · {layer_label(self.demand.layers)}"
+        layers = layer_label(self.demand.layers)
+        if self.demand.period == "chuseok2026" and not self.demand.layers:
+            layers = "추가 수요 레이어 없음"
+        return f"{describe_period(self.demand.period)} · {layers}"
 
     def variant(self, tag: str, overrides: dict[str, Any]) -> ScenarioConfig:
         """이 시나리오에서 몇 개 값만 바꾼 실험. scenario_id 뒤에 __<tag> 가 붙는다.
