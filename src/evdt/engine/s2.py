@@ -65,6 +65,22 @@ class S2Policy(S1Policy):
 
     stage: str = "S2"
 
+    def _amenity(self, ledger, station_id: str, arr, world) -> float:
+        """β 는 그대로 쓰고, γ(체감 대기)는 **거부한다** (#146).
+
+        S2 이상은 체류를 예측으로 묻는데(`_dwell`), 편의시설 쪽 대기 질의는
+        예측을 안 본다. 섞으면 같은 후보의 대기가 두 값이 되고 어느 쪽이 결정을
+        바꿨는지 설명할 수 없다. β 만 쓰는 스윕은 그대로 돈다.
+        """
+
+        prefs = self.settings.amenity
+        if prefs.needs_wait:
+            raise NotImplementedError(
+                f"{self.stage} 에서 체감 대기 계수(γ={prefs.patience})는 아직 못 쓴다 — "
+                "예측을 보는 대기 질의가 필요하다 (#146). β(pull)만 쓰거나 "
+                "S0·S1 에서 돌릴 것")
+        return super()._amenity(ledger, station_id, arr, world)
+
     def _dwell(self, ledger, station_id: str, arr: Arrival, world: WorldView) -> float:
         """★ S1 과의 **단 하나의 차이** — 아직 결정하지 않은 차들을 줄에 더해서 센다.
 

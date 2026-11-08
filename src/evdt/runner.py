@@ -32,6 +32,7 @@ import yaml
 from evdt.config import ScenarioConfig
 from evdt import demand_layers
 from evdt.demand_layers import effective_ev_share, opportunity_charge
+from evdt.engine.amenity import NO_AMENITY, AmenityPrefs
 from evdt.engine.forecast import (
     ArrivalSpec,
     BlurredForecast,
@@ -277,6 +278,57 @@ def engine_settings(opts: Mapping[str, object] | None, cls: type) -> dict:
         else:
             out[key] = str(raw)
     return out
+
+
+#: 편의시설 선호를 켜는 engine_opts 키 (#146). Settings 필드가 아니라 **스칼라**다.
+AMENITY_KEYS = ("amenity_pull", "amenity_patience", "amenity_source")
+
+
+def _amenity_from_opts(opts: Mapping[str, object] | None, specs, log: Log):
+    """`engine_opts` 에서 편의시설 키를 꺼내 `AmenityPrefs` 를 만든다.
+
+    돌려주는 것: (편의시설 키를 **뺀** opts, AmenityPrefs)
+
+    키가 없으면 `NO_AMENITY` 다 — 그러면 `adjust` 가 정확히 0.0 이라 사다리가
+    지금과 비트 단위로 같다.
+
+    지수는 `amenity_source` 가 가리키는 CSV 에서 읽는다 (`station_id,amenity_index`).
+    커버리지가 모자라면 **그 자리에서 멈춘다** — 조용한 a_j=0 은 "껐다" 와 구분이
+    안 되고, 그러면 "선호를 켰는데 결과가 같다" 를 설명할 수 없다.
+    """
+
+    if not opts or not any(k in opts for k in AMENITY_KEYS):
+        return opts, NO_AMENITY
+
+    rest = {k: v for k, v in opts.items() if k not in AMENITY_KEYS}
+    pull = float(opts.get("amenity_pull", 0.0))
+    patience = float(opts.get("amenity_patience", 0.0))
+    source = str(opts.get("amenity_source", "") or "")
+
+    if (pull > 0.0 or patience > 0.0) and not source:
+        raise ValueError(
+            "편의시설 선호를 켰는데 amenity_source 가 없다 — 지수 CSV 경로를 줄 것 "
+            "(station_id,amenity_index)")
+
+    index: dict[str, float] = {}
+    if source:
+        table = pd.read_csv(PROJECT_ROOT / source)
+        missing = {"station_id", "amenity_index"} - set(table.columns)
+        if missing:
+            raise ValueError(f"{source} 에 열이 없다: {sorted(missing)}")
+        index = {str(r.station_id): float(r.amenity_index)
+                 for r in table.itertuples()}
+
+    prefs = AmenityPrefs(pull=pull, patience=patience, index=index, source=source)
+    prefs.require([s.station_id for s in specs])
+
+    if prefs.enabled:
+        covered = [prefs.amenity(s.station_id) for s in specs]
+        log(f"  편의시설 선호 — β={pull:g}분 · γ={patience:g} · 출처 {source}")
+        log(f"    휴게소 {len(covered)}곳 · 지수 평균 {sum(covered) / max(len(covered), 1):.3f} "
+            f"· 최대 {max(covered, default=0.0):.3f}")
+
+    return rest, prefs
 
 
 def stale_reason(stored: dict, cfg: ScenarioConfig,
@@ -623,10 +675,16 @@ def run_once(
 
     # 엔진 설정(solver·후보 범위·재배정 비용)은 그룹 최적화를 쓰는 칸만 받는다 (#143).
     # 다른 칸이 조용히 받으면 위의 둘과 똑같은 고장이 된다
-    if engine_opts and cfg.policy.stage not in ("S3", "S4", "S3_EXACT", "MEC"):
+    #
+    # **편의시설 키는 예외다** (#146) — `S0Settings` 에 있어서 전 스테이지가 쓴다.
+    # 오히려 한 칸만 받으면 그 차이가 정책 차이로 보고된다. 그래서 그 키를 빼고
+    # 남은 것이 있을 때만 막는다
+    other = {k: v for k, v in (engine_opts or {}).items() if k not in AMENITY_KEYS}
+    if other and cfg.policy.stage not in ("S3", "S4", "S3_EXACT", "MEC"):
         raise ValueError(
             f"`engine_opts` 는 S3·S4·S3_EXACT·MEC 만 쓴다 (#143 · #138) — "
-            f"{cfg.policy.stage} 에 주면 기록에는 남고 효과는 없는 값이 된다")
+            f"{cfg.policy.stage} 에 주면 기록에는 남고 효과는 없는 값이 된다 "
+            f"(받은 키: {sorted(other)})")
 
     if oracle is not None and observed is not None:
         raise ValueError(
@@ -826,6 +884,15 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
         "max_stops": cfg.policy.ue.max_stops,
         "escape_cost_min": cfg.demand.escape_cost_min,
     }
+
+    # ★ 편의시설 선호 (#146). **전 스테이지가 같은 값을 받아야 한다** — 한쪽만
+    #   다르면 그 차이가 정책 차이로 보고된다. 그래서 여기 `kw` 에 한 번 넣는다.
+    #
+    #   `engine_settings` 를 안 쓰는 이유: 그 함수는 스칼라를 Settings 필드 타입으로
+    #   캐스팅하는데, 여기서는 스칼라 셋(pull·patience·source)으로 **객체 하나**를
+    #   만들고 지수 파일까지 읽어야 한다.
+    engine_opts, amenity = _amenity_from_opts(engine_opts, specs, log)
+    kw["amenity"] = amenity
     # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
     # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
     ledger = forecast = None

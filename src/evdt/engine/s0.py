@@ -32,6 +32,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from evdt.engine.amenity import NO_AMENITY, AmenityPrefs
 from evdt.interfaces import (
     ESCAPE_NO_PLAN,
     NO_CHARGE,
@@ -68,6 +69,9 @@ class S0Settings:
     habit_soc: float = 0.0
     #: 휴게소 계획이 전부 이보다 비싸면 코리도를 벗어난다 (#54). 0 이면 이탈이 없다
     escape_cost_min: float = 0.0
+    #: 편의시설 선호 (#146). 꺼져 있으면(기본) 결정비용이 바뀌지 않는다 —
+    #: 사다리가 지금과 **비트 단위로 같다**. `engine/amenity.py` 참조
+    amenity: AmenityPrefs = NO_AMENITY
 
 
 @dataclass(frozen=True)
@@ -128,7 +132,8 @@ class S0Policy:
             return ESCAPE_NO_PLAN
 
         best_id = ""
-        best_cost = float("inf")
+        best_cost = float("inf")      # 사적 비용 (이탈 판정이 본다)
+        best_key = float("inf")       # 결정 비용 (argmin 이 본다)
 
         # 정렬해서 훑는다 — 동률일 때 dict 순서에 답이 달리면 재현이 안 된다
         for st in sorted(world.stations.values(), key=lambda s: (s.offset_km, s.station_id)):
@@ -162,10 +167,16 @@ class S0Policy:
                 curve=ev.curve, charge_power_factor=world.cold_factor,
             )
             # ★ S0 의 전부: 지금 화면의 대기 + 내 충전시간. 도착 시각을 보지 않는다
-            cost = st.wait_min + charge_min
+            private = st.wait_min + charge_min
 
-            if cost < best_cost:
-                best_id, best_cost = st.station_id, cost
+            # ★ **고르는 값**과 **내가 치르는 값**을 가른다 (#146) — S1 의 key/private
+            #   와 같은 가름이다. 편의시설 선호는 **고를 때만** 본다.
+            #   이탈 판정은 사적 비용으로 한다: 이탈 기준 120분 자체가 "얼마나
+            #   참나" 를 담은 행동 파라미터라, θ 를 곱하면 같은 심리를 두 번 센다.
+            key = private + self.settings.amenity.adjust(st.station_id, st.wait_min)
+
+            if key < best_key:
+                best_id, best_key, best_cost = st.station_id, key, private
 
         if not best_id:
             return ESCAPE_NO_PLAN
