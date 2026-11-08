@@ -25,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from evdt.engine.patience import PATIENCE_KINDS
 from evdt.demand_layers import Layer, parse_layers
 from evdt.demand_layers import label as layer_label
 from evdt.replay import describe as describe_period
@@ -240,7 +241,13 @@ class DemandConfig:
     #: 0 이면 이탈 선택지가 없다. ⚠ 120분은 잠정값, 근거는 #64
     escape_cost_min: float = 0.0
     #: 이탈 비용의 산포 (로그정규 sigma) (#78). 0 이면 전원이 같은 값을 쓴다.
+    #: ⚠ `patience_kind` 로 대체되는 중이다 (#146). 둘 다 주면 patience_kind 가 이긴다
     escape_cost_sigma: float = 0.0
+    #: 인내 분포의 가족 (#146) — point · lognormal · weibull · exponential · uniform.
+    #: 중앙값은 언제나 `escape_cost_min` 이다. `engine/patience.py` 참조
+    patience_kind: str = "point"
+    #: 가족별 모양 모수. lognormal σ · weibull k · uniform 반폭비율. exponential 은 안 쓴다
+    patience_shape: float = 0.0
 
     #: 시간대별 EV 대수를 생성하는 방법 (#53)
     #:   fixed     기대값을 반올림하는 기존 방식
@@ -541,6 +548,16 @@ class ScenarioConfig:
             d.get("escape_cost_min", 0.0), "demand.escape_cost_min", lo=0.0)
         escape_cost_sigma = e.number(
             d.get("escape_cost_sigma", 0.0), "demand.escape_cost_sigma", lo=0.0)
+        patience_kind = str(d.get("patience_kind", "point"))
+        if patience_kind not in PATIENCE_KINDS:
+            e.add("demand.patience_kind",
+                  f"{list(PATIENCE_KINDS)} 중 하나여야 한다 (받은 값: {patience_kind!r})")
+        patience_shape = e.number(
+            d.get("patience_shape", 0.0), "demand.patience_shape", lo=0.0)
+        if patience_kind == "weibull" and not patience_shape:
+            e.add("demand.patience_shape", "와이블은 shape(k) 가 0 보다 커야 한다")
+        if patience_kind == "uniform" and not 0.0 < float(patience_shape or 0.0) <= 1.0:
+            e.add("demand.patience_shape", "균등분포의 반폭 비율은 0<h≤1 이어야 한다")
         travel_time = str(d.get("travel_time", "fixed"))
         if travel_time not in TRAVEL_TIME_MODES:
             e.add("demand.travel_time",
@@ -709,6 +726,8 @@ class ScenarioConfig:
                 travel_time=travel_time,
                 escape_cost_min=escape_cost_min,           # type: ignore[arg-type]
                 escape_cost_sigma=escape_cost_sigma,       # type: ignore[arg-type]
+                patience_kind=patience_kind,
+                patience_shape=patience_shape,             # type: ignore[arg-type]
                 layers=layers,
                 beta_binomial_concentration=beta_binomial_concentration,   # type: ignore[arg-type]
                 poisson_lognormal_sigma=poisson_lognormal_sigma,           # type: ignore[arg-type]

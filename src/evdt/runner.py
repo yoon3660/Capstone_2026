@@ -33,6 +33,7 @@ from evdt.config import ScenarioConfig
 from evdt import demand_layers
 from evdt.demand_layers import effective_ev_share, opportunity_charge
 from evdt.engine.amenity import NO_AMENITY, AmenityPrefs
+from evdt.engine.patience import Patience
 from evdt.engine.forecast import (
     ArrivalSpec,
     BlurredForecast,
@@ -236,6 +237,12 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
         # 그래서 이 칸은 **없으면 재사용을 막는다** (`stale_reason`). 이 파일의
         # 다른 칸들과 규칙이 다른 유일한 자리다 — 나머지는 "없으면 옛 run 을
         # 버리지 않는다" 이고, 여기는 **옛 run 이 틀렸다.**
+        # 인내의 **모양** (#146). 중앙값이 같아도 모양이 다르면 다른 세계다 —
+        # 기록에 없으면 "어느 인내로 돌았나" 를 나중에 알 수 없다. 옛 run 에는
+        # 이 칸이 없고, 그건 점질량(전원 120분) 이었다는 뜻이다
+        "patience": Patience(median_min=cfg.demand.escape_cost_min,
+                             kind=cfg.demand.patience_kind,
+                             shape=cfg.demand.patience_shape).describe(),
         "group_scorer": GROUP_SCORER,
     }
 
@@ -487,6 +494,9 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         max_stops=cfg.policy.ue.max_stops,
         escape_cost_min=cfg.demand.escape_cost_min,
         escape_cost_sigma=cfg.demand.escape_cost_sigma,
+        patience=Patience(median_min=cfg.demand.escape_cost_min,
+                          kind=cfg.demand.patience_kind,
+                          shape=cfg.demand.patience_shape),
         opportunity_prob=opp_prob,
         opportunity_soc_margin=opp_margin,
     )

@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -31,6 +32,7 @@ from evdt.world.charge_decision import (
     can_reach_destination,
     can_reach_station_with_buffer,
 )
+from evdt.engine.patience import Patience
 from evdt.world.charging import CurveSegment, energy_for_distance_kwh
 
 #: SoC 비교 허용 오차 (charge_decision 과 같다)
@@ -140,12 +142,39 @@ class ChargeRule:
     #: 이탈 비용의 산포 (로그정규의 sigma) (#78). 0 이면 전원이 같은 값을 쓴다.
     #: **전원이 같으면 그 값 근처에 질량이 몰려 최적반응이 가라앉지 않는다** —
     #: 집이 근처라 금방 나가는 사람과 끝까지 기다리는 사람이 실제로 공존한다.
+    #:
+    #: ⚠ **`patience` 로 대체되는 중이다** (#146). 둘 다 주면 `patience` 가 이긴다.
+    #:   이 칸만 주면 `patience(kind="lognormal", shape=sigma)` 와 같게 동작한다 —
+    #:   옛 config 와 저장된 run 이 그대로 유효하다
     escape_cost_sigma: float = 0.0
+    #: 인내 분포 (#146). 콜센터 문헌에서 가져왔다 — `engine/patience.py` 참조.
+    #: 중앙값은 `escape_cost_min` 이고, 가족을 바꿔도 중앙값은 안 움직인다
+    patience: Patience | None = None
     opportunity_prob: float = 0.0
     #: 도착 예상 SoC 가 이보다 얇을 때만 기회 충전을 고려한다.
     #: 차종으로 나누지 않는 이유: 배터리가 작은 차는 여유가 얇아 **자연히** 더 걸린다.
     #: 횟수를 차종별로 강제하면 이미 맞게 도는 물리를 덮어쓰게 된다.
     opportunity_soc_margin: float = 0.0
+
+    def patience_spec(self) -> Patience:
+        """실제로 쓸 인내 분포. **옛 손잡이와 새 손잡이를 한 자리에서 화해시킨다.**
+
+        우선순위
+            1. `patience` 가 있으면 그것 (중앙값은 `escape_cost_min` 로 덮어쓴다 —
+               두 곳에 적힌 중앙값이 갈라지면 어느 쪽이 쓰였는지 알 수 없다)
+            2. 없고 `escape_cost_sigma > 0` 이면 로그정규 (#78 의 동작 그대로)
+            3. 둘 다 없으면 점질량
+
+        2번이 **저장된 run 을 지키는 자리**다. 여기가 없으면 옛 결과가 전부
+        재현 불가가 된다.
+        """
+
+        if self.patience is not None:
+            return dataclasses.replace(self.patience, median_min=self.escape_cost_min)
+        if self.escape_cost_sigma > 0.0:
+            return Patience(median_min=self.escape_cost_min, kind="lognormal",
+                            shape=self.escape_cost_sigma)
+        return Patience(median_min=self.escape_cost_min)
 
 
 def _wants_opportunity_charge(ev: Mapping, vclass: Mapping, entry_km: float,
@@ -350,12 +379,10 @@ def build_trip_demands(
     # 이탈 비용은 **차마다 다르다** (#78). 전원이 같은 값이면 그 값 근처에 질량이
     # 몰려 "나갈까 말까" 경계에 선 차가 수천 대가 되고, 집단이 뒤집히며 진동한다.
     # 중앙값은 rule.escape_cost_min 이고 sigma 가 0 이면 전원이 그 값이다.
-    if rule.escape_cost_min > 0 and rule.escape_cost_sigma > 0:
-        escape_costs = gen.lognormal(
-            np.log(rule.escape_cost_min), rule.escape_cost_sigma, size=len(evs)
-        )
-    else:
-        escape_costs = np.full(len(evs), rule.escape_cost_min, dtype=float)
+    #
+    # 가족은 `patience` 가 정한다 (#146). 없으면 옛 손잡이(`escape_cost_sigma`)를
+    # 로그정규로 읽는다 — 저장된 run 이 그대로 유효해야 한다.
+    escape_costs = rule.patience_spec().draw(len(evs), gen)
 
     # 습관 목표 SoC 도 **차마다 다르다** (#112). 전원이 같은 값이면 같은 휴게소에서
     # 체류가 전부 같아져 무차별점이 생기고, 상행에서 gap 이 3.12% ↔ 3.20% 로
