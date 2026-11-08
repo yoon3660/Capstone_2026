@@ -30,6 +30,7 @@ import pandas as pd
 import yaml
 
 from evdt.config import ScenarioConfig
+from evdt import demand_layers
 from evdt.demand_layers import effective_ev_share, opportunity_charge
 from evdt.engine.forecast import (
     ArrivalSpec,
@@ -139,9 +140,15 @@ def load_config(
     #   반드시 이름 붙은 레이어로만 얹는다 (#54, `demand_layers.py`). 레이어로 넣어야
     #   `demand_label` 에 "EV 보급률 25%" 가 찍히고 **모든 그림 부제에 따라 붙는다**.
     #   직접 덮어쓰면 재현과 가정이 구분되지 않는다 — 그걸 막으려고 만든 장치다.
+    #
+    # ⚠ **ev_adoption 레이어만** 갈아끼운다 (#146). 예전에는 `demand.layers` 를 통째로
+    #   덮어써서 기회충전 레이어가 같이 날아갔다 — 보급률 하나를 바꿨다고 생각한
+    #   실험이 실은 **두 축을 동시에** 움직였다. 추석 config 에서 같은 ev_share 10%
+    #   인데 충전 필요 대수가 4,958 ↔ 2,138 로 2.3배 갈렸다.
     if ev_share is not None:
         tags.append(f"ev{ev_share * 100:g}")
-        overrides["demand.layers"] = [{"kind": "ev_adoption", "ev_share": float(ev_share)}]
+        overrides["demand.layers"] = demand_layers.replace_kind(
+            cfg.demand.layers, {"kind": "ev_adoption", "ev_share": float(ev_share)})
 
     # 실측 OD 목적지 (#99). **세계를 바꾸므로 반드시 이름이 바뀌어야 한다** — 안 바뀌면
     # 옛 수요 run 과 OD 수요 run 이 같은 run_id 를 갖고, #101 의 비교가 같은 run 을

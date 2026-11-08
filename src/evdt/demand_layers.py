@@ -209,6 +209,36 @@ def find(layers: tuple[Layer, ...], kind: str) -> Layer | None:
     return next((layer for layer in layers if layer.kind == kind), None)
 
 
+def as_dict(layer: Layer) -> dict:
+    """레이어 → config 에 쓸 수 있는 매핑. `parse_layers` 의 역함수다.
+
+    왜 필요한가 (#146): 실험 손잡이로 레이어 **하나만** 바꿔 끼우려면 나머지를 다시
+    적어 넣어야 한다. 손으로 적으면 config 에 레이어가 추가될 때 조용히 빠진다 —
+    실제로 `ev_share` 오버라이드가 기회충전 레이어를 통째로 날리고 있었다.
+    """
+
+    _, required, optional = _KINDS[layer.kind]
+
+    return {"kind": layer.kind,
+            **{key: getattr(layer, key) for key in (*required, *optional)}}
+
+
+def replace_kind(layers: tuple[Layer, ...], new: dict) -> list[dict]:
+    """`new["kind"]` 레이어만 갈아끼우고 나머지는 그대로 둔 매핑 목록.
+
+    순서는 **원래 자리를 지킨다** — 없던 kind 면 뒤에 붙는다. `tag()` 가 순서대로
+    이름을 만들기 때문에, 자리가 흔들리면 같은 세계가 다른 run_id 를 갖는다.
+    """
+
+    kind = new["kind"]
+    out = [new if layer.kind == kind else as_dict(layer) for layer in layers]
+
+    if not any(layer.kind == kind for layer in layers):
+        out.append(new)
+
+    return out
+
+
 def effective_ev_share(layers: tuple[Layer, ...], base_share: float) -> float:
     """레이어를 반영한 EV 비중. 레이어가 없으면 실측 가정 그대로."""
 
