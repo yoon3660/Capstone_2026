@@ -457,7 +457,12 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                 if kind in ESCAPE_REASON:
                     car.done = True
                     escape_events.append(
-                        _escape_row(car, ESCAPE_REASON[kind], escape_cost_min, best, t))
+                        # ★ **차마다의** 이탈 비용을 적는다. 여기에 시나리오
+                        #   중앙값을 적으면 결정(`:411` 은 차마다의 값을 쓴다)과
+                        #   기록이 갈라져, 인내를 분포로 바꾼 뒤 총비용이 틀린다.
+                        #   sigma=0 이던 동안은 둘이 같아서 드러나지 않았다 (#78)
+                        _escape_row(car, ESCAPE_REASON[kind],
+                                    car.ev.escape_cost_min, best, t))
                     continue
 
                 if kind not in queues:

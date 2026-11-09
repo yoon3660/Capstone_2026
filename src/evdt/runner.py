@@ -823,6 +823,11 @@ def run_once(
         n_escaped = len(escape_rows)
         n_reneged = sum(1 for r in escape_rows if r.get("reason") == "reneged")
         renege_wait_h = sum(float(r.get("waited_min", 0.0)) for r in escape_rows) / 60.0
+        # 이탈한 차들이 **실제로** 치른 비용의 합. `n_escaped x 중앙값` 으로 대신
+        # 세면 안 된다 — 인내가 분포면 이탈하는 차가 **짧은 쪽에 쏠리므로**
+        # 중앙값으로 세면 비용을 과대계상한다 (설 S1 에서 888h vs 실제 359h)
+        escape_cost_h = sum(
+            float(r.get("escape_cost_min", 0.0)) for r in escape_rows) / 60.0
         n_balked = sum(1 for r in escape_rows if r["reason"] == "balked")
         log(f"코리도 이탈 {n_escaped:,}대 ({n_escaped / max(len(built.trips), 1):.1%}) "
             f"— 줄이 길어서 {n_balked:,} · 기다리다 포기 {n_reneged:,} · "
@@ -842,6 +847,8 @@ def run_once(
             # 포기한 차들이 떠나기 전에 **이미 쓴** 시간. 이 칸이 없으면 그 시간이
             # 사라져서 사다리가 실제보다 좋아 보인다
             "renege_wait_total_h": (renege_wait_h, "h"),
+            # 이탈 비용 합 (시간). 총 사회적 비용 = 체류 + **이것** + 포기 전 대기
+            "escape_cost_total_h": (escape_cost_h, "h"),
             "n_charge_visits": (len(charge_events), "count"),
             "wait_mean_min": (float(waits.mean()), "min"),
             "wait_p95_min": (float(np.percentile(waits, 95)), "min"),
@@ -1435,6 +1442,7 @@ KPI_LABELS: dict[str, str] = {
     "n_escaped_balked": "이탈: 줄이 길어서 (대)",
     "n_escaped_reneged": "이탈: 기다리다 포기 (대)",
     "renege_wait_total_h": "포기 전 대기 합계 (시간)",
+    "escape_cost_total_h": "이탈 비용 합계 (시간)",
     "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",

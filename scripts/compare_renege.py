@@ -36,7 +36,7 @@
 포기한 차는 인내만큼 기다리다 떠났다. 그 시간은 사라지지 않는다. 더하지 않으면
 포기를 켤수록 비용이 줄어드는 것처럼 보인다.
 
-    총 = 총 체류 + 이탈 × 이탈비용 + 포기 전 대기
+    총 = 총 체류 + 이탈 비용 합 + 포기 전 대기
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ from evdt.runner import load_config, run_once, summarize_kpis  # noqa: E402
 STRENGTH = 0.30
 WINDOW = 4
 METRICS = ("dwell_total_h", "n_escaped", "n_escaped_balked", "n_escaped_reneged",
-           "renege_wait_total_h", "wait_mean_min", "wait_p95_min", "wait_max_min",
+           "renege_wait_total_h", "escape_cost_total_h", "wait_mean_min", "wait_p95_min", "wait_max_min",
            "bottleneck_slots", "n_ev_charging")
 
 
@@ -122,7 +122,9 @@ def main() -> int:
                            log=lambda *_: None, **kw_for(stage))
             s = summarize_kpis([rid]).set_index("metric")["mean"]
             k = {m: float(s.get(m, 0.0)) for m in METRICS}
-            total = (k["dwell_total_h"] + k["n_escaped"] * esc / 60.0
+            # 이탈 비용은 **차마다** 다르다 — `n_escaped x 중앙값` 으로 세면
+            # 안 된다 (이탈은 인내가 짧은 쪽에 쏠린다)
+            total = (k["dwell_total_h"] + k["escape_cost_total_h"]
                      + k["renege_wait_total_h"])
             rows.append({"칸": stage, "조건": label, "total_h": total,
                          "wall_s": time.perf_counter() - t0, **k})

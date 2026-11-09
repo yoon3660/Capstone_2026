@@ -232,3 +232,44 @@ def test_the_escape_schema_carries_the_wasted_wait() -> None:
     names = SCHEMAS["escape_event"].names
 
     assert "waited_min" in names
+
+
+# ---------------------------------------------------------------------------
+# 이탈 비용은 **차마다** 다르다 (#78 회귀 — #147 에서 드러났다)
+# ---------------------------------------------------------------------------
+
+
+def test_the_logged_escape_cost_is_the_cars_own() -> None:
+    """결정과 기록이 **같은 값**을 써야 한다.
+
+    `corridor_sim` 은 발길질 판단을 차마다의 `escape_cost_min` 으로 하는데
+    (`:411`), 기록만 시나리오 중앙값을 적고 있었다. `escape_cost_sigma=0` 이던
+    동안은 둘이 같아서 드러나지 않았다. 인내를 분포로 바꾸자 총비용이 틀렸다 —
+    설 S1 에서 순진한 `n x 120분` 은 888h, 실제는 359h 다.
+    """
+    import dataclasses
+
+    import pandas as pd
+
+    from evdt.paths import RUNS_DIR
+    from evdt.runner import load_config, run_once
+
+    cfg = load_config("config/scenario_seollal_up_adoption.yaml", stage="S0")
+    cfg = dataclasses.replace(cfg, demand=dataclasses.replace(
+        cfg.demand, patience_kind="exponential", renege=False))
+
+    rid = run_once(cfg, seed=1, overwrite=True, log=lambda *_: None)
+    rows = pd.read_parquet(RUNS_DIR / rid / "escape_event.parquet")
+    balked = rows[rows["reason"] == "balked"]["escape_cost_min"]
+
+    assert len(balked) > 5, "발길질이 거의 없어 검사가 무의미하다"
+    assert balked.nunique() > 1, (
+        f"발길질 {len(balked)}건의 이탈 비용이 전부 {balked.iloc[0]}분이다 — "
+        "기록이 차마다의 값을 안 쓴다")
+
+
+def test_the_escape_cost_total_is_a_kpi() -> None:
+    """`n_escaped x 중앙값` 으로 대신 셀 수 없다 — 이탈은 짧은 인내에 쏠린다."""
+    from evdt.runner import KPI_LABELS
+
+    assert "escape_cost_total_h" in KPI_LABELS
