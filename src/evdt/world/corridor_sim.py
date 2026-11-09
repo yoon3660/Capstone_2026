@@ -453,9 +453,20 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                         f"{policy.stage} 가 앞에 있지 않은 휴게소를 골랐다: {car.ev.ev_id} "
                         f"{car.offset_km:.1f} km → {kind} {off:.1f} km (되돌아가기는 없다)")
 
-                eta = car.t_min + travel.minutes(car.offset_km, off, car.t_min)
+                # ★ **결정보다 먼저 떠날 수는 없다** (#147). `car.t_min` 은 Δt 격자
+                #   위에 있지 않다 — 충전이 103분에 끝났는데 다음 결정은 105분이고,
+                #   답을 한 스텝 미룬 차는 진입 시각을 그대로 들고 있다. 예전에는
+                #   eta 를 `car.t_min` 에서 재면서 출발 기록은 `t` 로 남겨 **두 시각이
+                #   갈라졌다.** 그러면 그 차가 FIFO 에서 제자리보다 앞에 서고 (뒤차의
+                #   대기가 실제보다 길어진다), 심하면 `admit` 이 "도착이 거꾸로
+                #   들어왔다" 로 멈춘다 — 추석 S0 에서 실제로 터졌다.
+                #
+                #   `car.t_min > t` (아직 충전 중) 인 쪽은 그대로 둔다.
+                departure = max(t, car.t_min)
+                eta = departure + travel.minutes(car.offset_km, off, departure)
                 car.target = kind
-                car.left_from_km, car.left_at_min, car.eta_min = car.offset_km, t, eta
+                car.left_from_km, car.left_at_min, car.eta_min = (
+                    car.offset_km, departure, eta)
                 car.dispatch += 1
                 heapq.heappush(arrivals, (eta, car.ev.ev_id, kind, car.dispatch))
 

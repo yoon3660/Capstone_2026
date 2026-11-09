@@ -33,7 +33,10 @@ from dataclasses import dataclass
 from typing import Any
 
 #: 레이어가 없는 실행. 그림 부제에 이렇게 찍힌다.
-MEASURED_ONLY = "2026 설 재현 (가정 레이어 없음)"
+#: 레이어가 하나도 없을 때의 부제. **기간 이름을 넣지 않는다** (#147) — 기간은
+#: `demand_label` 이 앞에 이미 붙인다. 예전에는 "2026 설 재현" 이 박혀 있어서
+#: 추석·평시 config 에도 "설 재현" 이라고 찍혔다.
+MEASURED_ONLY = "실측 재현 (가정 레이어 없음)"
 
 
 @dataclass(frozen=True, slots=True)

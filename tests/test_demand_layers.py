@@ -208,3 +208,29 @@ def test_ev_share_override_does_not_drop_opportunity_charge(tmp_path) -> None:
     cfg = load_config("scenario.yaml", ev_share=0.4, root=tmp_path)
 
     assert cfg.demand.layers == (EvAdoption(0.4), OpportunityCharge(prob=0.2))
+
+
+def test_the_layerless_label_does_not_name_a_period(_=None) -> None:
+    """레이어가 없을 때의 부제에 **기간 이름이 들어가면 안 된다** (#147).
+
+    예전 값은 "2026 설 재현 (가정 레이어 없음)" 이었다. 기간은 `demand_label` 이
+    앞에 이미 붙이므로, 추석 config 가 "2026 추석 연휴 … · **2026 설 재현**" 으로
+    찍혔다. 기간마다 특수분기를 다는 대신 여기 한 줄을 고친다.
+    """
+    from evdt.demand_layers import MEASURED_ONLY
+
+    for name in ("설", "추석", "2026", "seollal", "chuseok"):
+        assert name not in MEASURED_ONLY, f"{name!r} 이 들어 있다: {MEASURED_ONLY!r}"
+
+
+def test_a_chuseok_config_without_layers_is_not_called_seollal() -> None:
+    from evdt.config import ScenarioConfig
+    from evdt.paths import CONFIG_DIR
+
+    raw = yaml.safe_load(
+        (CONFIG_DIR / "scenario_seollal_down.yaml").read_text(encoding="utf-8"))
+    raw["demand"] = {**raw["demand"], "period": "chuseok2026", "layers": []}
+    cfg = ScenarioConfig.from_dict(raw, source="test")
+
+    assert "추석" in cfg.demand_label
+    assert "설" not in cfg.demand_label

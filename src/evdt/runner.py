@@ -244,6 +244,7 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
                              kind=cfg.demand.patience_kind,
                              shape=cfg.demand.patience_shape).describe(),
         "group_scorer": GROUP_SCORER,
+        "dispatch_rule": DISPATCH_RULE,
     }
 
 
@@ -361,6 +362,14 @@ def stale_reason(stored: dict, cfg: ScenarioConfig,
     # 한 번도 안 센** 코드로 돌았다 (#143). 다른 칸들은 "없으면 나중에 추가된
     # 키" 라서 버리지 않는 것이 맞지만, 여기서는 **옛 run 이 틀린 값**이다.
     # 조용히 재사용하면 틀린 기준선 위에 사다리를 쌓는다 (#55 와 같은 고장).
+    # ★ 두 번째 예외 (#147). 배차 규칙은 **전 스테이지**가 쓴다 — `corridor_sim` 이
+    #   하는 일이라 정책과 무관하다. 기록이 없으면 옛 규칙으로 돈 것이고, 그 run 은
+    #   지금 결과와 **비교할 수 없다.**
+    if cfg.policy.stage != "UE" and "dispatch_rule" not in stored:
+        diffs.append(
+            "dispatch_rule: 기록 없음 — 결정보다 먼저 출발할 수 있던 배차로 돌았다 "
+            f"(#147). 지금은 {DISPATCH_RULE!r} 다")
+
     if cfg.policy.stage in ("S3", "S4", "S3_EXACT") and "group_scorer" not in stored:
         diffs.append(
             "group_scorer: 기록 없음 — 윈도우 안 상호작용을 세지 않는 채점기로 "
@@ -575,6 +584,13 @@ RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4",
 #: 그룹 채점기의 판(version). `_group_total` 이 **무엇을 세는지** 가 바뀌면 올린다 —
 #: 그러면 옛 run 이 `stale_reason` 에서 걸린다. 지금 값: 도착 시각 순으로 쌓는다.
 GROUP_SCORER: str = "fifo-1"
+
+#: 배차 규칙의 판 (#147). `corridor_sim` 이 **어느 시각에서 출발시키는지**가 바뀌면
+#: 올린다. 지금 값: 결정 시각보다 먼저 떠나지 않는다 (`departure = max(t, car.t_min)`).
+#: 옛 run 은 `car.t_min` 에서 바로 쟀고, 답을 한 스텝 미룬 차가 **시간을 거슬러**
+#: 출발했다 — 그 차가 FIFO 에서 제자리보다 앞에 서므로 뒤차의 대기가 실제보다 길다.
+#: 재 보니 추석 ev10% 에서 S4 가 838.4 → 841.1h 로 움직였다 (S2·S3 는 그대로).
+DISPATCH_RULE: str = "decision-time-1"
 
 SOLVER_CODE: dict[str, float] = {"local": 0.0, "exact": 1.0, "milp": 2.0}
 SCOPE_CODE: dict[str, float] = {"group": 0.0, "feasible": 1.0, "all": 2.0}
