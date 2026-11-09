@@ -145,9 +145,18 @@ ESCAPE_NO_PLAN = "__escape_no_plan__"
 NO_CHARGE = "__no_charge__"
 
 #: escape_event.reason 에 그대로 들어간다 (UE 가 쓰는 값과 같아야 비교가 된다)
+#: 줄을 서 있다가 **인내가 끝나서** 떠났다 (#147). 발길질과 다르다 —
+#: 발길질은 **예상** 대기를 보고 안 간 것이고, 이것은 **실제로 기다리다** 떠난 것이다.
+#: 그래서 이 차는 이미 인내만큼의 시간을 썼고, 그 시간은 사라지지 않는다.
+#:
+#: 정책이 내는 답이 **아니다.** 시뮬레이터가 배정 시점에 정한다 — 정책은 자기가
+#: 얼마나 기다리게 될지 그 순간에도 정확히 모른다 (그게 S0 가 가장 많이 틀리는 이유다).
+ESCAPE_RENEGED = "__escape_reneged__"
+
 ESCAPE_REASON: Mapping[str, str] = {
     ESCAPE_BALKED: "balked",
     ESCAPE_NO_PLAN: "no_plan",
+    ESCAPE_RENEGED: "reneged",
 }
 
 #: 휴게소 ID 가 아닌 답. `decide` 결과를 해석할 때 먼저 걸러낸다.

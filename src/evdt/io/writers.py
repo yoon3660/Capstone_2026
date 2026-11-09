@@ -92,9 +92,17 @@ SCHEMAS: dict[str, pa.Schema] = {
         # 왜 나갔나. 둘을 반드시 갈라서 본다 (#54)
         #   'no_plan'  사거리 안에 휴게소가 없다 — **엔진이 못 고친다** (증설·SoC 문제)
         #   'balked'   갈 수는 있는데 줄이 이탈 비용보다 길다 — **엔진이 고칠 수 있다**
+        #   'reneged'  줄을 서 있다가 인내가 끝났다 (#147) — **엔진이 고칠 수 있다.**
+        #              balked 와 반드시 갈라 본다: balked 는 **예상** 대기를 보고
+        #              안 간 것이고, reneged 는 **실제로 기다리다** 떠난 것이다.
+        #              예측이 나쁠수록 reneged 가 늘어난다
         ("reason", _STR),
         # 코리도 안에 남았다면 갔을 곳 (no_plan 이면 빈 문자열)
         ("best_station_id", _STR),
+        # 떠나기 전에 **이미 쓴** 시간(분). balked·no_plan 과 UE 는 0 이고 reneged 만
+        # 양수다. 이 칸이 없으면 기다리다 떠난 차의 시간이 사라져서 사다리가
+        # 실제보다 좋아 보인다 (#147)
+        ("waited_min", _F64),
     ),
     # CTM 셀 상태 시계열 (Sprint 2부터 채워진다)
     "cell_state": _schema(

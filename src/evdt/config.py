@@ -248,6 +248,12 @@ class DemandConfig:
     patience_kind: str = "point"
     #: 가족별 모양 모수. lognormal σ · weibull k · uniform 반폭비율. exponential 은 안 쓴다
     patience_shape: float = 0.0
+    #: 줄을 서 있다가 인내가 끝나면 **떠나는가** (#147). 기본은 꺼짐.
+    #:
+    #: 끄면 지금까지와 같다 — 고를 때 한 번 재고(balk), 일단 도착하면 줄이 아무리
+    #: 길어도 끝까지 기다린다. 설 S0 에서 **372.5분**을 기다린 차가 있었다.
+    #: 켜면 물리가 바뀌므로 저장된 run 과 비교할 수 없다 (`run_params` 가 막는다).
+    renege: bool = False
 
     #: 시간대별 EV 대수를 생성하는 방법 (#53)
     #:   fixed     기대값을 반올림하는 기존 방식
@@ -554,6 +560,11 @@ class ScenarioConfig:
                   f"{list(PATIENCE_KINDS)} 중 하나여야 한다 (받은 값: {patience_kind!r})")
         patience_shape = e.number(
             d.get("patience_shape", 0.0), "demand.patience_shape", lo=0.0)
+        renege = bool(d.get("renege", False))
+        if renege and not escape_cost_min:
+            e.add("demand.renege",
+                  "이탈 비용이 0 이면 인내도 0 이라 전원이 즉시 포기한다 — "
+                  "escape_cost_min 을 먼저 줄 것")
         if patience_kind == "weibull" and not patience_shape:
             e.add("demand.patience_shape", "와이블은 shape(k) 가 0 보다 커야 한다")
         if patience_kind == "uniform" and not 0.0 < float(patience_shape or 0.0) <= 1.0:
@@ -728,6 +739,7 @@ class ScenarioConfig:
                 escape_cost_sigma=escape_cost_sigma,       # type: ignore[arg-type]
                 patience_kind=patience_kind,
                 patience_shape=patience_shape,             # type: ignore[arg-type]
+                renege=renege,
                 layers=layers,
                 beta_binomial_concentration=beta_binomial_concentration,   # type: ignore[arg-type]
                 poisson_lognormal_sigma=poisson_lognormal_sigma,           # type: ignore[arg-type]

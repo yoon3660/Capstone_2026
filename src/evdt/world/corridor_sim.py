@@ -48,6 +48,7 @@ from dataclasses import dataclass
 
 from evdt.interfaces import (
     ESCAPE_REASON,
+    ESCAPE_RENEGED,
     NO_CHARGE,
     EVState,
     Policy,
@@ -153,6 +154,10 @@ class CorridorResult:
     #: 가던 차를 **다시 물어본** 횟수. `n_relocated` 와 나눠 보면 *"물었는데 안
     #: 바꿨다"* 와 *"묻지도 않았다"* 를 가를 수 있다.
     n_reasked: int = 0
+    #: 줄을 서 있다가 **인내가 끝나** 떠난 차 (#147). `renege` 를 껐으면 0 이다.
+    #: 발길질(`n_balked`)과 반드시 나눠 읽는다 — 발길질은 **예상** 대기를 보고 안
+    #: 간 것이고 이쪽은 **실제로 기다리다** 떠난 것이라, 엔진이 손댈 자리가 다르다.
+    n_reneged: int = 0
 
     @property
     def n_escaped(self) -> int:
@@ -161,6 +166,16 @@ class CorridorResult:
     @property
     def n_balked(self) -> int:
         return sum(1 for r in self.escape_events if r["reason"] == "balked")
+
+    @property
+    def renege_wait_min(self) -> float:
+        """포기한 차들이 **떠나기 전에 이미 쓴** 시간의 합(분).
+
+        이 칸이 없으면 기다리다 떠난 차의 시간이 사라져서 사다리가 실제보다
+        좋아 보인다. 총 사회적 비용에 반드시 더해야 한다.
+        """
+
+        return sum(float(r.get("waited_min", 0.0)) for r in self.escape_events)
 
 
 @dataclass
@@ -202,7 +217,7 @@ def _station_view(sid: str, q: StationQueue, spec: StationSpec, offset_km: float
 
 
 def _escape_row(car: _Car, reason: str, escape_cost_min: float, best: str,
-                t_min: float) -> dict:
+                t_min: float, waited_min: float = 0.0) -> dict:
     """UE 의 `escape_rows` 와 **같은 컬럼**. 다르면 두 스테이지를 한 표로 못 본다."""
 
     return {
@@ -221,6 +236,10 @@ def _escape_row(car: _Car, reason: str, escape_cost_min: float, best: str,
         "escape_cost_min": float(escape_cost_min),
         "reason": reason,
         "best_station_id": best,
+        # 떠나기 전에 **이미 쓴** 시간 (#147). 발길질·계획없음은 0 이고, 포기한
+        # 차만 양수다. 이 칸이 없으면 기다리다 떠난 차의 시간이 사라져서
+        # 사다리가 실제보다 좋아 보인다
+        "waited_min": float(waited_min),
     }
 
 
@@ -239,6 +258,11 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
     cold_factor: float,
     range_factor: float,
     cruise_speed_kmh: float,
+    #: 줄을 서 있다가 인내가 끝나면 떠나는가 (#147). **기본은 끄짐** — 켜면 물리가
+    #: 바뀌어 저장된 run 과 비교할 수 없다. 인내 값은 차마다의 `escape_cost_min` 을
+    #: 그대로 쓴다 (발길질과 **같은 추출**이어야 한다. 따로 뽑으면 "100분 줄은
+    #: 받아들였는데 300분은 참는" 차가 생긴다)
+    renege: bool = False,
     escape_cost_min: float = 0.0,
     snapshot_every_min: float = DEFAULT_SNAPSHOT_EVERY_MIN,
     ledger: object | None = None,
@@ -286,6 +310,7 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
     snapshots: list[dict] = []
     n_decide_calls = n_answers = n_arrived = n_stranded = 0
     n_relocated = 0          # 가던 차를 다른 휴게소로 돌린 횟수 (S4)
+    n_reneged = 0            # 줄을 서 있다가 인내가 끝나 떠난 차 (#147)
     n_reasked = 0            # 가던 차를 다시 물어본 횟수 (S4) — 배선이 사는지 본다
     step = 0
     next_snapshot = 0.0
@@ -529,7 +554,26 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
 
             power = {c.charger_id: c.power_kw for c in queues[sid].chargers}
 
-            for a in queues[sid].admit(arrs):
+            if renege:
+                patience = {a.ev_id: float(state[a.ev_id][2].ev.escape_cost_min)
+                            for a in arrs
+                            if state[a.ev_id][2].ev.escape_cost_min > 0}
+                admitted, gave_up = queues[sid].admit_patient(arrs, patience)
+            else:
+                admitted, gave_up = queues[sid].admit(arrs), ()
+
+            for ev_id in gave_up:
+                # ★ 인내만큼 기다리다 떠났다. 충전기는 안 잡았고(`admit_patient` 가
+                #   배정에서 뺐다), **쓴 시간은 남는다**
+                _, _, car = state[ev_id]
+                car.done = True
+                n_reneged += 1
+                escape_events.append(_escape_row(
+                    car, ESCAPE_REASON[ESCAPE_RENEGED],
+                    car.ev.escape_cost_min, sid, t,
+                    waited_min=float(car.ev.escape_cost_min)))
+
+            for a in admitted:
                 soc_in, soc_out, car = state[a.ev_id]
                 charge_min = a.end_min - a.start_min
                 car.stops_done += 1
@@ -574,4 +618,5 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
         n_stranded=n_stranded,
         n_relocated=n_relocated,
         n_reasked=n_reasked,
+        n_reneged=n_reneged,
     )

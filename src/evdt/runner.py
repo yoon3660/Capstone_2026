@@ -240,6 +240,9 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
         # 인내의 **모양** (#146). 중앙값이 같아도 모양이 다르면 다른 세계다 —
         # 기록에 없으면 "어느 인내로 돌았나" 를 나중에 알 수 없다. 옛 run 에는
         # 이 칸이 없고, 그건 점질량(전원 120분) 이었다는 뜻이다
+        # 포기를 켰나 (#147). **물리가 바뀐다** — 끈 run 과 켠 run 은 비교 대상이
+        # 아니다. 옛 run 에는 이 칸이 없고, 그건 꺼져 있었다는 뜻이다
+        "renege": cfg.demand.renege,
         "patience": Patience(median_min=cfg.demand.escape_cost_min,
                              kind=cfg.demand.patience_kind,
                              shape=cfg.demand.patience_shape).describe(),
@@ -365,6 +368,15 @@ def stale_reason(stored: dict, cfg: ScenarioConfig,
     # ★ 두 번째 예외 (#147). 배차 규칙은 **전 스테이지**가 쓴다 — `corridor_sim` 이
     #   하는 일이라 정책과 무관하다. 기록이 없으면 옛 규칙으로 돈 것이고, 그 run 은
     #   지금 결과와 **비교할 수 없다.**
+    # ★ 세 번째 예외 (#147). 포기를 켰는지는 **물리**다. 옛 run 에는 칸이 없고
+    #   그건 꺼져 있었다는 뜻이므로, 지금 켜고 돌리려 하면 재사용을 막아야 한다.
+    #   (꺼고 돌릴 때는 옛 run 과 같으므로 막지 않는다 — 쓸 수 있는 결과까지
+    #   버리지 않는 이 파일의 기본 규칙 그대로다)
+    if cfg.demand.renege and "renege" not in stored:
+        diffs.append(
+            "renege: 기록 없음 — 기다리다 포기하는 기제가 **없던** 때의 run 이다 "
+            "(#147). 지금은 켜져 있다")
+
     if cfg.policy.stage != "UE" and "dispatch_rule" not in stored:
         diffs.append(
             "dispatch_rule: 기록 없음 — 결정보다 먼저 출발할 수 있던 배차로 돌았다 "
@@ -809,9 +821,12 @@ def run_once(
 
         waits = np.array([e["wait_min"] for e in charge_events]) if charge_events else np.zeros(1)
         n_escaped = len(escape_rows)
+        n_reneged = sum(1 for r in escape_rows if r.get("reason") == "reneged")
+        renege_wait_h = sum(float(r.get("waited_min", 0.0)) for r in escape_rows) / 60.0
         n_balked = sum(1 for r in escape_rows if r["reason"] == "balked")
         log(f"코리도 이탈 {n_escaped:,}대 ({n_escaped / max(len(built.trips), 1):.1%}) "
-            f"— 줄이 길어서 {n_balked:,} · 닿는 휴게소가 없어서 {n_escaped - n_balked:,}")
+            f"— 줄이 길어서 {n_balked:,} · 기다리다 포기 {n_reneged:,} · "
+            f"닿는 휴게소가 없어서 {n_escaped - n_balked - n_reneged:,}")
         run.kpis({
             # 평균 대기만 보면 이 차들이 빠져서 좋아 보인다. 문제가 사라진 게 아니라
             # 고속도로 밖으로 옮겨간 것이므로 항상 같이 본다 (#54)
@@ -820,6 +835,13 @@ def run_once(
             # 여기에 `n_escaped_stranded`(한 번 서고 나서 갇힌 차) 를 더한 것이
             # **배정의 과녁**이고, 나머지 no_plan 이 증설·SoC 의 몫이다
             "n_escaped_balked": (n_balked, "count"),
+            # 줄을 서 있다가 인내가 끝나 떠난 차 (#147). balked 와 **반드시 나눠
+            # 읽는다** — balked 는 예상 대기를 보고 안 간 것이고 이쪽은 실제로
+            # 기다리다 떠난 것이라, 예측이 나쁜 칸일수록 이 수가 커진다
+            "n_escaped_reneged": (n_reneged, "count"),
+            # 포기한 차들이 떠나기 전에 **이미 쓴** 시간. 이 칸이 없으면 그 시간이
+            # 사라져서 사다리가 실제보다 좋아 보인다
+            "renege_wait_total_h": (renege_wait_h, "h"),
             "n_charge_visits": (len(charge_events), "count"),
             "wait_mean_min": (float(waits.mean()), "min"),
             "wait_p95_min": (float(np.percentile(waits, 95)), "min"),
@@ -1041,6 +1063,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
         range_factor=range_factor,
         cruise_speed_kmh=cfg.demand.cruise_speed_kmh,
         escape_cost_min=cfg.demand.escape_cost_min,
+        renege=cfg.demand.renege,
         snapshot_every_min=float(cfg.output.snapshot_every_min),
         ledger=ledger,
         forecast=forecast,
@@ -1410,6 +1433,8 @@ KPI_LABELS: dict[str, str] = {
     # 몫과 증설로만 풀리는 몫이 뒤섞인다
     "n_escaped": "이탈 합계 (대)",
     "n_escaped_balked": "이탈: 줄이 길어서 (대)",
+    "n_escaped_reneged": "이탈: 기다리다 포기 (대)",
+    "renege_wait_total_h": "포기 전 대기 합계 (시간)",
     "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
