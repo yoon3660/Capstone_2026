@@ -231,6 +231,6 @@ def test_the_run_records_which_patience_it_used() -> None:
     """기록에 없으면 "어느 인내로 돌았나" 를 나중에 알 수 없다 (#101 과 같은 고장)."""
     from evdt.runner import load_config, run_params
 
-    cfg = load_config("config/scenario_chuseok_up_adoption.yaml", stage="S0")
+    cfg = load_config("config/scenario_seollal_up_adoption.yaml", stage="S0")
 
     assert "patience" in run_params(cfg)

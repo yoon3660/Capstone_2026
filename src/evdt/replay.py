@@ -19,8 +19,7 @@
 ```bash
 python scripts/fetch_traffic.py --start 2026-09-23 --end 2026-10-02 --label chuseok2026
 python scripts/build_traffic.py
-python scripts/build_replay.py --period chuseok2026 --direction DOWN
-python scripts/build_replay.py --period chuseok2026 --direction UP
+python scripts/build_chuseok_demand.py        # 추석은 전용 빌더를 쓴다 (#146)
 ```
 
 그 다음 시나리오 config 에서
@@ -28,9 +27,9 @@ python scripts/build_replay.py --period chuseok2026 --direction UP
 ```yaml
 demand:
   period: chuseok2026
-  volume_profile:     data/processed/volume_gyeongbu_down_chuseok.csv
-  through_profile:    data/processed/through_gyeongbu_down_chuseok.csv
-  entry_exit_profile: data/processed/entry_exit_gyeongbu_down_chuseok.csv
+  volume_profile:     data/processed/issue146_chuseok/2026-09-26/DOWN/volume.csv
+  through_profile:    data/processed/issue146_chuseok/2026-09-26/DOWN/through.csv
+  entry_exit_profile: data/processed/issue146_chuseok/2026-09-26/DOWN/entry_exit.csv
 ```
 
 `period` 는 교통량 정리본(`traffic_gyeongbu.parquet`)의 `period` 열과 같아야 한다.

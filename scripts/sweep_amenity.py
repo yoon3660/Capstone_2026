@@ -83,6 +83,18 @@ def concentration(run_id: str, cap: pd.Series, horizon_min: float) -> dict:
             "최대가동률": busiest}
 
 
+#: 추석 config 는 #146 (PR #159) 가 들여온다. 그 전에는 이 저장소에 없다 —
+#: 없는 파일을 `load_config` 가 그냥 FileNotFoundError 로 터뜨리면 "내가 뭘
+#: 잘못했나" 를 한참 찾게 된다.
+def _need_config(path: str) -> None:
+    if not (ROOT / path).is_file():
+        raise SystemExit(
+            f"config 가 없다: {path}\n"
+            "  추석 시나리오는 #146 (PR #159) 가 들여온다. 그 브랜치를 머지하거나,\n"
+            "  --config 로 지금 있는 시나리오를 지정할 것\n"
+            "    예: --config config/scenario_seollal_up_adoption.yaml")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -97,6 +109,7 @@ def main() -> int:
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    _need_config(args.config)
     cap = capacity()
     base = load_config(args.config, stage=args.stage)
     horizon = float(base.time.end_min)

@@ -57,9 +57,7 @@ from evdt.world.charging import temp_factors  # noqa: E402
 #: 출처: docs/data_validation/validation_report.md §3.1·§3.2,
 #:       docs/data_validation/data_inventory.md §4
 EXPECT = {
-    # §3.1 VDS — 보고서가 적은 두 기간만 본다 (#146). 무대를 더 붙여도 이 수치는
-    #   지켜져야 한다. 새 기간은 아래 "vds_extra_periods" 에 따로 적는다.
-    "vds_periods": ("base202603", "seollal2026"),
+    # §3.1 VDS
     "vds_rows_each": 63_360,
     "vds_rows_per_period_dir": 15_840,
     "vds_both_observed": 54_523,
@@ -71,13 +69,6 @@ EXPECT = {
         ("base202603", "UP"): (13_634, 2_200, 6),
         ("seollal2026", "DOWN"): (13_656, 2_183, 1),
         ("seollal2026", "UP"): (13_587, 2_250, 3),
-    },
-    # 뒤에 적재한 기간 (#146) — period → (교통량 행, 속도 행)
-    #   추석은 코리도 콘존 5곳에 속도 관측이 없어 720칸(5×6일×24시)이 비어 있다.
-    #   그래서 교통량·속도 행수가 다르다. 속도장을 쓸 때 보간해야 할 자리다.
-    "vds_extra_periods": {
-        "chuseok2026": (19_008, 18_288),
-        "base202609": (30_480, 30_480),
     },
     # Conzone
     "conzone_rows": 284,
@@ -189,19 +180,9 @@ def _fmt(v: object) -> str:
 
 def audit_vds(a: Audit) -> None:
     """§3.1 — 교통량·속도의 키 정합과 결측."""
-    t_all = pd.read_parquet(DATA_PROCESSED_DIR / "traffic_gyeongbu.parquet")
-    s_all = pd.read_parquet(DATA_PROCESSED_DIR / "speed_gyeongbu.parquet")
+    t = pd.read_parquet(DATA_PROCESSED_DIR / "traffic_gyeongbu.parquet")
+    s = pd.read_parquet(DATA_PROCESSED_DIR / "speed_gyeongbu.parquet")
     key = ["period", "date", "hour", "direction", "conzone_id"]
-
-    # 뒤에 붙인 기간은 행수만 확인하고 (#146), 아래 정합 검사는 보고서가 다루는
-    # 두 기간으로 한정한다. 섞으면 "설 수치가 틀렸다" 로 잘못 읽힌다.
-    for period, (n_vol, n_spd) in EXPECT["vds_extra_periods"].items():
-        a.check(f"VDS {period} traffic 행", int((t_all["period"] == period).sum()), n_vol)
-        a.check(f"VDS {period} speed 행", int((s_all["period"] == period).sum()), n_spd)
-
-    keep = list(EXPECT["vds_periods"])
-    t = t_all[t_all["period"].isin(keep)]
-    s = s_all[s_all["period"].isin(keep)]
 
     a.check("VDS traffic 행", len(t), EXPECT["vds_rows_each"])
     a.check("VDS speed 행", len(s), EXPECT["vds_rows_each"])
