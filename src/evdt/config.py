@@ -25,9 +25,9 @@ from typing import Any
 
 import yaml
 
-from evdt.engine.patience import PATIENCE_KINDS
 from evdt.demand_layers import Layer, parse_layers
 from evdt.demand_layers import label as layer_label
+from evdt.engine.patience import PATIENCE_KINDS
 from evdt.replay import describe as describe_period
 
 # run.stage 의 허용값 (schema.sql 의 CHECK 와 반드시 일치해야 한다)

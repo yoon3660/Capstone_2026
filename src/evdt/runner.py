@@ -29,11 +29,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from evdt.config import ScenarioConfig
 from evdt import demand_layers
+from evdt.config import ScenarioConfig
 from evdt.demand_layers import effective_ev_share, opportunity_charge
 from evdt.engine.amenity import NO_AMENITY, AmenityPrefs
-from evdt.engine.patience import Patience
 from evdt.engine.forecast import (
     ArrivalSpec,
     BlurredForecast,
@@ -44,6 +43,7 @@ from evdt.engine.forecast import (
     specs_from_trips,
 )
 from evdt.engine.mec import MecPolicy, MecSettings
+from evdt.engine.patience import Patience
 from evdt.engine.reservation import ReservationLedger
 from evdt.engine.s0 import S0Policy, S0Settings
 from evdt.engine.s1 import S1Policy, S1Settings

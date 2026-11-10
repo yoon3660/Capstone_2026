@@ -35,13 +35,12 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
-from evdt.runner import load_config, run_once, summarize_kpis, social_cost_h  # noqa: E402
+from evdt.runner import load_config, run_once, social_cost_h, summarize_kpis  # noqa: E402
 
 INDEX = "data/processed/amenity_index_proxy.csv"
 METRICS = ("dwell_total_h", "escape_cost_total_h",
@@ -114,7 +113,6 @@ def main() -> int:
     cap = capacity()
     base = load_config(args.config, stage=args.stage)
     horizon = float(base.time.end_min)
-    esc = float(base.demand.escape_cost_min)
     out = Path(args.out or (ROOT / "runs" / "sweeps" /
                             f"amenity_{base.scenario_id}_{args.stage}.csv"))
     out.parent.mkdir(parents=True, exist_ok=True)

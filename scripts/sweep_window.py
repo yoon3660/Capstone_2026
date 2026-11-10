@@ -61,7 +61,14 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
-from evdt.runner import SOCIAL_COST_TERMS, load_config, parse_seeds, run_once, summarize_kpis, social_cost_h  # noqa: E402
+from evdt.runner import (  # noqa: E402
+    SOCIAL_COST_TERMS,
+    load_config,
+    parse_seeds,
+    run_once,
+    social_cost_h,
+    summarize_kpis,
+)
 
 #: 관측 예측 신뢰도. **사다리와 같은 값이어야 한다** (`matched_ladder.py`)
 OBSERVED_STRENGTH = 0.30

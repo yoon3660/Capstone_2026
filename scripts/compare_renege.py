@@ -51,7 +51,7 @@ import pandas as pd
 from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec  # noqa: E402
-from evdt.runner import load_config, run_once, summarize_kpis  # noqa: E402
+from evdt.runner import load_config, run_once, social_cost_h, summarize_kpis  # noqa: E402
 
 STRENGTH = 0.30
 WINDOW = 4

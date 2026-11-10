@@ -39,11 +39,11 @@ import simpy
 from evdt.interfaces import SNAPSHOT_STATES
 from evdt.world.charging import CurveSegment
 from evdt.world.queue_rule import (
-    assign_with_renege,
     Arrival,
     Assignment,
     Charger,
     assign,
+    assign_with_renege,
     chargers_after,
     wait_if_arriving_now,
 )

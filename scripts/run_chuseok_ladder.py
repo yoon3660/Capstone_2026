@@ -29,7 +29,13 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec, OracleSource  # noqa: E402
 from evdt.paths import RUNS_DIR  # noqa: E402
-from evdt.runner import load_config, make_run_id, run_once, summarize_kpis, social_cost_h  # noqa: E402
+from evdt.runner import (  # noqa: E402
+    load_config,
+    make_run_id,
+    run_once,
+    social_cost_h,
+    summarize_kpis,
+)
 
 STRENGTH = 0.30
 WINDOW = 4
