@@ -124,8 +124,7 @@ def main() -> int:
             k = {m: float(s.get(m, 0.0)) for m in METRICS}
             # 이탈 비용은 **차마다** 다르다 — `n_escaped x 중앙값` 으로 세면
             # 안 된다 (이탈은 인내가 짧은 쪽에 쏠린다)
-            total = (k["dwell_total_h"] + k["escape_cost_total_h"]
-                     + k["renege_wait_total_h"])
+            total = social_cost_h(s)
             rows.append({"칸": stage, "조건": label, "total_h": total,
                          "wall_s": time.perf_counter() - t0, **k})
             print(f"  {label:<18} {stage:<3} {time.perf_counter() - t0:7.1f}s  "

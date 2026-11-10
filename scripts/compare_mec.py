@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from evdt.io.db import default_db_path  # noqa: E402
 from evdt.runner import (  # noqa: E402
+    SOCIAL_COST_TERMS,
     PROJECT_ROOT,
     load_config,
     parse_seeds,
@@ -57,7 +58,10 @@ RUNS_DIR = PROJECT_ROOT / "runs"
 #: 이탈 차가 이보다 크면 비교가 성립하지 않는다 (`docs/compare_rule.md`).
 ESCAPE_TOL = 5
 
-METRICS = ("dwell_total_h", "n_escaped", "n_escaped_balked", "n_escaped_stranded",
+METRICS = (
+    # ★ 세 항은 빠지면 안 된다 — `social_cost_h` 가 멈춘다 (#147)
+    *SOCIAL_COST_TERMS,
+"dwell_total_h", "n_escaped", "n_escaped_balked", "n_escaped_stranded",
            "wait_mean_min", "wait_p95_min",
            "bottleneck_slots", "n_ev_charging", "policy_decide_calls",
            "mec_weight", "mec_chosen_min", "mec_chosen_nonzero",
@@ -239,7 +243,7 @@ def main() -> int:
                            log=lambda *_: None)
             k = kpis(rid, db)
             el = time.perf_counter() - t0
-            total = social_cost_h(k, escape_cost_min=esc_cost)
+            total = social_cost_h(k)
             print(f"  {el:7.1f}s   총 {total:9.1f}h  이탈 {k['n_escaped']:.0f}")
             rows.append({"seed": seed, "setup": name, "wall_s": el,
                          "total_h": total, **k})

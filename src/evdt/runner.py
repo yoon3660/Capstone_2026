@@ -1461,8 +1461,11 @@ KPI_LABELS: dict[str, str] = {
 }
 
 
-def social_cost_h(kpi: Mapping[str, float], *,
-                  escape_cost_min: float | None = None) -> float:
+#: 총 사회적 비용을 이루는 세 항. **전부 있어야 한다** (#147)
+SOCIAL_COST_TERMS = ("dwell_total_h", "escape_cost_total_h", "renege_wait_total_h")
+
+
+def social_cost_h(kpi: Mapping[str, float]) -> float:
     """총 사회적 비용 (시간). **이 식의 유일한 정의다** (#147).
 
         총 = 총 체류 + 이탈 비용 합 + 포기 전 대기
@@ -1470,32 +1473,35 @@ def social_cost_h(kpi: Mapping[str, float], *,
     예전에는 스크립트마다 `dwell_total_h + n_escaped x escape_cost_min / 60` 을
     직접 셌다. 같은 식이 여덟 벌 있었고, 두 가지로 틀어졌다.
 
-    ① **이탈 비용은 차마다 다르다.** 중앙값 x 대수로 세면 틀린다. 그리고 이탈은
-       인내가 짧은 쪽에 쏠리므로 **과대계상**된다 — 설 S1 에서 888h vs 실제 359h
+    ① **이탈 비용은 차마다 다르다.** 중앙값 x 대수로 세면 틀린다. 이탈은 인내가
+       짧은 쪽에 쏠리므로 **과대계상**된다 — 설 S1 에서 888h vs 실제 359h
        (#78 회귀). `escape_cost_sigma: 0.0` 이던 동안만 우연히 맞았다.
 
     ② **포기 전 대기를 아무도 안 더했다.** 포기한 차는 인내만큼 기다리다 떠났다.
-       빼먹으면 포기를 켤수록 비용이 줄어드는 것처럼 보인다 (#147).
+       빼먹으면 포기를 켤수록 비용이 줄어드는 것처럼 보인다.
 
-    옛 run 은 새 KPI 가 없다. 그때는 `escape_cost_min` 을 주면 예전 식으로
-    돌아간다 — 당시 sigma 가 0 이라 **그 run 에 대해서는 맞는 값**이다. 안 주면
-    조용히 0 으로 세는 대신 **멈춘다**: 이탈 항이 사라진 총비용은 틀린 게 아니라
-    쓸모가 없다.
+    ★ **되돌림이 없다 — 일부러다.**
+
+      처음에는 옛 run 을 위해 `escape_cost_min=` 을 주면 예전 식으로 돌아가게
+      했다. 그 되돌림이 **바로 다음 측정을 조용히 망쳤다**: 스크립트들이 KPI 를
+      `{m: s.get(m) for m in METRICS}` 로 추려서 넘기는데 METRICS 에 새 칸이
+      없어서, 멀쩡한 run 인데도 되돌림이 타고 **설 사다리가 534h 모자랐다.**
+
+      "없으면 적당히" 는 없다. 세 항이 다 없으면 멈춘다. 옛 run 은 다시 돌린다 —
+      포기를 켠 지금 어차피 `stale_reason` 이 재사용을 막는다.
+
+    `kpi` 는 `summarize_kpis(...).set_index("metric")["mean"]` 를 **추리지 말고**
+    그대로 넘긴다. pandas Series 도 Mapping 처럼 쓰인다.
     """
 
-    dwell = float(kpi.get("dwell_total_h", 0.0))
-
-    if "escape_cost_total_h" in kpi:
-        escape = float(kpi["escape_cost_total_h"])
-    elif escape_cost_min is not None:
-        escape = float(kpi.get("n_escaped", 0.0)) * float(escape_cost_min) / 60.0
-    else:
+    missing = [k for k in SOCIAL_COST_TERMS if k not in kpi]
+    if missing:
         raise KeyError(
-            "escape_cost_total_h 가 없다 (옛 run 이다). 다시 돌리거나 "
-            "escape_cost_min= 을 주어 예전 식으로 셀 것")
+            f"총 사회적 비용을 셀 수 없다 — 없는 KPI: {missing}. "
+            "KPI 를 추려서 넘겼다면 METRICS 에 세 칸을 넣을 것. "
+            "옛 run 이라면 다시 돌릴 것 (#147 로 물리가 바뀌었다)")
 
-    # 옛 run 에는 없다 — 그때는 포기 기제가 아예 없었으니 0 이 맞다
-    return dwell + escape + float(kpi.get("renege_wait_total_h", 0.0))
+    return sum(float(kpi[k]) for k in SOCIAL_COST_TERMS)
 
 
 def summarize_kpis(run_ids: Sequence[str], *, db_path: Path | None = None) -> pd.DataFrame:

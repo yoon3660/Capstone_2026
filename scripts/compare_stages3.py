@@ -107,8 +107,7 @@ def main() -> int:
     esc_h = float(cfg.demand.escape_cost_min) / 60.0
     wide = pd.DataFrame(cols)
     # 칸마다 세로로 KPI 가 들어 있다 — 칸별 Series 를 helper 에 그대로 넘긴다
-    total = pd.Series({st: social_cost_h(wide[st],
-                                        escape_cost_min=cfg.demand.escape_cost_min)
+    total = pd.Series({st: social_cost_h(wide[st])
                        for st in wide.columns})
     esc_col = (wide.loc["escape_cost_total_h"] if "escape_cost_total_h" in wide.index
                else wide.loc["n_escaped"] * esc_h)

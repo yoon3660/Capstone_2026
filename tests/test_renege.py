@@ -351,31 +351,53 @@ def test_social_cost_adds_all_three_terms() -> None:
     assert got == pytest.approx(125.0)
 
 
-def test_social_cost_prefers_the_measured_escape_cost() -> None:
-    """차마다의 합이 있으면 `대수 x 중앙값` 보다 **그것**을 쓴다."""
+def test_social_cost_refuses_a_filtered_kpi_dict() -> None:
+    """**이 테스트가 핵심이다.**
+
+    처음에는 옛 run 을 위해 `escape_cost_min=` 되돌림을 뒀다. 그 되돌림이 바로
+    다음 측정을 조용히 망쳤다: 스크립트들이 KPI 를 `{m: s.get(m) for m in
+    METRICS}` 로 추려 넘기는데 METRICS 에 새 칸이 없어서, 멀쩡한 run 인데도
+    되돌림이 타고 **설 사다리가 534h 모자랐다.**
+
+    되돌림을 없앴다. 추려 넘기면 **멈춘다.**
+    """
     from evdt.runner import social_cost_h
 
-    kpi = {"dwell_total_h": 0.0, "n_escaped": 100.0, "escape_cost_total_h": 55.0}
-
-    assert social_cost_h(kpi, escape_cost_min=120.0) == pytest.approx(55.0)
-
-
-def test_social_cost_falls_back_for_old_runs() -> None:
-    """옛 run 에는 새 KPI 가 없다. 당시 sigma 가 0 이라 예전 식이 맞다."""
-    from evdt.runner import social_cost_h
-
-    got = social_cost_h({"dwell_total_h": 10.0, "n_escaped": 30.0},
-                        escape_cost_min=120.0)
-
-    assert got == pytest.approx(10.0 + 60.0)
-
-
-def test_social_cost_refuses_to_silently_drop_the_escape_term() -> None:
-    """이탈 항이 빠진 총비용은 틀린 게 아니라 **쓸모가 없다** — 멈춘다."""
-    from evdt.runner import social_cost_h
+    filtered = {"dwell_total_h": 5_641.8, "n_escaped": 412.0}
 
     with pytest.raises(KeyError, match="escape_cost_total_h"):
-        social_cost_h({"dwell_total_h": 10.0, "n_escaped": 30.0})
+        social_cost_h(filtered)
+
+
+def test_social_cost_names_every_missing_term() -> None:
+    """하나만 말하면 고치고 또 걸린다."""
+    from evdt.runner import social_cost_h
+
+    with pytest.raises(KeyError) as e:
+        social_cost_h({"dwell_total_h": 1.0})
+
+    assert "escape_cost_total_h" in str(e.value)
+    assert "renege_wait_total_h" in str(e.value)
+
+
+def test_every_filtered_metrics_list_carries_the_three_terms() -> None:
+    """추려 넘기는 스크립트는 METRICS 에 세 항을 넣어야 한다."""
+    import importlib
+    import sys
+
+    from evdt.paths import PROJECT_ROOT
+    from evdt.runner import SOCIAL_COST_TERMS
+
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    bad = {}
+    for name in ("ablation_milp", "compare_mec", "sweep_window",
+                 "run_chuseok_ladder", "sweep_amenity", "compare_renege"):
+        m = importlib.import_module(name)
+        missing = [k for k in SOCIAL_COST_TERMS if k not in m.METRICS]
+        if missing:
+            bad[name] = missing
+
+    assert not bad, f"METRICS 에 빠진 항: {bad}"
 
 
 def test_no_script_counts_the_total_by_hand() -> None:

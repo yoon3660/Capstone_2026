@@ -145,7 +145,7 @@ def collect(cfg, seeds, done, wide, esc_min, s3_window=S3_WINDOW) -> tuple[pd.Da
                 "n_escaped": k["n_escaped"],
                 "dwell_total_h": k["dwell_total_h"],
                 "n_ev_charging": k["n_ev_charging"],
-                "total_h": social_cost_h(k, escape_cost_min=esc_min),
+                "total_h": social_cost_h(k),
                 "strength": done[rid].get("forecast_strength"),
             })
     return pd.DataFrame(rows), dropped

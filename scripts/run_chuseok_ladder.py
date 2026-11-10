@@ -38,7 +38,8 @@ ESCAPE_TOL = 5
 
 ARRIVAL_COLS = ["ev_id", "station_id", "t_arrive_min", "soc_in", "soc_out", "cold_factor"]
 
-METRICS = ("dwell_total_h", "n_escaped", "n_escaped_balked", "n_escaped_stranded",
+METRICS = ("dwell_total_h", "escape_cost_total_h",
+           "renege_wait_total_h", "n_escaped", "n_escaped_balked", "n_escaped_stranded",
            "wait_mean_min", "wait_p95_min", "bottleneck_slots",
            "n_ev", "n_ev_charging", "s3_move_done", "s3_swap_done",
            "s4_relocated", "s4_locked")
@@ -123,7 +124,7 @@ def main() -> int:
 
             s = summarize_kpis([rid]).set_index("metric")["mean"]
             k = {m: float(s.get(m, float("nan"))) for m in METRICS}
-            total = social_cost_h(k, escape_cost_min=escape_cost)
+            total = social_cost_h(s)
             el = time.perf_counter() - t0
             print(f"  {el:7.1f}s   총 {total:9.1f}h  체류 {k['dwell_total_h']:8.1f}h  "
                   f"이탈 {k['n_escaped']:>4.0f}  대기 {k['wait_mean_min']:5.1f}분  "

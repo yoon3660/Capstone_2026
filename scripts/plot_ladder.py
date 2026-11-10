@@ -154,7 +154,7 @@ def main() -> int:
     t = kpis.loc[run_ids, want].copy()
     t.index = stages
     t["총비용h"] = t.apply(
-        lambda r: social_cost_h(r, escape_cost_min=cfg.demand.escape_cost_min),
+        social_cost_h,
         axis=1)
     print(t.to_string(float_format=lambda v: f"{v:,.1f}"))
 

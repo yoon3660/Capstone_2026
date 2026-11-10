@@ -61,7 +61,7 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
-from evdt.runner import load_config, parse_seeds, run_once, summarize_kpis, social_cost_h  # noqa: E402
+from evdt.runner import SOCIAL_COST_TERMS, load_config, parse_seeds, run_once, summarize_kpis, social_cost_h  # noqa: E402
 
 #: 관측 예측 신뢰도. **사다리와 같은 값이어야 한다** (`matched_ladder.py`)
 OBSERVED_STRENGTH = 0.30
@@ -69,7 +69,10 @@ OBSERVED_STRENGTH = 0.30
 #: 이탈이 이보다 더 벌어지면 비교가 성립하지 않는다 (`docs/compare_rule.md`)
 ESCAPE_TOL = 5
 
-METRICS = ("dwell_total_h", "n_escaped", "wait_mean_min", "wait_p95_min",
+METRICS = (
+    # ★ 세 항은 빠지면 안 된다 — `social_cost_h` 가 멈춘다 (#147)
+    *SOCIAL_COST_TERMS,
+"dwell_total_h", "n_escaped", "wait_mean_min", "wait_p95_min",
            "bottleneck_slots", "n_ev_charging", "s3_window",
            "s3_move_tried", "s3_move_done", "s3_swap_tried", "s3_swap_done",
            "s3_swap_ms")
@@ -144,7 +147,7 @@ def main() -> int:
                            gap_plot=False, log=lambda *_: None)
             k = kpis(rid, db)
             el = time.perf_counter() - t0
-            total = social_cost_h(k, escape_cost_min=esc_cost)
+            total = social_cost_h(k)
             print(f"  {el:7.1f}s   총 {total:9.1f}h  이탈 {k['n_escaped']:.0f}")
             rows.append({"seed": seed, "window": w, "wall_s": el,
                          "total_h": total, **k})
