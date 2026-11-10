@@ -32,7 +32,12 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
-from evdt.runner import load_config, parse_seeds, summarize_kpis  # noqa: E402
+from evdt.runner import (  # noqa: E402
+    load_config,
+    parse_seeds,
+    social_cost_h,
+    summarize_kpis,
+)
 
 STAGES = ("UE", "S0", "S1")
 
@@ -100,11 +105,19 @@ def main() -> int:
     # ⚠ 핵심 — 이탈까지 넣은 총 사회적 비용
     print("\n=== 총 사회적 비용 (이탈을 안 세면 '내보내면 이긴다' 가 된다) ===")
     esc_h = float(cfg.demand.escape_cost_min) / 60.0
-    cost = pd.DataFrame(cols).loc[["dwell_total_h", "n_escaped"]]
-    total = cost.loc["dwell_total_h"] + cost.loc["n_escaped"] * esc_h
+    wide = pd.DataFrame(cols)
+    # 칸마다 세로로 KPI 가 들어 있다 — 칸별 Series 를 helper 에 그대로 넘긴다
+    total = pd.Series({st: social_cost_h(wide[st],
+                                        escape_cost_min=cfg.demand.escape_cost_min)
+                       for st in wide.columns})
+    esc_col = (wide.loc["escape_cost_total_h"] if "escape_cost_total_h" in wide.index
+               else wide.loc["n_escaped"] * esc_h)
     out = pd.DataFrame({
-        "총 체류(h)": cost.loc["dwell_total_h"],
-        f"이탈 {cfg.demand.escape_cost_min:.0f}분(h)": cost.loc["n_escaped"] * esc_h,
+        "총 체류(h)": wide.loc["dwell_total_h"],
+        "이탈 비용(h)": esc_col,
+        # 포기한 차가 떠나기 전에 쓴 시간. 빼먹으면 포기를 켤수록 싸 보인다 (#147)
+        "포기 전 대기(h)": (wide.loc["renege_wait_total_h"]
+                      if "renege_wait_total_h" in wide.index else 0.0),
         "합계(h)": total,
         "UE 대비": (total / total["UE"] - 1.0) * 100.0,
     })

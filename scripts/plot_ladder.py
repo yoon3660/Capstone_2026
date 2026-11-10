@@ -44,7 +44,11 @@ from evdt.io.event_log import load_sql  # noqa: E402
 from evdt.io.loaders import duck_connect  # noqa: E402
 from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
-from evdt.runner import BOTTLENECK_WAIT_MIN, load_config  # noqa: E402
+from evdt.runner import (  # noqa: E402
+    BOTTLENECK_WAIT_MIN,
+    load_config,
+    social_cost_h,
+)
 from evdt.viz.plots import plot_corridor_heatmap  # noqa: E402
 
 DEFAULT_STAGES = ("UE", "S0", "S1", "S2")
@@ -142,10 +146,16 @@ def main() -> int:
     print(f"\n  저장: {out}")
 
     print("\n=== 칸마다 (셋을 같이 본다) ===")
-    t = kpis.loc[run_ids, ["bottleneck_slots", "wait_mean_min", "wait_p95_min",
-                           "n_escaped", "dwell_total_h"]].copy()
+    want = ["bottleneck_slots", "wait_mean_min", "wait_p95_min",
+            "n_escaped", "dwell_total_h"]
+    # 새 run 에만 있다. 없으면 `social_cost_h` 가 예전 식으로 돌아간다 (#147)
+    want += [c for c in ("escape_cost_total_h", "renege_wait_total_h")
+             if c in kpis.columns]
+    t = kpis.loc[run_ids, want].copy()
     t.index = stages
-    t["총비용h"] = t["dwell_total_h"] + t["n_escaped"] * cfg.demand.escape_cost_min / 60.0
+    t["총비용h"] = t.apply(
+        lambda r: social_cost_h(r, escape_cost_min=cfg.demand.escape_cost_min),
+        axis=1)
     print(t.to_string(float_format=lambda v: f"{v:,.1f}"))
 
     print("\n  ⚠ S0 칸이 S1 칸보다 밝으면 그것은 S0 가 좋아서가 아니다 — "

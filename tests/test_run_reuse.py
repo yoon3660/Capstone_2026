@@ -70,9 +70,24 @@ def test_keys_missing_from_an_old_record_are_not_treated_as_different(cfg):
 
     없다고 전부 다시 돌리면 **쓸 수 있는 결과까지 버린다.** 기록된 값이 다를 때만
     불일치로 본다.
+
+    ⚠ **물리를 바꾸는 손잡이는 예외다** — 거기서는 "없음" 이 "꺼져 있었다" 를
+      뜻하므로 불일치가 맞다. 지금 셋: `group_scorer` · `DISPATCH_RULE` ·
+      `renege`. 여기서는 그 셋을 피해서 **일반 규칙**만 본다.
     """
-    stored = {"departure_soc": cfg.vehicles.departure_soc}
-    assert stale_reason(stored, cfg) is None
+    import dataclasses
+
+    off = dataclasses.replace(
+        cfg, demand=dataclasses.replace(cfg.demand, renege=False))
+    stored = {"departure_soc": off.vehicles.departure_soc}
+
+    assert stale_reason(stored, off) is None
+
+
+def test_the_physics_knobs_are_the_exception(cfg):
+    """`renege` 가 기록에 없으면 **꺼져 있던 run** 이다 — 켠 지금과 비교 불가."""
+    assert "renege" in (stale_reason(
+        {"departure_soc": cfg.vehicles.departure_soc}, cfg) or "")
 
 
 def test_every_difference_is_named(cfg):

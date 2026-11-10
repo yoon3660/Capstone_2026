@@ -1461,6 +1461,43 @@ KPI_LABELS: dict[str, str] = {
 }
 
 
+def social_cost_h(kpi: Mapping[str, float], *,
+                  escape_cost_min: float | None = None) -> float:
+    """총 사회적 비용 (시간). **이 식의 유일한 정의다** (#147).
+
+        총 = 총 체류 + 이탈 비용 합 + 포기 전 대기
+
+    예전에는 스크립트마다 `dwell_total_h + n_escaped x escape_cost_min / 60` 을
+    직접 셌다. 같은 식이 여덟 벌 있었고, 두 가지로 틀어졌다.
+
+    ① **이탈 비용은 차마다 다르다.** 중앙값 x 대수로 세면 틀린다. 그리고 이탈은
+       인내가 짧은 쪽에 쏠리므로 **과대계상**된다 — 설 S1 에서 888h vs 실제 359h
+       (#78 회귀). `escape_cost_sigma: 0.0` 이던 동안만 우연히 맞았다.
+
+    ② **포기 전 대기를 아무도 안 더했다.** 포기한 차는 인내만큼 기다리다 떠났다.
+       빼먹으면 포기를 켤수록 비용이 줄어드는 것처럼 보인다 (#147).
+
+    옛 run 은 새 KPI 가 없다. 그때는 `escape_cost_min` 을 주면 예전 식으로
+    돌아간다 — 당시 sigma 가 0 이라 **그 run 에 대해서는 맞는 값**이다. 안 주면
+    조용히 0 으로 세는 대신 **멈춘다**: 이탈 항이 사라진 총비용은 틀린 게 아니라
+    쓸모가 없다.
+    """
+
+    dwell = float(kpi.get("dwell_total_h", 0.0))
+
+    if "escape_cost_total_h" in kpi:
+        escape = float(kpi["escape_cost_total_h"])
+    elif escape_cost_min is not None:
+        escape = float(kpi.get("n_escaped", 0.0)) * float(escape_cost_min) / 60.0
+    else:
+        raise KeyError(
+            "escape_cost_total_h 가 없다 (옛 run 이다). 다시 돌리거나 "
+            "escape_cost_min= 을 주어 예전 식으로 셀 것")
+
+    # 옛 run 에는 없다 — 그때는 포기 기제가 아예 없었으니 0 이 맞다
+    return dwell + escape + float(kpi.get("renege_wait_total_h", 0.0))
+
+
 def summarize_kpis(run_ids: Sequence[str], *, db_path: Path | None = None) -> pd.DataFrame:
     """KPI 별 n · 평균 · 표준편차 · 95% 신뢰구간 (t 분포). 시드 사이 변동을 잰다.
 

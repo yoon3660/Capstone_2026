@@ -29,7 +29,7 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec, OracleSource  # noqa: E402
 from evdt.paths import RUNS_DIR  # noqa: E402
-from evdt.runner import load_config, make_run_id, run_once, summarize_kpis  # noqa: E402
+from evdt.runner import load_config, make_run_id, run_once, summarize_kpis, social_cost_h  # noqa: E402
 
 STRENGTH = 0.30
 WINDOW = 4
@@ -123,7 +123,7 @@ def main() -> int:
 
             s = summarize_kpis([rid]).set_index("metric")["mean"]
             k = {m: float(s.get(m, float("nan"))) for m in METRICS}
-            total = k["dwell_total_h"] + k["n_escaped"] * escape_cost / 60.0
+            total = social_cost_h(k, escape_cost_min=escape_cost)
             el = time.perf_counter() - t0
             print(f"  {el:7.1f}s   총 {total:9.1f}h  체류 {k['dwell_total_h']:8.1f}h  "
                   f"이탈 {k['n_escaped']:>4.0f}  대기 {k['wait_mean_min']:5.1f}분  "

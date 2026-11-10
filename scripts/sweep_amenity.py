@@ -41,7 +41,7 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
-from evdt.runner import load_config, run_once, summarize_kpis  # noqa: E402
+from evdt.runner import load_config, run_once, summarize_kpis, social_cost_h  # noqa: E402
 
 INDEX = "data/processed/amenity_index_proxy.csv"
 METRICS = ("dwell_total_h", "n_escaped", "wait_mean_min", "wait_p95_min",
@@ -138,7 +138,7 @@ def main() -> int:
                    if args.stage in ("S2", "S3", "S4") else {}))
             s = summarize_kpis([rid]).set_index("metric")["mean"]
             k = {m: float(s.get(m, float("nan"))) for m in METRICS}
-            total = k["dwell_total_h"] + k["n_escaped"] * esc / 60.0
+            total = social_cost_h(k, escape_cost_min=esc)
             row = {"beta": beta, "gamma": gamma, "total_h": total, **k,
                    **concentration(rid, cap, horizon),
                    "wall_s": time.perf_counter() - t0, "run_id": rid}

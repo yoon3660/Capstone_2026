@@ -67,6 +67,7 @@ from evdt.runner import (  # noqa: E402
     parse_seeds,
     run_once,
     summarize_kpis,
+    social_cost_h,
 )
 
 RUNS_DIR = PROJECT_ROOT / "runs"
@@ -253,7 +254,7 @@ def main() -> int:
                            log=lambda *_: None)
             k = kpis(rid, db)
             el = time.perf_counter() - t0
-            total = k["dwell_total_h"] + k["n_escaped"] * esc_cost / 60.0
+            total = social_cost_h(k, escape_cost_min=esc_cost)
             print(f"  {el:7.1f}s   총 {total:9.1f}h  이탈 {k['n_escaped']:.0f}")
             rows.append({"seed": seed, "setup": name, "wall_s": el,
                          "total_h": total, **k})

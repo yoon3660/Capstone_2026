@@ -61,7 +61,7 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.engine.forecast import ObservedSpec  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
-from evdt.runner import load_config, parse_seeds, run_once, summarize_kpis  # noqa: E402
+from evdt.runner import load_config, parse_seeds, run_once, summarize_kpis, social_cost_h  # noqa: E402
 
 #: 관측 예측 신뢰도. **사다리와 같은 값이어야 한다** (`matched_ladder.py`)
 OBSERVED_STRENGTH = 0.30
@@ -144,7 +144,7 @@ def main() -> int:
                            gap_plot=False, log=lambda *_: None)
             k = kpis(rid, db)
             el = time.perf_counter() - t0
-            total = k["dwell_total_h"] + k["n_escaped"] * esc_cost / 60.0
+            total = social_cost_h(k, escape_cost_min=esc_cost)
             print(f"  {el:7.1f}s   총 {total:9.1f}h  이탈 {k['n_escaped']:.0f}")
             rows.append({"seed": seed, "window": w, "wall_s": el,
                          "total_h": total, **k})

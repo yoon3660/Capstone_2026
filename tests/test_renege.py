@@ -169,12 +169,23 @@ def test_the_fifo_guard_still_fires() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_knob_is_off_by_default() -> None:
-    from evdt.runner import load_config
+def test_the_dataclass_default_stays_off() -> None:
+    """**코드** 기본값은 꺼짐이고, **config** 가 켠다 (2026-11-10 결정).
 
-    cfg = load_config("config/scenario_seollal_up_adoption.yaml", stage="S0")
+    둘을 가르는 이유: 손으로 만든 `DemandConfig`(테스트·실험 코드)가 조용히
+    물리를 바꾸면 안 된다. 켠 것은 눈에 보이는 config 한 줄이어야 한다.
+    실제 시나리오가 빼먹는 것은 `test_every_scenario_with_an_escape_has_renege_on`
+    이 잡는다.
+    """
+    import dataclasses
 
-    assert cfg.demand.renege is False
+    from evdt.config import DemandConfig
+
+    assert dataclasses.fields(DemandConfig)
+    default = next(f for f in dataclasses.fields(DemandConfig)
+                   if f.name == "renege").default
+
+    assert default is False
 
 
 def test_the_run_records_whether_renege_was_on() -> None:
@@ -273,3 +284,110 @@ def test_the_escape_cost_total_is_a_kpi() -> None:
     from evdt.runner import KPI_LABELS
 
     assert "escape_cost_total_h" in KPI_LABELS
+
+
+# ---------------------------------------------------------------------------
+# 기본값이 **켜짐** 인가 (#147 — 2026-11-10 결정)
+# ---------------------------------------------------------------------------
+
+
+def test_every_scenario_with_an_escape_has_renege_on() -> None:
+    """이탈 기제가 있는 config 는 **전부** 포기를 켠다.
+
+    끄면 "이탈 기준 120분" 이라고 선언한 모형에서 372.5분을 기다리는 차가
+    생기고, 그 혼란 요인이 S0 에 가장 많이 얹혀 사다리를 부풀린다
+    (S0-S2 격차 884.3h 중 540.7h).
+
+    새 config 가 이 줄을 빼먹으면 **조용히 옛 물리로 돌아간다.** 그걸 막는다.
+    """
+    import yaml
+
+    from evdt.paths import CONFIG_DIR
+
+    missing = []
+    for f in sorted(CONFIG_DIR.glob("scenario_*.yaml")):
+        d = yaml.safe_load(f.read_text(encoding="utf-8")).get("demand", {})
+        if not float(d.get("escape_cost_min", 0.0)):
+            continue                      # 이탈 기제가 없는 config — 켤 수 없다
+        if not d.get("renege", False):
+            missing.append(f.name)
+
+    assert not missing, f"포기가 꺼진 config: {missing}"
+
+
+def test_the_default_patience_family_is_point() -> None:
+    """분포는 **아직** 기본이 아니다.
+
+    인내 추출이 그대로 이탈 비용이 되므로(`ue_demand.py:385`) 분포로 바꾸면
+    조급한 차에게 공짜 탈출구가 열린다 — weibull:0.7 에서 S0 가 수요의
+    18.9% 를 잃는다. 둘을 가르기 전까지는 point 다.
+    """
+    import yaml
+
+    from evdt.paths import CONFIG_DIR
+
+    bad = {}
+    for f in sorted(CONFIG_DIR.glob("scenario_*.yaml")):
+        d = yaml.safe_load(f.read_text(encoding="utf-8")).get("demand", {})
+        kind = d.get("patience_kind", "point")
+        if kind != "point" or float(d.get("escape_cost_sigma", 0.0)):
+            bad[f.name] = (kind, d.get("escape_cost_sigma", 0.0))
+
+    assert not bad, (
+        f"인내가 분포인 config: {bad} — 이탈 비용과 갈라지기 전까지는 point 다")
+
+
+# ---------------------------------------------------------------------------
+# 총 사회적 비용의 정의가 **한 곳**인가
+# ---------------------------------------------------------------------------
+
+
+def test_social_cost_adds_all_three_terms() -> None:
+    from evdt.runner import social_cost_h
+
+    got = social_cost_h({"dwell_total_h": 100.0, "escape_cost_total_h": 20.0,
+                         "renege_wait_total_h": 5.0})
+
+    assert got == pytest.approx(125.0)
+
+
+def test_social_cost_prefers_the_measured_escape_cost() -> None:
+    """차마다의 합이 있으면 `대수 x 중앙값` 보다 **그것**을 쓴다."""
+    from evdt.runner import social_cost_h
+
+    kpi = {"dwell_total_h": 0.0, "n_escaped": 100.0, "escape_cost_total_h": 55.0}
+
+    assert social_cost_h(kpi, escape_cost_min=120.0) == pytest.approx(55.0)
+
+
+def test_social_cost_falls_back_for_old_runs() -> None:
+    """옛 run 에는 새 KPI 가 없다. 당시 sigma 가 0 이라 예전 식이 맞다."""
+    from evdt.runner import social_cost_h
+
+    got = social_cost_h({"dwell_total_h": 10.0, "n_escaped": 30.0},
+                        escape_cost_min=120.0)
+
+    assert got == pytest.approx(10.0 + 60.0)
+
+
+def test_social_cost_refuses_to_silently_drop_the_escape_term() -> None:
+    """이탈 항이 빠진 총비용은 틀린 게 아니라 **쓸모가 없다** — 멈춘다."""
+    from evdt.runner import social_cost_h
+
+    with pytest.raises(KeyError, match="escape_cost_total_h"):
+        social_cost_h({"dwell_total_h": 10.0, "n_escaped": 30.0})
+
+
+def test_no_script_counts_the_total_by_hand() -> None:
+    """식이 여덟 벌이었던 게 이 버그의 원인이다. 다시 흩어지면 안 된다."""
+    from evdt.paths import PROJECT_ROOT
+
+    offenders = []
+    for f in sorted((PROJECT_ROOT / "scripts").glob("*.py")):
+        src = f.read_text(encoding="utf-8")
+        for n, line in enumerate(src.splitlines(), 1):
+            if "n_escaped" in line and "escape_cost" in line and "*" in line:
+                offenders.append(f"{f.name}:{n}")
+
+    assert not offenders, (
+        f"총비용을 손으로 세는 곳: {offenders} — runner.social_cost_h 를 쓸 것")
