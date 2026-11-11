@@ -271,9 +271,14 @@ def test_the_logged_escape_cost_is_the_cars_own(tmp_path) -> None:
 
     from evdt.runner import load_config, run_once
 
+    #: ★ **산포를 `escape_cost_sigma` 로 준다** (#147 후속). 전에는
+    #:   `patience_kind="exponential"` 로 흩었는데, 인내와 우회 비용을 가른
+    #:   뒤로는 인내 가족이 **이탈 비용을 건드리지 않는다** — 그래서 저 손잡이로는
+    #:   전원이 120.0 이 되고 이 검사가 무의미해진다. 이탈 비용의 산포는
+    #:   이제 이 칸이 맡는다 (지리의 산포 ↔ 선호의 모양).
     cfg = load_config("config/scenario_seollal_up_adoption.yaml", stage="S0")
     cfg = dataclasses.replace(cfg, demand=dataclasses.replace(
-        cfg.demand, patience_kind="exponential", renege=False))
+        cfg.demand, escape_cost_sigma=0.5, renege=False))
 
     rid = run_once(cfg, seed=1, overwrite=True, log=lambda *_: None,
                    runs_dir=tmp_path)

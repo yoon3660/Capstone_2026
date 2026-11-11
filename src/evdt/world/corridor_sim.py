@@ -132,6 +132,10 @@ class SimEV:
     #: 이 차의 이탈 비용 (#78). **TripDemand 에서 그대로 와야 한다** — 여기서 다시
     #: 뽑으면 UE 와 S0 가 다른 값을 쓰고 그 차이가 정책 차이로 보고된다.
     escape_cost_min: float = 0.0
+    #: 이 차가 줄에서 **얼마나 기다릴 수 있나** (분) (#147 후속). 같은 이유로
+    #: TripDemand 에서 온다. 0 이면 `escape_cost_min` 으로 떨어진다 — 둘을 가르지
+    #: 않은 config 의 동작이다
+    patience_min: float = 0.0
     #: 이 차가 채우고 싶어 하는 SoC (#112). 같은 이유로 TripDemand 에서 온다.
     habit_soc: float = 0.0
 
@@ -258,10 +262,14 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
     cold_factor: float,
     range_factor: float,
     cruise_speed_kmh: float,
-    #: 줄을 서 있다가 인내가 끝나면 떠나는가 (#147). **기본은 끄짐** — 켜면 물리가
-    #: 바뀌어 저장된 run 과 비교할 수 없다. 인내 값은 차마다의 `escape_cost_min` 을
-    #: 그대로 쓴다 (발길질과 **같은 추출**이어야 한다. 따로 뽑으면 "100분 줄은
-    #: 받아들였는데 300분은 참는" 차가 생긴다)
+    #: 줄을 서 있다가 인내가 끝나면 떠나는가 (#147). **기본은 꺼짐** — 켜면 물리가
+    #: 바뀌어 저장된 run 과 비교할 수 없다.
+    #:
+    #: 인내 값은 차마다의 `patience_min` 이다 (#147 후속). 0 이면 `escape_cost_min`
+    #: 으로 떨어진다 — 둘을 가르지 않은 config 에서는 **같은 추출**이고, 그게
+    #: 지금까지의 동작이다. 가른 뒤에는 발길질(우회 실비)과 포기(참을성)가 서로
+    #: 다른 값을 보는 것이 **맞다** — 조급한 차가 싸게 나가는 것을 막는 게
+    #: 가른 이유다
     renege: bool = False,
     escape_cost_min: float = 0.0,
     snapshot_every_min: float = DEFAULT_SNAPSHOT_EVERY_MIN,
@@ -560,9 +568,15 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
             power = {c.charger_id: c.power_kw for c in queues[sid].chargers}
 
             if renege:
-                patience = {a.ev_id: float(state[a.ev_id][2].ev.escape_cost_min)
-                            for a in arrs
-                            if state[a.ev_id][2].ev.escape_cost_min > 0}
+                # ★ 포기는 `patience_min` 을 본다 — 발길질이 보는
+                #   `escape_cost_min` 과 **다른 양이다** (#147 후속).
+                #   0 이면 안 가른 config 이므로 이탈 비용으로 떨어뜨린다
+                patience = {}
+                for a in arrs:
+                    ev = state[a.ev_id][2].ev
+                    minutes = ev.patience_min or ev.escape_cost_min
+                    if minutes > 0:
+                        patience[a.ev_id] = float(minutes)
                 admitted, gave_up = queues[sid].admit_patient(arrs, patience)
             else:
                 admitted, gave_up = queues[sid].admit(arrs), ()
@@ -573,10 +587,12 @@ def run_corridor(  # noqa: PLR0912, PLR0915 — 한 스텝의 순서가 곧 모�
                 _, _, car = state[ev_id]
                 car.done = True
                 n_reneged += 1
+                # 비용은 **우회 실비**(escape_cost_min), 기다린 시간은 **인내**
+                # (patience_min). 가르기 전에는 둘이 같은 값이었다 (#147 후속)
                 escape_events.append(_escape_row(
                     car, ESCAPE_REASON[ESCAPE_RENEGED],
                     car.ev.escape_cost_min, sid, t,
-                    waited_min=float(car.ev.escape_cost_min)))
+                    waited_min=float(car.ev.patience_min or car.ev.escape_cost_min)))
 
             for a in admitted:
                 soc_in, soc_out, car = state[a.ev_id]

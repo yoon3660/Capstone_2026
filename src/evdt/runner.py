@@ -243,9 +243,14 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
         # 포기를 켰나 (#147). **물리가 바뀐다** — 끈 run 과 켠 run 은 비교 대상이
         # 아니다. 옛 run 에는 이 칸이 없고, 그건 꺼져 있었다는 뜻이다
         "renege": cfg.demand.renege,
-        "patience": Patience(median_min=cfg.demand.escape_cost_min,
+        # ★ 인내의 중앙값을 **따로** 적는다 (#147 후속). 전에는 이 칸에
+        #   `escape_cost_min` 이 중앙값으로 들어가 있어서, 둘을 가른 run 과
+        #   안 가른 run 이 `run_params` 에서 구분되지 않았다
+        "patience": Patience(median_min=cfg.demand.patience_median_min
+                             or cfg.demand.escape_cost_min,
                              kind=cfg.demand.patience_kind,
                              shape=cfg.demand.patience_shape).describe(),
+        "patience_median_min": cfg.demand.patience_median_min,
         "group_scorer": GROUP_SCORER,
         "dispatch_rule": DISPATCH_RULE,
     }
@@ -515,9 +520,11 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         max_stops=cfg.policy.ue.max_stops,
         escape_cost_min=cfg.demand.escape_cost_min,
         escape_cost_sigma=cfg.demand.escape_cost_sigma,
-        patience=Patience(median_min=cfg.demand.escape_cost_min,
+        patience=Patience(median_min=cfg.demand.patience_median_min
+                          or cfg.demand.escape_cost_min,
                           kind=cfg.demand.patience_kind,
                           shape=cfg.demand.patience_shape),
+        patience_median_min=cfg.demand.patience_median_min,
         opportunity_prob=opp_prob,
         opportunity_soc_margin=opp_margin,
     )
@@ -648,6 +655,7 @@ def _sim_evs(trips: Sequence) -> list[SimEV]:
             curve=t.curve, cold_factor=t.cold_factor,
             wants_opportunity_charge=t.wants_opportunity_charge,
             escape_cost_min=t.escape_cost_min,
+            patience_min=t.patience_min,
             habit_soc=t.habit_soc,
         )
         for t in trips

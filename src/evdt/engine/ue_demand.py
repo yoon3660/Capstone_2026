@@ -92,6 +92,14 @@ class TripDemand:
     #: 수천 대가 되고, 작은 차이로 집단이 뒤집혀 최적반응이 가라앉지 않는다.
     #: 0 이면 호출자가 준 전역값을 쓴다 (#78 이전 동작).
     escape_cost_min: float = 0.0
+    #: 이 차가 줄에서 **얼마나 기다릴 수 있나** (분) (#147 후속). `escape_cost_min`
+    #: 과 **다른 양이다** — 저쪽은 지리(IC 우회 실비), 이쪽은 선호. 둘을 가르지
+    #: 않은 config 에서는 같은 값이 들어온다.
+    #:
+    #:   발길질 판단 (고를 때)   → escape_cost_min   "줄이 우회보다 비싸면 안 간다"
+    #:   포기 판단  (줄에서)     → patience_min      "이만큼 기다렸으면 됐다"
+    #:   이탈 비용 기록          → escape_cost_min   나가서 실제로 치르는 값
+    patience_min: float = 0.0
     #: 이 차가 채우고 싶어 하는 SoC (#112). **차마다 다르다** — 전원이 똑같이
     #: 80% 를 목표로 하면 같은 휴게소에서 체류가 전부 같아지고, 무차별해진 차들이
     #: 한꺼번에 뒤집혀 최적반응이 가라앉지 않는다 (#78 의 이탈 비용과 같은 모양).
@@ -148,33 +156,67 @@ class ChargeRule:
     #:   옛 config 와 저장된 run 이 그대로 유효하다
     escape_cost_sigma: float = 0.0
     #: 인내 분포 (#146). 콜센터 문헌에서 가져왔다 — `engine/patience.py` 참조.
-    #: 중앙값은 `escape_cost_min` 이고, 가족을 바꿔도 중앙값은 안 움직인다
+    #: 중앙값은 `patience_median_min` (0 이면 `escape_cost_min`) 이고, 가족을
+    #: 바꿔도 중앙값은 안 움직인다
     patience: Patience | None = None
+    #: 인내의 중앙값(분) (#147 후속). 0 이면 `escape_cost_min` 을 쓴다.
+    #: **이 값을 주는 순간 인내와 우회 비용이 갈라진다** — 그 전까지는 한 값이다
+    patience_median_min: float = 0.0
     opportunity_prob: float = 0.0
     #: 도착 예상 SoC 가 이보다 얇을 때만 기회 충전을 고려한다.
     #: 차종으로 나누지 않는 이유: 배터리가 작은 차는 여유가 얇아 **자연히** 더 걸린다.
     #: 횟수를 차종별로 강제하면 이미 맞게 도는 물리를 덮어쓰게 된다.
     opportunity_soc_margin: float = 0.0
 
-    def patience_spec(self) -> Patience:
-        """실제로 쓸 인내 분포. **옛 손잡이와 새 손잡이를 한 자리에서 화해시킨다.**
+    @property
+    def patience_median(self) -> float:
+        """인내의 중앙값(분). 따로 안 주면 이탈 비용과 **같은 값**이다."""
 
-        우선순위
-            1. `patience` 가 있으면 그것 (중앙값은 `escape_cost_min` 로 덮어쓴다 —
-               두 곳에 적힌 중앙값이 갈라지면 어느 쪽이 쓰였는지 알 수 없다)
-            2. 없고 `escape_cost_sigma > 0` 이면 로그정규 (#78 의 동작 그대로)
-            3. 둘 다 없으면 점질량
+        return self.patience_median_min or self.escape_cost_min
 
-        2번이 **저장된 run 을 지키는 자리**다. 여기가 없으면 옛 결과가 전부
-        재현 불가가 된다.
+    def splits_patience(self) -> bool:
+        """인내를 우회 비용과 **따로 뽑아야 하는가** (#147 후속).
+
+        두 분포가 **다를 때만** 따로 뽑는다. 같으면 추출 하나를 둘에 같이 쓴다 —
+        그게 지금까지의 동작이고, 값도 어차피 같다.
+
+        ⚠ `self.patience is not None` 로 판정하면 안 된다. `runner` 는 config 가
+          무엇이든 `Patience` 객체를 **항상** 넘기므로 그 조건은 늘 참이다.
+          분포가 실제로 갈라졌는지를 봐야 한다.
         """
 
-        if self.patience is not None:
-            return dataclasses.replace(self.patience, median_min=self.escape_cost_min)
+        return self.patience_spec() != self.escape_cost_spec()
+
+    def escape_cost_spec(self) -> Patience:
+        """**우회 비용**의 분포 — 지리다. 중앙값 `escape_cost_min`, 산포는 로그정규.
+
+        ★ 여기에 `patience` 를 섞지 않는다. 산포는 UE 수렴에 필요한 것이고
+          (0 이면 "나갈까 말까" 경계에 질량이 몰려 집단이 뒤집힌다), 인내의
+          **가족**과는 상관이 없다. 전에는 한 함수가 둘을 다 내서, 가족을
+          바꾸면 우회 비용의 모양까지 같이 바뀌었다.
+        """
+
         if self.escape_cost_sigma > 0.0:
             return Patience(median_min=self.escape_cost_min, kind="lognormal",
                             shape=self.escape_cost_sigma)
         return Patience(median_min=self.escape_cost_min)
+
+    def patience_spec(self) -> Patience:
+        """**인내**의 분포 — 선호다. `engine/patience.py` 의 가족을 쓴다.
+
+        우선순위
+            1. `patience` 가 있으면 그것 (중앙값은 `patience_median` 으로 덮어쓴다 —
+               두 곳에 적힌 중앙값이 갈라지면 어느 쪽이 쓰였는지 알 수 없다)
+            2. 없고 `escape_cost_sigma > 0` 이면 로그정규 (#78 의 동작 그대로)
+            3. 둘 다 없으면 점질량
+        """
+
+        if self.patience is not None:
+            return dataclasses.replace(self.patience, median_min=self.patience_median)
+        if self.escape_cost_sigma > 0.0:
+            return Patience(median_min=self.patience_median, kind="lognormal",
+                            shape=self.escape_cost_sigma)
+        return Patience(median_min=self.patience_median)
 
 
 def _wants_opportunity_charge(ev: Mapping, vclass: Mapping, entry_km: float,
@@ -376,13 +418,28 @@ def build_trip_demands(
     # 이탈 비용을 차마다 뽑으려면 대수를 알아야 한다. `evs` 는 Iterable 이라 한 번 고정한다
     evs = list(evs)
 
-    # 이탈 비용은 **차마다 다르다** (#78). 전원이 같은 값이면 그 값 근처에 질량이
-    # 몰려 "나갈까 말까" 경계에 선 차가 수천 대가 되고, 집단이 뒤집히며 진동한다.
-    # 중앙값은 rule.escape_cost_min 이고 sigma 가 0 이면 전원이 그 값이다.
+    # 이탈(우회) 비용은 **차마다 다르다** (#78). 전원이 같은 값이면 그 값 근처에
+    # 질량이 몰려 "나갈까 말까" 경계에 선 차가 수천 대가 되고, 집단이 뒤집히며
+    # 진동한다. 중앙값은 rule.escape_cost_min 이고 sigma 가 0 이면 전원이 그 값이다.
+    escape_costs = rule.escape_cost_spec().draw(len(evs), gen)
+
+    # ★ **인내는 우회 비용과 다른 양이다** (#147 후속). 우회 비용은 지리이고
+    #   (IC 로 빠지는 데 몇 분 걸리나), 인내는 선호다 (얼마나 참나). 고정 120분일
+    #   때는 두 해석이 우연히 맞아떨어졌지만, 인내를 분포로 바꾸면 깨진다 —
+    #   "인내 9분인 차 = 우회도 9분인 차" 가 되어 조급한 차에게 **공짜 탈출구**가
+    #   열린다. weibull:0.7 에서 S0 가 수요의 18.9% 를 잃었다.
     #
-    # 가족은 `patience` 가 정한다 (#146). 없으면 옛 손잡이(`escape_cost_sigma`)를
-    # 로그정규로 읽는다 — 저장된 run 이 그대로 유효해야 한다.
-    escape_costs = rule.patience_spec().draw(len(evs), gen)
+    # ⚠ **독립 스트림에서 뽑는다** (`gen.spawn`). 같은 `gen` 에서 한 번 더 뽑으면
+    #   난수열이 밀려 뒤에 오는 habit_soc·기회충전 추첨이 전부 달라진다. 그러면
+    #   "인내 가족을 바꿨다" 가 아니라 "차량 집합을 바꿨다" 가 되어, 이 분리의
+    #   주장(**인내는 발길질을 건드리지 않는다**)을 확인할 수 없다.
+    #   실제로 그렇게 재 봤더니 발길질이 240 → 256 으로 움직였다 — 탈출구 때문이
+    #   아니라 난수열이 밀려서였다.
+    #
+    #   두 분포가 같으면 추출을 **하나만** 쓴다. 지금까지의 동작이고 비트 단위로
+    #   같다 (`splits_patience`).
+    patiences = (rule.patience_spec().draw(len(evs), gen.spawn(1)[0])
+                 if rule.splits_patience() else escape_costs)
 
     # 습관 목표 SoC 도 **차마다 다르다** (#112). 전원이 같은 값이면 같은 휴게소에서
     # 체류가 전부 같아져 무차별점이 생기고, 상행에서 gap 이 3.12% ↔ 3.20% 로
@@ -461,6 +518,7 @@ def build_trip_demands(
                 soc0=soc0,
                 consumption_kwh_km=float(v["consumption_kwh_km"]),
                 escape_cost_min=float(escape_costs[i]),
+                patience_min=float(patiences[i]),
                 habit_soc=float(habit),
                 wants_opportunity_charge=opportunity,
             )

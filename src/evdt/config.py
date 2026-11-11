@@ -240,12 +240,28 @@ class DemandConfig:
     #: 휴게소 계획이 전부 이보다 비싸면 차는 코리도를 벗어난다 → KPI `n_escaped`.
     #: 0 이면 이탈 선택지가 없다. ⚠ 120분은 잠정값, 근거는 #64
     escape_cost_min: float = 0.0
-    #: 이탈 비용의 산포 (로그정규 sigma) (#78). 0 이면 전원이 같은 값을 쓴다.
-    #: ⚠ `patience_kind` 로 대체되는 중이다 (#146). 둘 다 주면 patience_kind 가 이긴다
+    #: 이탈(우회) 비용의 산포 — 로그정규 sigma (#78). 0 이면 전원이 같은 값을 쓴다.
+    #:
+    #: ★ **인내와 각자 할 일이 따로 있다** (#147 후속, 2026-11-11). 전에는 여기에
+    #:   "patience_kind 로 대체되는 중" 이라고 적혀 있었는데 틀렸다. 이 칸은
+    #:   **지리**(IC 로 빠지는 데 몇 분 걸리나)의 산포이고, `patience_*` 는
+    #:   **선호**(얼마나 참나)의 모양이다. 그리고 이 산포는 UE 수렴에 필요하다 —
+    #:   0 이면 "나갈까 말까" 경계에 질량이 몰려 집단이 뒤집히며 진동한다
+    #:   (escape_cost_min 60 에서 20시드 중 10개가 수렴 실패).
     escape_cost_sigma: float = 0.0
     #: 인내 분포의 가족 (#146) — point · lognormal · weibull · exponential · uniform.
-    #: 중앙값은 언제나 `escape_cost_min` 이다. `engine/patience.py` 참조
+    #: 중앙값은 `patience_median_min` (없으면 `escape_cost_min`). `engine/patience.py` 참조
     patience_kind: str = "point"
+    #: 인내의 중앙값(분) (#147 후속). 0 이면 `escape_cost_min` 을 쓴다 — **그게
+    #: 지금까지의 동작**이고, 둘을 가르지 않은 config 는 비트 단위로 그대로 돈다.
+    #:
+    #: ★ 왜 갈라야 하나: 고정 120분일 때는 두 해석이 우연히 맞았다 ("IC 로 빠져
+    #:   시내에서 충전하고 오면 120분이니, 줄이 그보다 비싸면 나간다"). 인내를
+    #:   **분포**로 바꾸면 깨진다 — "인내 9분인 차 = 우회도 9분인 차" 가 되어
+    #:   조급한 차에게 **공짜 탈출구**가 열린다. weibull:0.7 에서 S0 가 수요의
+    #:   18.9% 를 잃었고, 총비용이 51% 떨어진 것은 엔진이 좋아진 게 아니라
+    #:   **문제가 작아진 것**이었다.
+    patience_median_min: float = 0.0
     #: 가족별 모양 모수. lognormal σ · weibull k · uniform 반폭비율. exponential 은 안 쓴다
     patience_shape: float = 0.0
     #: 줄을 서 있다가 인내가 끝나면 **떠나는가** (#147). 기본은 꺼짐.
@@ -560,6 +576,12 @@ class ScenarioConfig:
                   f"{list(PATIENCE_KINDS)} 중 하나여야 한다 (받은 값: {patience_kind!r})")
         patience_shape = e.number(
             d.get("patience_shape", 0.0), "demand.patience_shape", lo=0.0)
+        patience_median_min = e.number(
+            d.get("patience_median_min", 0.0), "demand.patience_median_min", lo=0.0)
+        if patience_median_min and not escape_cost_min:
+            e.add("demand.patience_median_min",
+                  "이탈 비용이 0 이면 나갈 길이 없어 인내를 따로 둘 뜻이 없다 — "
+                  "escape_cost_min 을 먼저 줄 것")
         renege = bool(d.get("renege", False))
         if renege and not escape_cost_min:
             e.add("demand.renege",
@@ -739,6 +761,7 @@ class ScenarioConfig:
                 escape_cost_sigma=escape_cost_sigma,       # type: ignore[arg-type]
                 patience_kind=patience_kind,
                 patience_shape=patience_shape,             # type: ignore[arg-type]
+                patience_median_min=patience_median_min,    # type: ignore[arg-type]
                 renege=renege,
                 layers=layers,
                 beta_binomial_concentration=beta_binomial_concentration,   # type: ignore[arg-type]
