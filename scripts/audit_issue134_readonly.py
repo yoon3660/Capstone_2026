@@ -365,8 +365,8 @@ def main() -> int:
     ap.add_argument("--report-dir", type=Path, help="추석 키·좌표 대조표 저장 경로")
     args = ap.parse_args()
     if args.chuseok:
-        from audit_issue146_readonly import audit_chuseok
         from _bootstrap import ROOT
+        from audit_issue146_readonly import audit_chuseok
         audit = Audit()
         audit_chuseok(audit, ROOT, args.report_dir)
         return audit.report(verbose=args.verbose)
