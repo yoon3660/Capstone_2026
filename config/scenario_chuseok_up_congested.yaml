@@ -1,0 +1,148 @@
+# 추석 혼잡 시나리오 (경부선 상행) — 엔진 비교의 주 무대 (#146 · #147)
+#
+# `scenario_chuseok_up_adoption.yaml` 에서 **날짜와 EV 보급률만** 바꿨다.
+# 노선·차량·충전 행태·공급은 전부 그대로다 (설 기본 DB 282기, 상행 129기).
+#
+# ★ 왜 날짜를 9/25 로 옮겼나 — **세 가지 독립 측정이 같은 날을 가리킨다**
+#
+#   ① 실측 콘존 속도로 상행 코리도(415.1km) 통행시간을 재니 9/25 가 최대 지체
+#      (+200분, 최장 449분). 9/26 은 +109분이다
+#   ② #165 검증표의 VDS 저속 관측칸: 9/25 UP **194칸** (상행 8개 날짜·방향 중 최다),
+#      9/26 UP 153칸, 9/26 DOWN 5칸
+#   ③ 이 빌더 자신의 통과 교통량: 9/25 UP **50,204대**, 9/26 UP 37,155대 (−26%)
+#
+#   #159 가 고른 9/26 은 **TCS 전차종·전구간 교통량 최대일**이지, 우리 엔진이 쓰는
+#   **상행 코리도 통과량**의 최대일이 아니다. 설 상행 기준선(50,548대)과 사실상
+#   같은 날은 9/25 다 (−0.7%).
+#
+# ★ 왜 EV 20% 인가 — **9월 기온에서는 10% 로 혼잡이 안 생긴다**
+#
+#   추석은 9월이라 충전기가 정격으로 돈다. 설(−5°C)과 비교하면
+#
+#       설   −5.00°C  주행효율 0.828  충전출력 **0.610**
+#       추석 22.18°C  주행효율 1.000  충전출력 **1.000**
+#
+#   즉 충전이 **1.64배 빠르고** 주행 효율이 좋아 충전 필요 대수·충전량이 둘 다
+#   적다. EV 10% 로 재면 **병목 슬롯이 0개**다 (평균 대기 0.45분, P95 3.0분) —
+#   엔진이 옮길 자리가 없다. 보급률을 올려 보면
+#
+#       EV   충전필요   총비용    발길질  평균대기   P95    병목
+#       10%   4,958     891h       0    0.45분   3.0분    0
+#       20%  10,011   6,886h     109   24.8분  89.7분   92     ← 이 config
+#       30%  15,069  21,861h   1,043   51.7분 117.2분  191
+#
+#   **20% 가 설 상행 보급(EV 10%)과 동등한 무대다** — 총비용 6,886h vs 6,978h,
+#   평균 대기 24.8 vs 27.7분, 병목 92 vs 133. 30% 는 포화다 (P95 가 인내 120분
+#   상한에 붙고 이탈이 1,043대로 터진다) — 설 config 가 "ev_share 5% 는 티핑
+#   포인트 바로 위, 쏠림은 있고 빈 곳도 있다" 로 고른 것과 같은 기준이다.
+#
+#   ⚠ 이건 **실제 2026 추석의 EV 비율이 아니다.** 보급 확대 가정이고, 그래서
+#     `_congested` 다 (설의 `scenario_seollal_up_congested.yaml` 가 10% → 15%
+#     로 올린 것과 같은 자리). 발표에서 "추석 실측 재현" 이라고 말하지 않는다.
+#
+# ★ 도로 정체는 **여전히 무대에 없다** (`travel_time: fixed`)
+#
+#   추석의 진짜 강점은 도로 정체인데 CTM 이 그걸 못 재현했고(#160: 저속 821칸 중
+#   적중 1칸, Recall 0.0012), 실측 속도장을 꽂는 입구가 아직 없다
+#   (`ctm_run.py` 가 CellSpeedField 를 CTM 출력으로만 채운다).
+#   여기서 보는 혼잡은 **충전 대기**뿐이다. 그걸 발표에서 먼저 말한다.
+scenario_id: chuseok_2026_up_congested
+label: "2026 추석 2026-09-25 경부선 UP — 혼잡 시나리오 (EV 20%, ⚠ 실측 비율 아님)"
+corridor_id: gyeongbu_up
+direction: UP
+day_type: CHUSEOK_PEAK
+
+time:
+  start_min: 0
+  end_min: 1440
+  dt_min: 5
+
+demand:
+  period: chuseok2026
+  volume_profile: data/processed/issue146_chuseok/2026-09-25/UP/volume.csv
+  demand_multiplier: 1.0
+  ev_share: 0.05            # 통과 차량 중 EV 비중 (레이어가 덮는다)
+  ev_count_method: fixed
+  beta_binomial_concentration: 10000.0
+  poisson_lognormal_sigma: 0.05
+  charge_prob: 0.95
+  layers:
+    - {kind: ev_adoption, ev_share: 0.20}
+    - {kind: opportunity_charge, prob: 0.20, soc_margin: 0.5}
+  safety_buffer_km: 30.0
+  low_soc_threshold: 0.2
+  through_profile: data/processed/issue146_chuseok/2026-09-25/UP/through.csv
+  entry_exit_profile: data/processed/issue146_chuseok/2026-09-25/UP/entry_exit.csv
+  od_profile: null  # #146 일별·시간별 TCS 혼합에서 VDS 통과량 오차 증가
+  cruise_speed_kmh: 80.0
+  # IC 로 빠져 시내에서 충전하고 돌아오는 데 드는 시간(분). ⚠ 120분은 잠정값 (#64)
+  escape_cost_min: 120.0
+  # 우회 비용의 산포. **인내 가족과 다른 양이다** (#147 후속) — 이쪽은 지리,
+  # 저쪽은 선호. UE 수렴에 필요한 산포이기도 하다 (0 이면 "나갈까 말까" 경계에
+  # 질량이 몰려 60분에서 20시드 중 10개가 수렴에 실패했다)
+  escape_cost_sigma: 0.0
+  # 줄을 서 있다가 인내가 끝나면 떠난다 (#147)
+  renege: true
+  # ★ 인내 가족은 **point** 다 — "아직" 이 아니라 **가장 보수적이라서**.
+  #   이 무대에서 균등분포를 흔들어 보면 (시드 3개, S0→S2):
+  #
+  #       point         +11.86%      —
+  #       m=120 h=0.5   +16.79%   +4.92%p
+  #       m=120 h=0.75  +20.72%   +8.86%p
+  #       m=60  h=0.75  +21.11%   +9.25%p
+  #
+  #   **모든 분포가 엔진을 더 좋아 보이게 한다.** 그 이득이 어디서 오는지 보면
+  #   (S0, point → m=60 h=0.75) 체류 5,610.9 → 3,150.0h 인데 **충전 마친 차가
+  #   9,609 → 9,234 (−375대)** 다. 차가 더 포기해서 문제가 26% 작아진 것이다.
+  #   그래서 분포는 `scripts/sweep_patience.py` 의 **민감도 축**으로만 보고한다.
+  travel_time: fixed  # #160 CTM 정체 재현 미달 (Recall 0.0012). 실측 속도장 주입은 별도 티켓
+
+vehicles:
+  seed: 7
+  departure_soc: holiday
+  soc_profiles:
+    holiday:
+      dist: lognormal
+      mu: -0.3567           # ⚠ ln(0.70) 은 절삭 전 중앙값. 실제 중앙값은 65.8%
+      sigma: 0.35           # 모른다는 것을 넓이로 반영했다
+      lo: 0.33              # ⚠ 행태 가드레일 (가정). docs/departure_soc.md
+      hi: 1.00
+    low:                    # ⚠ 대조군. Rupnik 의 휴게소 도착 SoC (#55 이전 기본값)
+      a: 2.0
+      b: 5.0
+      lo: 0.10
+      hi: 0.95
+    high:                   # 대조군
+      a: 5.0
+      b: 2.0
+      lo: 0.30
+      hi: 0.95
+  target_soc_cap: 0.8
+  habit_soc: 0.0
+  habit_soc_sigma: 0.0
+
+environment:
+  # https://www.weather.go.kr/w/weather/land/aws-obs.do
+  # 9/26(20.41°C) 과 같은 방식으로 **9/25 의** 하루 평균을 쓴다 — 날짜가 바뀌면
+  # 기온도 그 날짜의 것이어야 수요와 짝이 맞는다
+  temp_c: 22.18  # 기상청 날씨누리 2026-09-25 서울·대전·대구·부산 00/06/12/18시 실측 16개 평균
+
+policy:
+  stage: UE
+  participation: 1.0
+  params: {}
+  ue:
+    # 혼잡 시나리오는 균형이 잘 안 가라앉는다 — 설 congested 와 같은 완화값을 쓴다.
+    # ⚠ 이 config 의 UE 결과는 **균형이 아니다**. 엔진 칸(S0~S4) 비교에만 쓴다
+    max_iter: 50
+    gap_tol: 0.05
+    min_gain_min: 1.0
+    max_stops: 3
+
+queue:
+  discipline: FIFO
+  charger_select: MAX_POWER_IDLE
+
+output:
+  write_snapshots: true
+  snapshot_every_min: 5
