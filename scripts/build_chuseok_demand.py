@@ -7,19 +7,21 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 from _bootstrap import ROOT
+from validate_sections import hazard_destinations, passage, scoring_grid
+
 from evdt.io import traffic
 from evdt.io.demand_profile import through_share
 from evdt.io.entry_exit import (
-    corridor_entry_hourly, entry_exit_profile, entry_points,
-    sample_entry_offsets, sample_exit_offsets,
+    corridor_entry_hourly,
+    entry_exit_profile,
+    entry_points,
+    sample_entry_offsets,
+    sample_exit_offsets,
 )
 from evdt.io.route import GyeongbuRoute
 from evdt.io.synthetic_ev import generate_evs, hourly_ev_counts
 from evdt.runner import DEST_STREAM, load_config
-from validate_sections import hazard_destinations, passage, scoring_grid
-
 
 DAYS = pd.date_range("2026-09-24", "2026-09-27")
 DIRECTIONS = ("DOWN", "UP")

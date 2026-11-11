@@ -1,17 +1,16 @@
 """Frozen expectations for #146, used by the #134 read-only audit."""
 import json
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 from build_chuseok_demand import DAYS, DIRECTIONS, prepare_vds, vds_profiles
+
 from evdt.io import traffic
 from evdt.io.route import GyeongbuRoute
 from evdt.paths import default_db_path
 from evdt.runner import load_config
-
 
 ENTRIES = {
     "DOWN": [457891, 383452, 322396, 306791],
