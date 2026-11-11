@@ -327,32 +327,22 @@ def test_every_scenario_with_an_escape_has_renege_on() -> None:
     assert not missing, f"포기가 꺼진 config: {missing}"
 
 
-def test_the_default_patience_family_is_point() -> None:
-    """기본은 **point** 다 — 가르기 전에는 "아직", 가른 뒤에는 **보수적이라서**.
+def test_a_distribution_needs_the_patience_split() -> None:
+    """인내를 **분포**로 쓰는 config 는 우회 비용과 반드시 갈라야 한다.
 
-    처음 이유(인내 추출이 그대로 이탈 비용이 되어 조급한 차에게 공짜 탈출구가
-    열린다)는 #147 후속의 분리로 해소됐다. 이제는 다른 이유로 point 다.
+    가르지 않으면 `patience_median_min == 0` 이라 중앙값이 `escape_cost_min` 으로
+    떨어지고, 그러면 **인내 추출이 그대로 이탈 비용이 된다** — "인내 9분인 차 =
+    우회도 9분인 차" 가 되어 조급한 차에게 **공짜 탈출구**가 열린다.
+    weibull:0.7 에서 S0 가 수요의 18.9% 를 잃었고, 총비용이 51% 떨어진 것은
+    엔진이 좋아진 게 아니라 **문제가 작아진 것**이었다 (#147 후속).
 
-    추석 9/25 상행 EV 20% (혼잡 있는 무대), 시드 3개 — **모든 분포가 엔진을
-    더 좋아 보이게 한다:**
+    분포 자체는 이제 허용된다 — 분리가 끝났다 (a169bd4). 다만 **넓은 분포는
+    사다리를 부풀린다** (추석 혼잡 무대, 시드 3개, S0→S2):
 
-        point        S0→S2 +11.86%     —
-        m=120 h=0.5        +16.79%   +4.92%p
-        m=120 h=0.75       +20.72%   +8.86%p
-        m=60  h=0.75       +21.11%   +9.25%p
+        point +11.86% · h=0.5 +16.79% · h=0.75 +20.72%
 
-    어디서 오나 (S0, point → m=60 h=0.75): 체류 5,610.9 → 3,150.0h,
-    **충전 마친 차 9,609 → 9,234 (−375대)**. 차가 더 포기해서 체류가 빠진 것이고,
-    엔진이 좋아진 게 아니라 **문제가 26% 작아졌다.**
-
-    분리는 **발길질** 문을 닫았다 (가족을 바꿔도 이탈 비용 추출이 안 움직인다 —
-    `test_patience_split.py`). **포기** 문은 열려 있고, 그건 고장이 아니라 포기
-    자체의 성질이다. 그래서 분포는 **민감도 축**이고 기본은 가장 보수적인 값이다.
-
-    분포를 쓸 때의 규율 (`scripts/sweep_patience.py`):
-        · 균등은 중앙값 보존 `U(m(1−h), m(1+h))`, **0 < h < 1**
-          (h=1 은 하한이 0 이라 발길질과 겹친다)
-        · 분포 간 총비용을 서로 비교하지 않는다 — 충전 마친 차 수가 다르다
+    그 이득은 차가 더 포기해서 온다 (충전 마친 차 −375대). 그래서 좁게 쓰고,
+    넓은 h 는 `scripts/sweep_patience.py` 의 **민감도 축**으로만 본다.
     """
     import yaml
 
@@ -361,12 +351,45 @@ def test_the_default_patience_family_is_point() -> None:
     bad = {}
     for f in sorted(CONFIG_DIR.glob("scenario_*.yaml")):
         d = yaml.safe_load(f.read_text(encoding="utf-8")).get("demand", {})
-        kind = d.get("patience_kind", "point")
-        if kind != "point" or float(d.get("escape_cost_sigma", 0.0)):
-            bad[f.name] = (kind, d.get("escape_cost_sigma", 0.0))
+        if str(d.get("patience_kind", "point")) == "point":
+            continue
+        if not float(d.get("patience_median_min", 0.0)):
+            bad[f.name] = d.get("patience_kind")
 
     assert not bad, (
-        f"인내가 분포인 config: {bad} — 이탈 비용과 갈라지기 전까지는 point 다")
+        f"분포를 쓰면서 인내를 안 가른 config: {bad} — "
+        "`patience_median_min` 을 줄 것. 안 주면 인내가 곧 이탈 비용이 되어 "
+        "조급한 차에게 공짜 탈출구가 열린다 (#147 후속)")
+
+
+def test_no_config_allows_zero_patience() -> None:
+    """★ 균등분포의 하한이 0 이면 안 된다 — **발길질과 겹친다**.
+
+    `U(m(1−h), m(1+h))` 에서 h=1 이면 하한이 0 이고 "인내 0분" 차가 생긴다.
+    그 행동은 우리 모형에서 이미 **발길질**이 맡고 있다 (줄 비용 > 우회 비용이면
+    줄을 안 선다). 두 번 세면 이탈이 부풀고, 그 부풀림이 바닥(S0)에 가장 많이
+    얹혀 사다리를 키운다.
+
+    일본 설문(GoGoEV n=470)의 "전혀 안 기다림 19%" 도 기사 본문이 이유를 적어
+    뒀다 — *"먼저 차가 서 있으면 바로 **근처 충전기를 찾아 이동**한다."* 즉 인내가
+    0인 유형이 아니라 **대안이 싸서 바로 나가는 합리적 선택**이다.
+    """
+    import yaml
+
+    from evdt.paths import CONFIG_DIR
+
+    bad = {}
+    for f in sorted(CONFIG_DIR.glob("scenario_*.yaml")):
+        d = yaml.safe_load(f.read_text(encoding="utf-8")).get("demand", {})
+        if str(d.get("patience_kind", "point")) != "uniform":
+            continue
+        h = float(d.get("patience_shape", 0.0))
+        if not 0.0 < h < 1.0:
+            bad[f.name] = h
+
+    assert not bad, (
+        f"균등분포의 반폭이 (0, 1) 밖인 config: {bad} — "
+        "h >= 1 이면 하한이 0 이라 '인내 0분' 차가 생기고 발길질과 겹친다")
 
 
 # ---------------------------------------------------------------------------
