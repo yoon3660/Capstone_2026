@@ -1,0 +1,82 @@
+# #146: 기존 설의 노선·차량·충전 행태 설정을 유지하고 추석 수요·기온만 교체한다.
+# 기본 EV 5%, adoption 10%는 비교 시나리오 가정이며 실제 EV 통행 비율이 아니다.
+# 공급: 9/18 등록 스냅샷 대용치 282기(하행153/상행129), 설 기본 DB와 동일.
+# CTM 성능 미달로 travel_time=fixed 유지. 검증 결과·재현 절차는 issue146_chuseok_demand.md.
+scenario_id: chuseok_2026_up_adoption
+label: "2026 추석 2026-09-26 경부선 UP EV 10% 가정"
+corridor_id: gyeongbu_up
+direction: UP
+day_type: CHUSEOK_PEAK
+
+time:
+  start_min: 0
+  end_min: 1440
+  dt_min: 5
+
+demand:
+  period: chuseok2026
+  volume_profile: data/processed/issue146_chuseok/2026-09-26/UP/volume.csv
+  demand_multiplier: 1.0
+  ev_share: 0.05            # 통과 차량 중 EV 비중
+  ev_count_method: fixed
+  beta_binomial_concentration: 10000.0
+  poisson_lognormal_sigma: 0.05
+  charge_prob: 0.95
+  layers:
+    - {kind: ev_adoption, ev_share: 0.1}
+    - {kind: opportunity_charge, prob: 0.20, soc_margin: 0.5}
+  safety_buffer_km: 30.0
+  low_soc_threshold: 0.2
+  through_profile: data/processed/issue146_chuseok/2026-09-26/UP/through.csv
+  entry_exit_profile: data/processed/issue146_chuseok/2026-09-26/UP/entry_exit.csv
+  od_profile: null  # #146 일별·시간별 TCS 혼합에서 VDS 통과량 오차 증가
+  cruise_speed_kmh: 80.0
+  escape_cost_min: 120.0
+  escape_cost_sigma: 0.0
+  travel_time: fixed  # #146 CTM 정체 재현 기준 미달. 설 기본 통행시간 모드 유지.
+
+vehicles:
+  seed: 7
+  departure_soc: holiday
+  soc_profiles:
+    holiday:
+      dist: lognormal
+      mu: -0.3567           # ⚠ ln(0.70) 은 절삭 전 중앙값. 실제 중앙값은 65.8%
+      sigma: 0.35           # 모른다는 것을 넓이로 반영했다
+      lo: 0.33              # ⚠ 행태 가드레일 (가정). docs/departure_soc.md
+      hi: 1.00
+    low:                    # ⚠ 대조군. Rupnik 의 휴게소 도착 SoC (#55 이전 기본값)
+      a: 2.0
+      b: 5.0
+      lo: 0.10
+      hi: 0.95
+    high:                   # 대조군
+      a: 5.0
+      b: 2.0
+      lo: 0.30
+      hi: 0.95
+  target_soc_cap: 0.8
+  habit_soc: 0.0
+  habit_soc_sigma: 0.0
+
+environment:
+  # https://www.weather.go.kr/w/weather/land/aws-obs.do
+  temp_c: 20.41  # 기상청 날씨누리 2026-09-26 서울·대전·대구·부산 00/06/12/18시 실측 16개 평균
+
+policy:
+  stage: UE
+  participation: 1.0
+  params: {}
+  ue:
+    max_iter: 200
+    gap_tol: 0.008
+    min_gain_min: 1.0
+    max_stops: 3
+
+queue:
+  discipline: FIFO
+  charger_select: MAX_POWER_IDLE
+
+output:
+  write_snapshots: true
+  snapshot_every_min: 5

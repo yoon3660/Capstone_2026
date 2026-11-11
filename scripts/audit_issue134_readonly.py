@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from pathlib import Path
 
 import pandas as pd
 import yaml
@@ -360,7 +361,15 @@ def main() -> int:
     )
     ap.add_argument("--verbose", action="store_true",
                     help="일치한 검사까지 모두 출력한다")
+    ap.add_argument("--chuseok", action="store_true", help="추석 #146 기대값 검사")
+    ap.add_argument("--report-dir", type=Path, help="추석 키·좌표 대조표 저장 경로")
     args = ap.parse_args()
+    if args.chuseok:
+        from _bootstrap import ROOT
+        from audit_issue146_readonly import audit_chuseok
+        audit = Audit()
+        audit_chuseok(audit, ROOT, args.report_dir)
+        return audit.report(verbose=args.verbose)
 
     print("#134 LOCAL_NEW 재계산 — 읽기 전용")
     print(f"  DB: {default_db_path()}")
