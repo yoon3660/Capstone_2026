@@ -250,27 +250,34 @@ def test_the_escape_schema_carries_the_wasted_wait() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_logged_escape_cost_is_the_cars_own() -> None:
+def test_the_logged_escape_cost_is_the_cars_own(tmp_path) -> None:
     """결정과 기록이 **같은 값**을 써야 한다.
 
     `corridor_sim` 은 발길질 판단을 차마다의 `escape_cost_min` 으로 하는데
     (`:411`), 기록만 시나리오 중앙값을 적고 있었다. `escape_cost_sigma=0` 이던
     동안은 둘이 같아서 드러나지 않았다. 인내를 분포로 바꾸자 총비용이 틀렸다 —
     설 S1 에서 순진한 `n x 120분` 은 888h, 실제는 359h 다.
+
+    ★ **`runs_dir=tmp_path` 가 필수다.** `make_run_id` 는 (시나리오, 스테이지,
+      시드, 참여율) 뿐이라 여기서 인내·포기를 바꿔도 run_id 가 같다. 빼먹으면
+      이 테스트가 **진짜 `__S0__p100__s0001` 을 덮어쓴다** — 포기가 꺼지고
+      인내가 지수분포인 물리로. 2026-11-11 에 실제로 그랬고, 같은 run 을 읽던
+      분석이 조용히 다른 숫자를 냈다 (체류 5,641.8h → 3,773.8h).
+      `test_no_test_writes_into_the_real_runs_dir` 가 이제 그걸 막는다.
     """
     import dataclasses
 
     import pandas as pd
 
-    from evdt.paths import RUNS_DIR
     from evdt.runner import load_config, run_once
 
     cfg = load_config("config/scenario_seollal_up_adoption.yaml", stage="S0")
     cfg = dataclasses.replace(cfg, demand=dataclasses.replace(
         cfg.demand, patience_kind="exponential", renege=False))
 
-    rid = run_once(cfg, seed=1, overwrite=True, log=lambda *_: None)
-    rows = pd.read_parquet(RUNS_DIR / rid / "escape_event.parquet")
+    rid = run_once(cfg, seed=1, overwrite=True, log=lambda *_: None,
+                   runs_dir=tmp_path)
+    rows = pd.read_parquet(tmp_path / rid / "escape_event.parquet")
     balked = rows[rows["reason"] == "balked"]["escape_cost_min"]
 
     assert len(balked) > 5, "발길질이 거의 없어 검사가 무의미하다"
@@ -413,3 +420,46 @@ def test_no_script_counts_the_total_by_hand() -> None:
 
     assert not offenders, (
         f"총비용을 손으로 세는 곳: {offenders} — runner.social_cost_h 를 쓸 것")
+
+
+def test_no_test_writes_into_the_real_runs_dir() -> None:
+    """★ 테스트는 **실제 `runs/` 에 쓰지 않는다.**
+
+    `run_once` 는 `runs_dir` 을 안 주면 진짜 `RUNS_DIR` 에 쓴다. 그리고
+    `make_run_id` 는 (시나리오, 스테이지, 시드, 참여율) 뿐이라, 물리 손잡이를
+    바꿔 돌려도 **run_id 가 같다** — 즉 조용히 덮어쓴다.
+
+    2026-11-11 에 `test_the_logged_escape_cost_is_the_cars_own` 이
+    `seollal_2026_up_adoption__S0__p100__s0001` 을 포기 꺼진 지수분포 물리로
+    덮어썼다. 사다리 CSV 는 체류 5,641.8h 인데 같은 run 폴더는 3,773.8h 가 돼서,
+    그 폴더를 읽던 분석이 **다른 세계의 숫자**를 냈다. `stale_reason` 은 run 을
+    *다시 쓸 때* 막는 장치라 이미 덮인 파일은 못 되돌린다.
+
+    `tests/test_s3.py` 가 스윕에 `db_path` 를 요구하는 것과 같은 규칙이다.
+    """
+    import re
+
+    from evdt.paths import PROJECT_ROOT
+
+    offenders = []
+    for f in sorted((PROJECT_ROOT / "tests").glob("test_*.py")):
+        src = f.read_text(encoding="utf-8")
+        for m in re.finditer(r"\brun_once\s*\(", src):
+            # 호출 끝까지 괄호를 세어 인자 전체를 본다
+            i, depth = m.end() - 1, 0
+            while i < len(src):
+                depth += (src[i] == "(") - (src[i] == ")")
+                if depth == 0:
+                    break
+                i += 1
+            call = src[m.end():i]
+            if "runs_dir" in call:
+                continue
+            line = src[:m.start()].count("\n") + 1
+            if "monkeypatch" in call or "setattr" in call:
+                continue
+            offenders.append(f"{f.name}:{line}")
+
+    assert not offenders, (
+        f"`runs_dir` 없이 run_once 를 부르는 테스트: {offenders} — "
+        "`runs_dir=tmp_path` 를 줄 것. 안 주면 진짜 run 을 덮어쓴다")
