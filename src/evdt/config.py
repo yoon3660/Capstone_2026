@@ -477,6 +477,12 @@ class ScenarioConfig:
         그림만 보고도 재현인지 가정인지 알 수 있어야 한다.
         """
 
+        # ★ 기간별 특수분기를 두지 않는다. #159 는 `period == "chuseok2026"` 일 때
+        #   "추가 수요 레이어 없음" 으로 덮었는데, 그건 증상이었다 — 뿌리는
+        #   `MEASURED_ONLY` 에 "2026 설 재현" 이 박혀 있던 것이고, 그래서 레이어
+        #   없는 **아무 기간**이나 "설 재현" 으로 찍혔다 (base202603·base202609·
+        #   seollal2027 도 똑같이 틀렸다). 기간은 `describe_period` 가 앞에 이미
+        #   붙이므로 부제에서 기간 이름을 뺐다 (`demand_layers.py:39`).
         return f"{describe_period(self.demand.period)} · {layer_label(self.demand.layers)}"
 
     def variant(self, tag: str, overrides: dict[str, Any]) -> ScenarioConfig:

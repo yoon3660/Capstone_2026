@@ -54,6 +54,12 @@ PASS_FALSE_ALARM = 0.30
 JAM_KMH = 60.0
 
 
+def record_end_hours(t_min):
+    """Assign CTM window-end timestamps to the hour covered by each window."""
+    return (np.floor(np.nextafter(np.asarray(t_min, dtype=float), -np.inf) / 60)
+            .astype(int) % 24)
+
+
 def cell_to_conzone(corridor_id: str, direction: str) -> pd.DataFrame:
     """셀 → 콘존 대응과 가중치. 겹치는 **길이**로 가중한다."""
 
@@ -110,7 +116,7 @@ def main() -> int:
     period = str(yaml.safe_load(row[0])["demand"]["period"])
 
     m = cell_to_conzone(corridor, direction)
-    cell = cell.assign(hour=(cell["t_min"] // 60).astype(int) % 24)
+    cell = cell.assign(hour=record_end_hours(cell["t_min"]))
     cell = cell.merge(m, left_on="entity_id", right_on="cell_id")
     # 콘존 속도 = 겹치는 길이로 가중한 조화평균이 아니라 산술평균을 쓴다.
     # VDS 가 보고하는 값도 구간 대표 속도라 같은 성격이다
