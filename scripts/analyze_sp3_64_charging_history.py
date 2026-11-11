@@ -1,36 +1,26 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import csv
 import re
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from zipfile import ZipFile
-import xml.etree.ElementTree as ET
 
 from evdt.io.charger_ingest import resolve_charger_key
-
 
 # ============================================================
 # 경로
 # ============================================================
 
-XLSX_PATH = Path(
-    "data/raw/sp3_64/"
-    "20260306_2026년2월_환경부_충전기_충전이력_상세내역.xlsx"
-)
+XLSX_PATH = Path("data/raw/sp3_64/20260306_2026년2월_환경부_충전기_충전이력_상세내역.xlsx")
 
-SUPPLY_PATH = Path(
-    "data/processed/sp3_64_current_charger_supply.csv"
-)
+SUPPLY_PATH = Path("data/processed/sp3_64_current_charger_supply.csv")
 
-OUT_STATION = Path(
-    "data/processed/sp3_64_charging_validation_by_station.csv"
-)
+OUT_STATION = Path("data/processed/sp3_64_charging_validation_by_station.csv")
 
-OUT_HOURLY = Path(
-    "data/processed/sp3_64_charging_hourly.csv"
-)
+OUT_HOURLY = Path("data/processed/sp3_64_charging_hourly.csv")
 
 
 FEB_START = datetime(2026, 2, 1)
@@ -44,20 +34,11 @@ SEOLLAL_END = datetime(2026, 2, 23)  # 2/18 23:59:59까지
 # XLSX XML 관련
 # ============================================================
 
-MAIN_NS = (
-    "http://schemas.openxmlformats.org/"
-    "spreadsheetml/2006/main"
-)
+MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
-REL_NS = (
-    "http://schemas.openxmlformats.org/"
-    "officeDocument/2006/relationships"
-)
+REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
-PKG_REL_NS = (
-    "http://schemas.openxmlformats.org/"
-    "package/2006/relationships"
-)
+PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
 def col_index(cell_ref: str) -> int:
@@ -84,12 +65,9 @@ def load_shared_strings(z: ZipFile) -> list[str]:
     strings = []
 
     with z.open(path) as f:
-        for event, elem in ET.iterparse(f, events=("end",)):
+        for _event, elem in ET.iterparse(f, events=("end",)):
             if elem.tag == f"{{{MAIN_NS}}}si":
-                text = "".join(
-                    node.text or ""
-                    for node in elem.iter(f"{{{MAIN_NS}}}t")
-                )
+                text = "".join(node.text or "" for node in elem.iter(f"{{{MAIN_NS}}}t"))
                 strings.append(text)
                 elem.clear()
 
@@ -108,9 +86,7 @@ def find_first_sheet_path(z: ZipFile) -> str:
 
     rid = sheet.attrib[f"{{{REL_NS}}}id"]
 
-    rels = ET.fromstring(
-        z.read("xl/_rels/workbook.xml.rels")
-    )
+    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
 
     target = None
 
@@ -137,10 +113,7 @@ def cell_value(cell, shared_strings: list[str]) -> str:
     cell_type = cell.attrib.get("t")
 
     if cell_type == "inlineStr":
-        return "".join(
-            node.text or ""
-            for node in cell.iter(f"{{{MAIN_NS}}}t")
-        )
+        return "".join(node.text or "" for node in cell.iter(f"{{{MAIN_NS}}}t"))
 
     value_node = cell.find(f"{{{MAIN_NS}}}v")
 
@@ -164,7 +137,7 @@ def iter_xlsx_rows(path: Path):
         sheet_path = find_first_sheet_path(z)
 
         with z.open(sheet_path) as f:
-            for event, elem in ET.iterparse(
+            for _event, elem in ET.iterparse(
                 f,
                 events=("end",),
             ):
@@ -173,9 +146,7 @@ def iter_xlsx_rows(path: Path):
 
                 row_dict = {}
 
-                for cell in elem.findall(
-                    f"{{{MAIN_NS}}}c"
-                ):
+                for cell in elem.findall(f"{{{MAIN_NS}}}c"):
                     ref = cell.attrib.get("r", "A1")
                     idx = col_index(ref)
 
@@ -187,10 +158,7 @@ def iter_xlsx_rows(path: Path):
                 if row_dict:
                     max_idx = max(row_dict)
 
-                    row = [
-                        row_dict.get(i, "")
-                        for i in range(max_idx + 1)
-                    ]
+                    row = [row_dict.get(i, "") for i in range(max_idx + 1)]
 
                     yield row
 
@@ -200,6 +168,7 @@ def iter_xlsx_rows(path: Path):
 # ============================================================
 # 프로젝트 station
 # ============================================================
+
 
 def load_supply():
     stations = []
@@ -214,17 +183,11 @@ def load_supply():
         for row in reader:
             row["offset_km"] = float(row["offset_km"])
 
-            row["current_total_chargers"] = int(
-                row["current_total_chargers"]
-            )
+            row["current_total_chargers"] = int(row["current_total_chargers"])
 
-            row["current_moe_chargers"] = int(
-                row["current_moe_chargers"]
-            )
+            row["current_moe_chargers"] = int(row["current_moe_chargers"])
 
-            row["current_other_chargers"] = int(
-                row["current_other_chargers"]
-            )
+            row["current_other_chargers"] = int(row["current_other_chargers"])
 
             stations.append(row)
 
@@ -275,6 +238,7 @@ def hour_range(start: datetime, end: datetime):
 # 메인
 # ============================================================
 
+
 def main():
     if not XLSX_PATH.exists():
         raise FileNotFoundError(XLSX_PATH)
@@ -284,20 +248,9 @@ def main():
 
     stations = load_supply()
 
-    known_keys = {
-        (s["station_name"], s["direction"])
-        for s in stations
-    }
+    known_keys = {(s["station_name"], s["direction"]) for s in stations}
 
-    station_order = {
-        (s["station_name"], s["direction"]): i
-        for i, s in enumerate(stations)
-    }
 
-    supply_by_key = {
-        (s["station_name"], s["direction"]): s
-        for s in stations
-    }
 
     # station별 실제 세션
     sessions = defaultdict(list)
@@ -316,13 +269,10 @@ def main():
 
     try:
         header = next(rows)
-    except StopIteration:
-        raise RuntimeError("XLSX가 비어 있습니다.")
+    except StopIteration as exc:
+        raise RuntimeError("XLSX가 비어 있습니다.") from exc
 
-    header_map = {
-        str(name).strip(): idx
-        for idx, name in enumerate(header)
-    }
+    header_map = {str(name).strip(): idx for idx, name in enumerate(header)}
 
     required = [
         "충전소명",
@@ -334,16 +284,10 @@ def main():
         "충전량",
     ]
 
-    missing = [
-        col
-        for col in required
-        if col not in header_map
-    ]
+    missing = [col for col in required if col not in header_map]
 
     if missing:
-        raise RuntimeError(
-            f"필수 컬럼이 없습니다: {missing}"
-        )
+        raise RuntimeError(f"필수 컬럼이 없습니다: {missing}")
 
     def get(row, name):
         idx = header_map[name]
@@ -374,13 +318,9 @@ def main():
                 unmatched_names[station_raw] += 1
             continue
 
-        start = parse_dt(
-            get(row, "충전시작일시")
-        )
+        start = parse_dt(get(row, "충전시작일시"))
 
-        end = parse_dt(
-            get(row, "충전종료일시")
-        )
+        end = parse_dt(get(row, "충전종료일시"))
 
         if start is None or end is None:
             bad_datetime_rows += 1
@@ -401,9 +341,7 @@ def main():
         charger_id = get(row, "충전기ID")
         charger_type = get(row, "충전기타입")
         charger_power = get(row, "충전기용량(KW)")
-        energy = parse_energy(
-            get(row, "충전량")
-        )
+        energy = parse_energy(get(row, "충전량"))
 
         display_ids[key].add(charger_id)
 
@@ -427,10 +365,7 @@ def main():
         )
 
         if total_xlsx_rows % 100000 == 0:
-            print(
-                f"  {total_xlsx_rows:,}행 읽음 / "
-                f"경부선 매칭 {matched_rows:,}행"
-            )
+            print(f"  {total_xlsx_rows:,}행 읽음 / 경부선 매칭 {matched_rows:,}행")
 
     # ========================================================
     # 시간별 집계
@@ -465,14 +400,9 @@ def main():
 
                 bucket["session_starts"] += 1
 
-                bucket["energy_kwh_started"] += (
-                    s["energy"]
-                )
+                bucket["energy_kwh_started"] += s["energy"]
 
-                bucket["charge_minutes_started"] += (
-                    (end - start).total_seconds()
-                    / 60.0
-                )
+                bucket["charge_minutes_started"] += (end - start).total_seconds() / 60.0
 
             # 해당 충전 세션이 각 시간대에 차지한 분
             for hour_start in hour_range(
@@ -493,15 +423,10 @@ def main():
 
                 minutes = max(
                     0.0,
-                    (
-                        overlap_end - overlap_start
-                    ).total_seconds()
-                    / 60.0,
+                    (overlap_end - overlap_start).total_seconds() / 60.0,
                 )
 
-                hourly[
-                    (key, hour_start)
-                ]["occupied_minutes"] += minutes
+                hourly[(key, hour_start)]["occupied_minutes"] += minutes
 
     # ========================================================
     # 최대 동시 충전 세션 수
@@ -525,9 +450,7 @@ def main():
             events.append((end, -1))
 
         # 같은 시각에 종료와 시작이 있으면 종료부터 처리
-        events.sort(
-            key=lambda x: (x[0], x[1])
-        )
+        events.sort(key=lambda x: (x[0], x[1]))
 
         current = 0
         prev_time = FEB_START
@@ -545,30 +468,19 @@ def main():
                     prev_time,
                     event_time,
                 ):
-                    hourly[
-                        (key, hour_start)
-                    ]["peak_concurrent_sessions"] = max(
-                        hourly[
-                            (key, hour_start)
-                        ]["peak_concurrent_sessions"],
+                    hourly[(key, hour_start)]["peak_concurrent_sessions"] = max(
+                        hourly[(key, hour_start)]["peak_concurrent_sessions"],
                         current,
                     )
 
             current += delta
 
             # 시작 이벤트 이후의 순간값도 반영
-            if (
-                delta > 0
-                and FEB_START <= event_time < MAR_START
-            ):
+            if delta > 0 and FEB_START <= event_time < MAR_START:
                 h = floor_hour(event_time)
 
-                hourly[
-                    (key, h)
-                ]["peak_concurrent_sessions"] = max(
-                    hourly[
-                        (key, h)
-                    ]["peak_concurrent_sessions"],
+                hourly[(key, h)]["peak_concurrent_sessions"] = max(
+                    hourly[(key, h)]["peak_concurrent_sessions"],
                     current,
                 )
 
@@ -636,35 +548,24 @@ def main():
                     b = hourly[(key, cur)]
 
                     values = {
-                        "session_starts":
-                            b["session_starts"],
-
-                        "energy_kwh_started":
-                            round(
-                                b["energy_kwh_started"],
-                                3,
-                            ),
-
-                        "charge_minutes_started":
-                            round(
-                                b["charge_minutes_started"],
-                                3,
-                            ),
-
-                        "occupied_minutes_in_hour":
-                            round(
-                                b["occupied_minutes"],
-                                3,
-                            ),
-
-                        "avg_concurrent_sessions":
-                            round(
-                                b["occupied_minutes"] / 60.0,
-                                4,
-                            ),
-
-                        "peak_concurrent_sessions":
-                            b["peak_concurrent_sessions"],
+                        "session_starts": b["session_starts"],
+                        "energy_kwh_started": round(
+                            b["energy_kwh_started"],
+                            3,
+                        ),
+                        "charge_minutes_started": round(
+                            b["charge_minutes_started"],
+                            3,
+                        ),
+                        "occupied_minutes_in_hour": round(
+                            b["occupied_minutes"],
+                            3,
+                        ),
+                        "avg_concurrent_sessions": round(
+                            b["occupied_minutes"] / 60.0,
+                            4,
+                        ),
+                        "peak_concurrent_sessions": b["peak_concurrent_sessions"],
                     }
 
                 else:
@@ -679,33 +580,13 @@ def main():
 
                 writer.writerow(
                     {
-                        "direction":
-                            s["direction"],
-
-                        "station_name":
-                            s["station_name"],
-
-                        "date":
-                            cur.strftime("%Y-%m-%d"),
-
-                        "hour":
-                            cur.hour,
-
-                        "hour_start":
-                            cur.strftime(
-                                "%Y-%m-%d %H:00:00"
-                            ),
-
-                        "is_seollal":
-                            int(
-                                SEOLLAL_START
-                                <= cur
-                                < SEOLLAL_END
-                            ),
-
-                        "xlsx_observed_station":
-                            int(observed),
-
+                        "direction": s["direction"],
+                        "station_name": s["station_name"],
+                        "date": cur.strftime("%Y-%m-%d"),
+                        "hour": cur.hour,
+                        "hour_start": cur.strftime("%Y-%m-%d %H:00:00"),
+                        "is_seollal": int(SEOLLAL_START <= cur < SEOLLAL_END),
+                        "xlsx_observed_station": int(observed),
                         **values,
                     }
                 )
@@ -728,13 +609,7 @@ def main():
 
         feb_sessions = len(rows_)
 
-        seollal_rows = [
-            x
-            for x in rows_
-            if SEOLLAL_START
-            <= x["start"]
-            < SEOLLAL_END
-        ]
+        seollal_rows = [x for x in rows_ if SEOLLAL_START <= x["start"] < SEOLLAL_END]
 
         def energy_sum(data):
             return sum(x["energy"] for x in data)
@@ -743,19 +618,9 @@ def main():
             if not data:
                 return 0.0
 
-            return sum(
-                (
-                    x["end"] - x["start"]
-                ).total_seconds()
-                / 60.0
-                for x in data
-            ) / len(data)
+            return sum((x["end"] - x["start"]).total_seconds() / 60.0 for x in data) / len(data)
 
-        station_hourly = [
-            (h, v)
-            for (k, h), v in hourly.items()
-            if k == key
-        ]
+        station_hourly = [(h, v) for (k, h), v in hourly.items() if k == key]
 
         feb_peak_start_count = 0
         feb_peak_start_hour = ""
@@ -770,213 +635,88 @@ def main():
         seollal_peak_concurrent_hour = ""
 
         for h, b in station_hourly:
-            if (
-                b["session_starts"]
-                > feb_peak_start_count
-            ):
-                feb_peak_start_count = (
-                    b["session_starts"]
-                )
+            if b["session_starts"] > feb_peak_start_count:
+                feb_peak_start_count = b["session_starts"]
 
-                feb_peak_start_hour = (
-                    h.strftime(
-                        "%Y-%m-%d %H:00"
-                    )
-                )
+                feb_peak_start_hour = h.strftime("%Y-%m-%d %H:00")
 
-            if (
-                b["peak_concurrent_sessions"]
-                > feb_peak_concurrent
-            ):
-                feb_peak_concurrent = (
-                    b["peak_concurrent_sessions"]
-                )
+            if b["peak_concurrent_sessions"] > feb_peak_concurrent:
+                feb_peak_concurrent = b["peak_concurrent_sessions"]
 
-                feb_peak_concurrent_hour = (
-                    h.strftime(
-                        "%Y-%m-%d %H:00"
-                    )
-                )
+                feb_peak_concurrent_hour = h.strftime("%Y-%m-%d %H:00")
 
             if SEOLLAL_START <= h < SEOLLAL_END:
-                if (
-                    b["session_starts"]
-                    > seollal_peak_start_count
-                ):
-                    seollal_peak_start_count = (
-                        b["session_starts"]
-                    )
+                if b["session_starts"] > seollal_peak_start_count:
+                    seollal_peak_start_count = b["session_starts"]
 
-                    seollal_peak_start_hour = (
-                        h.strftime(
-                            "%Y-%m-%d %H:00"
-                        )
-                    )
+                    seollal_peak_start_hour = h.strftime("%Y-%m-%d %H:00")
 
-                if (
-                    b["peak_concurrent_sessions"]
-                    > seollal_peak_concurrent
-                ):
-                    seollal_peak_concurrent = (
-                        b[
-                            "peak_concurrent_sessions"
-                        ]
-                    )
+                if b["peak_concurrent_sessions"] > seollal_peak_concurrent:
+                    seollal_peak_concurrent = b["peak_concurrent_sessions"]
 
-                    seollal_peak_concurrent_hour = (
-                        h.strftime(
-                            "%Y-%m-%d %H:00"
-                        )
-                    )
+                    seollal_peak_concurrent_hour = h.strftime("%Y-%m-%d %H:00")
 
         observed = key in observed_keys
 
         station_rows.append(
             {
-                "direction":
-                    s["direction"],
-
-                "station_name":
-                    s["station_name"],
-
-                "offset_km":
-                    s["offset_km"],
-
-                "current_total_chargers":
-                    s["current_total_chargers"],
-
-                "current_moe_chargers":
-                    s["current_moe_chargers"],
-
-                "current_other_chargers":
-                    s["current_other_chargers"],
-
-                "xlsx_observed_station":
-                    int(observed),
-
-                "feb_sessions":
-                    feb_sessions if observed else "",
-
-                "seollal_sessions":
-                    (
-                        len(seollal_rows)
-                        if observed
-                        else ""
-                    ),
-
-                "feb_energy_kwh":
-                    (
-                        round(
-                            energy_sum(rows_),
-                            3,
-                        )
-                        if observed
-                        else ""
-                    ),
-
-                "seollal_energy_kwh":
-                    (
-                        round(
-                            energy_sum(seollal_rows),
-                            3,
-                        )
-                        if observed
-                        else ""
-                    ),
-
-                "feb_avg_charge_min":
-                    (
-                        round(
-                            avg_minutes(rows_),
-                            3,
-                        )
-                        if observed
-                        else ""
-                    ),
-
-                "seollal_avg_charge_min":
-                    (
-                        round(
-                            avg_minutes(seollal_rows),
-                            3,
-                        )
-                        if observed
-                        else ""
-                    ),
-
+                "direction": s["direction"],
+                "station_name": s["station_name"],
+                "offset_km": s["offset_km"],
+                "current_total_chargers": s["current_total_chargers"],
+                "current_moe_chargers": s["current_moe_chargers"],
+                "current_other_chargers": s["current_other_chargers"],
+                "xlsx_observed_station": int(observed),
+                "feb_sessions": feb_sessions if observed else "",
+                "seollal_sessions": (len(seollal_rows) if observed else ""),
+                "feb_energy_kwh": (
+                    round(
+                        energy_sum(rows_),
+                        3,
+                    )
+                    if observed
+                    else ""
+                ),
+                "seollal_energy_kwh": (
+                    round(
+                        energy_sum(seollal_rows),
+                        3,
+                    )
+                    if observed
+                    else ""
+                ),
+                "feb_avg_charge_min": (
+                    round(
+                        avg_minutes(rows_),
+                        3,
+                    )
+                    if observed
+                    else ""
+                ),
+                "seollal_avg_charge_min": (
+                    round(
+                        avg_minutes(seollal_rows),
+                        3,
+                    )
+                    if observed
+                    else ""
+                ),
                 # 주의: 물리 충전기 대수가 아님
-                "feb_unique_display_charger_ids":
-                    (
-                        len(display_ids[key])
-                        if observed
-                        else ""
-                    ),
-
+                "feb_unique_display_charger_ids": (len(display_ids[key]) if observed else ""),
                 # 주의: 물리 충전기 대수가 아님
-                "feb_charger_signatures":
-                    (
-                        len(signatures[key])
-                        if observed
-                        else ""
-                    ),
-
-                "feb_peak_start_sessions_per_hour":
-                    (
-                        feb_peak_start_count
-                        if observed
-                        else ""
-                    ),
-
-                "feb_peak_start_hour":
-                    (
-                        feb_peak_start_hour
-                        if observed
-                        else ""
-                    ),
-
-                "seollal_peak_start_sessions_per_hour":
-                    (
-                        seollal_peak_start_count
-                        if observed
-                        else ""
-                    ),
-
-                "seollal_peak_start_hour":
-                    (
-                        seollal_peak_start_hour
-                        if observed
-                        else ""
-                    ),
-
+                "feb_charger_signatures": (len(signatures[key]) if observed else ""),
+                "feb_peak_start_sessions_per_hour": (feb_peak_start_count if observed else ""),
+                "feb_peak_start_hour": (feb_peak_start_hour if observed else ""),
+                "seollal_peak_start_sessions_per_hour": (
+                    seollal_peak_start_count if observed else ""
+                ),
+                "seollal_peak_start_hour": (seollal_peak_start_hour if observed else ""),
                 # 동시에 진행 중인 충전 세션 수.
                 # 물리 충전기 대수로 해석하지 말 것.
-                "feb_peak_concurrent_sessions":
-                    (
-                        feb_peak_concurrent
-                        if observed
-                        else ""
-                    ),
-
-                "feb_peak_concurrent_hour":
-                    (
-                        feb_peak_concurrent_hour
-                        if observed
-                        else ""
-                    ),
-
-                "seollal_peak_concurrent_sessions":
-                    (
-                        seollal_peak_concurrent
-                        if observed
-                        else ""
-                    ),
-
-                "seollal_peak_concurrent_hour":
-                    (
-                        seollal_peak_concurrent_hour
-                        if observed
-                        else ""
-                    ),
+                "feb_peak_concurrent_sessions": (feb_peak_concurrent if observed else ""),
+                "feb_peak_concurrent_hour": (feb_peak_concurrent_hour if observed else ""),
+                "seollal_peak_concurrent_sessions": (seollal_peak_concurrent if observed else ""),
+                "seollal_peak_concurrent_hour": (seollal_peak_concurrent_hour if observed else ""),
             }
         )
 
@@ -987,9 +727,7 @@ def main():
     ) as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=list(
-                station_rows[0].keys()
-            ),
+            fieldnames=list(station_rows[0].keys()),
         )
 
         writer.writeheader()
@@ -1001,18 +739,10 @@ def main():
 
     observed_station_count = len(observed_keys)
 
-    total_feb = sum(
-        len(x)
-        for x in sessions.values()
-    )
+    total_feb = sum(len(x) for x in sessions.values())
 
     total_seollal = sum(
-        1
-        for rows_ in sessions.values()
-        for x in rows_
-        if SEOLLAL_START
-        <= x["start"]
-        < SEOLLAL_END
+        1 for rows_ in sessions.values() for x in rows_ if SEOLLAL_START <= x["start"] < SEOLLAL_END
     )
 
     down_seollal = sum(
@@ -1020,9 +750,7 @@ def main():
         for key, rows_ in sessions.items()
         if key[1] == "DOWN"
         for x in rows_
-        if SEOLLAL_START
-        <= x["start"]
-        < SEOLLAL_END
+        if SEOLLAL_START <= x["start"] < SEOLLAL_END
     )
 
     up_seollal = sum(
@@ -1030,9 +758,7 @@ def main():
         for key, rows_ in sessions.items()
         if key[1] == "UP"
         for x in rows_
-        if SEOLLAL_START
-        <= x["start"]
-        < SEOLLAL_END
+        if SEOLLAL_START <= x["start"] < SEOLLAL_END
     )
 
     print()
@@ -1085,10 +811,7 @@ def main():
         )
 
         if key not in observed_keys:
-            print(
-                f"{s['direction']:4} "
-                f"{s['station_name']}"
-            )
+            print(f"{s['direction']:4} {s['station_name']}")
 
     print()
     print(
