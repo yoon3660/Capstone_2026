@@ -84,7 +84,14 @@ METRICS = ("dwell_total_h", "escape_cost_total_h",
 
 #: (스테이지, 어떻게 돌리나)
 LADDER = ["S0", "S1", "S2", "S3", "S4", "PERFECT_ROLLING"]
-NAME = {"PERFECT_ROLLING": "완전예측"}
+NAME = {"PERFECT_ROLLING": "완전예측", "PERFECT_S3": "완전예측S3",
+        "PERFECT_S4": "완전예측S4"}
+
+#: 완전한 미래를 받는 칸 (#168 2/2 천장 포락선). **구조가 서로 다르다** —
+#: PERFECT_ROLLING 은 S2, PERFECT_S3 는 S3, PERFECT_S4 는 S4 다.
+#: 천장은 시드마다 이 셋 중 **가장 싼 값**이다 (`--envelope` 으로 켠다).
+PERFECT = ("PERFECT_ROLLING", "PERFECT_S3", "PERFECT_S4")
+ENVELOPE = ["S0", "S1", "S2", "S3", "S4", *PERFECT]
 
 
 def kw_for(stage: str) -> dict:
@@ -95,6 +102,12 @@ def kw_for(stage: str) -> dict:
     if stage == "S4":
         return {"observed": ObservedSpec(strength=STRENGTH), "s3_window": WINDOW,
                 "s4_lead_min": S4_LEAD}
+    # ★ 천장 칸은 **구조만** 같게 맞춘다 — 예측은 `oracle=` 로 따로 들어가므로
+    #   `observed` 를 주면 안 된다 (runner 가 둘을 같이 받으면 거절한다)
+    if stage == "PERFECT_S3":
+        return {"s3_window": WINDOW}
+    if stage == "PERFECT_S4":
+        return {"s3_window": WINDOW, "s4_lead_min": S4_LEAD}
     return {}
 
 
@@ -116,6 +129,8 @@ def main() -> int:
     ap.add_argument("--config", default="config/scenario_chuseok_up_adoption.yaml")
     ap.add_argument("--seeds", type=int, nargs="+", default=[1])
     ap.add_argument("--stages", nargs="+", default=LADDER)
+    ap.add_argument("--envelope", action="store_true",
+                    help="천장 포락선까지 — PERFECT_S3·PERFECT_S4 를 더한다 (#168 2/2)")
     ap.add_argument("--out", default=None)
     # ★ EV 보급률 축 (#146 "EV 대수 증가 실험"). `variant` 로 돌리므로 **scenario_id
     #   가 갈라진다** — 기본 config 의 run 을 덮어쓰지 않는다. 물리를 바꿔 돌리면서
@@ -124,6 +139,9 @@ def main() -> int:
                     help="EV 보급 레이어의 비율을 덮어쓴다 (예: 0.10). "
                          "주면 scenario_id 뒤에 __ev<nn> 이 붙는다")
     args = ap.parse_args()
+
+    if args.envelope and args.stages == LADDER:
+        args.stages = list(ENVELOPE)
 
     _need_config(args.config)
     cfg = {st: load_config(args.config, stage=st) for st in args.stages}
@@ -149,8 +167,15 @@ def main() -> int:
             cfg[st] = c.variant(tag, {"demand.layers": layers})
     any_cfg = next(iter(cfg.values()))
     escape_cost = float(any_cfg.demand.escape_cost_min)
-    out = Path(args.out or (ROOT / "runs" / "sweeps" /
-                            f"ladder_{any_cfg.scenario_id}.csv"))
+    # ★ **부분 실행은 1차 기록을 덮지 않는다** (2026-11-13).
+    #   `runs/sweeps/ladder_<scenario_id>.csv` 는 "그 무대의 사다리 전체" 라는 뜻이고,
+    #   `rebuild_run_kpi.py` 가 그걸 **검산 기준**으로 쓴다. 칸 하나만 돌리면서
+    #   같은 이름에 쓰면 60행짜리 기록이 1행으로 바뀐다 — 실제로 그랬다.
+    #   칸을 추려 돌리면 이름에 그 칸들을 적는다.
+    full = set(args.stages) >= set(LADDER)
+    name = (f"ladder_{any_cfg.scenario_id}.csv" if full else
+            f"ladder_{any_cfg.scenario_id}__" + "-".join(args.stages) + ".csv")
+    out = Path(args.out or (ROOT / "runs" / "sweeps" / name))
     out.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"\n무대: {any_cfg.label}")
@@ -167,9 +192,12 @@ def main() -> int:
             t0 = time.perf_counter()
             print(f"  시드 {seed}  {label:<8} — 실행", end="", flush=True)
 
-            if stage == "PERFECT_ROLLING":
-                s1_id = make_run_id(cfg["PERFECT_ROLLING"].scenario_id, "S1", seed,
-                                    cfg["PERFECT_ROLLING"].policy.participation)
+            if stage in PERFECT:
+                # 1회차 미래는 **S1 실행의 실제 도착**이고, 그 뒤는 직전 회차의
+                # 도착이다. 세 칸이 같은 규칙을 쓴다 — 다르면 "구조 차이" 가
+                # 아니라 "회차 차이" 가 섞인다
+                s1_id = make_run_id(cfg[stage].scenario_id, "S1", seed,
+                                    cfg[stage].policy.participation)
                 src_path = RUNS_DIR / s1_id / "charge_event.parquet"
                 if not src_path.exists():
                     print("  ⚠ S1 결과가 없다 — 건너뛴다 (S1 을 먼저 돌릴 것)")
@@ -179,7 +207,8 @@ def main() -> int:
                     rid = run_once(cfg[stage], seed=seed, overwrite=True,
                                    log=lambda *_: None,
                                    oracle=OracleSource(rows=src, source_run_id=s1_id,
-                                                       round_no=rnd))
+                                                       round_no=rnd),
+                                   **kw_for(stage))
                     src = pd.read_parquet(RUNS_DIR / rid / "charge_event.parquet")[
                         ARRIVAL_COLS].to_dict("records")
             else:
