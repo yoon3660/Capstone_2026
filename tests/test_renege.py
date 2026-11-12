@@ -484,29 +484,27 @@ def test_no_test_writes_into_the_real_runs_dir() -> None:
     *다시 쓸 때* 막는 장치라 이미 덮인 파일은 못 되돌린다.
 
     `tests/test_s3.py` 가 스윕에 `db_path` 를 요구하는 것과 같은 규칙이다.
+
+    ★ **`ast` 로 본다.** 정규식으로 소스를 훑었더니 다른 테스트의 **docstring 안
+      예시 코드**를 호출로 오인했다 (2026-11-12). 주석·문자열은 호출이 아니다.
     """
-    import re
+    import ast
 
     from evdt.paths import PROJECT_ROOT
 
     offenders = []
     for f in sorted((PROJECT_ROOT / "tests").glob("test_*.py")):
-        src = f.read_text(encoding="utf-8")
-        for m in re.finditer(r"\brun_once\s*\(", src):
-            # 호출 끝까지 괄호를 세어 인자 전체를 본다
-            i, depth = m.end() - 1, 0
-            while i < len(src):
-                depth += (src[i] == "(") - (src[i] == ")")
-                if depth == 0:
-                    break
-                i += 1
-            call = src[m.end():i]
-            if "runs_dir" in call:
+        tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
                 continue
-            line = src[:m.start()].count("\n") + 1
-            if "monkeypatch" in call or "setattr" in call:
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+            if name != "run_once":
                 continue
-            offenders.append(f"{f.name}:{line}")
+            if any(kw.arg == "runs_dir" for kw in node.keywords):
+                continue
+            offenders.append(f"{f.name}:{node.lineno}")
 
     assert not offenders, (
         f"`runs_dir` 없이 run_once 를 부르는 테스트: {offenders} — "

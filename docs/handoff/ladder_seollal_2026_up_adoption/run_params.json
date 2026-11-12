@@ -1,0 +1,30 @@
+{
+  "scenario_id": "seollal_2026_up_adoption",
+  "config": "config/scenario_seollal_up_adoption.yaml",
+  "label": "설 연휴 귀성 피크 (경부선 상행) — EV 보급 시나리오",
+  "period": "seollal2026",
+  "direction": "UP",
+  "temp_c": -5.0,
+  "demand_label": "2026 설 연휴 (seollal2026) · 가정: EV 보급률 10% · 기회 충전 20% (도착 SoC<50%)",
+  "escape_cost_min": 120.0,
+  "escape_cost_sigma": 0.0,
+  "renege": true,
+  "patience_kind": "point",
+  "patience_shape": 0.0,
+  "patience_median_min": 120.0,
+  "travel_time": "fixed",
+  "cruise_speed_kmh": 80.0,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "commit": "574d435"
+}

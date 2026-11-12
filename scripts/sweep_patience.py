@@ -69,7 +69,6 @@ h=1 이면 하한이 0 이 되어 **인내 0분인 차**가 생긴다. 그건 �
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import sys
 import time
 
@@ -132,9 +131,18 @@ def main() -> int:
     for label, kind, shape, median in cases:
         for stage in args.stages:
             cfg = load_config(args.config, stage=stage)
-            cfg = dataclasses.replace(cfg, demand=dataclasses.replace(
-                cfg.demand, patience_kind=kind, patience_shape=shape,
-                patience_median_min=median))
+            # ★ **`variant` 를 써야 한다.** `dataclasses.replace` 로 물리만 바꾸면
+            #   `scenario_id` 가 그대로라 `run_id` 도 그대로다 — 스윕이 **진짜 run 을
+            #   덮어쓴다.** 2026-11-12 에 실제로 그랬고, 사다리 CSV 와 run 폴더가
+            #   갈라져서 알았다 (설 S0 시드1: 총비용 6,999.8 ↔ 6,576.7).
+            #   `variant` 는 scenario_id 뒤에 `__<tag>` 를 붙이고 검증도 다시 한다.
+            tag = (f"pat-{kind}-{shape:g}-{median:g}".replace(".", "p")
+                   if kind != "point" else "pat-point")
+            cfg = cfg.variant(tag, {
+                "demand.patience_kind": kind,
+                "demand.patience_shape": shape,
+                "demand.patience_median_min": median,
+            })
             for seed in args.seeds:
                 t0 = time.perf_counter()
                 rid = run_once(cfg, seed=seed, overwrite=True,

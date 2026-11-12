@@ -96,3 +96,47 @@ def test_every_difference_is_named(cfg):
 
     why = stale_reason(stored, cfg) or ""
     assert "departure_soc" in why and "demand_multiplier" in why
+
+
+def test_no_sweep_script_overwrites_a_real_run() -> None:
+    """★ 물리를 바꿔 돌리는 스크립트는 **`variant` 로 run_id 를 갈라야 한다.**
+
+    `run_id` 는 (scenario_id, stage, 참여율, seed) 뿐이다. 그래서
+
+        cfg = dataclasses.replace(cfg, demand=dataclasses.replace(cfg.demand, ...))
+        run_once(cfg, seed=seed, overwrite=True)
+
+    는 **진짜 run 을 덮어쓴다** — 물리가 다른데 이름이 같기 때문이다.
+
+    2026-11-12 에 `sweep_patience.py` 가 그렇게 했다. 추석 adoption 의 S0·S2
+    시드 2·3 이 스윕의 마지막 경우(m=30 h=0.5)로 덮였고, 사다리 CSV 와 run 폴더가
+    갈라져서 알았다 (설 S0 시드1 은 테스트가 같은 방식으로 덮었다 — 총비용
+    6,999.8 ↔ 6,576.7, 포기 전 대기 534.0 → 0.0).
+
+    `stale_reason` 은 run 을 **다시 쓸 때** 막는 장치라 이미 덮인 파일은 못
+    되돌린다. 그래서 애초에 못 쓰게 막는다.
+
+    `ScenarioConfig.variant(tag, overrides)` 가 `scenario_id` 뒤에 `__<tag>` 를
+    붙이고 검증도 다시 한다. `tests/test_s3.py` 가 스윕에 `db_path` 를 요구하는
+    것과 같은 규칙이다.
+    """
+    import re
+
+    from evdt.paths import PROJECT_ROOT
+
+    offenders = []
+    for f in sorted((PROJECT_ROOT / "scripts").glob("*.py")):
+        src = f.read_text(encoding="utf-8")
+        if "run_once(" not in src:
+            continue
+        # cfg 의 물리를 갈아끼우는가
+        if not re.search(r"dataclasses\.replace\([^)]*demand", src, re.S):
+            continue
+        # 갈아끼웠다면 run_id 를 가르거나(variant/scenario_id) 샌드박스에 써야 한다
+        if any(k in src for k in (".variant(", "scenario_id=", "runs_dir=")):
+            continue
+        offenders.append(f.name)
+
+    assert not offenders, (
+        f"물리를 바꿔 돌리면서 run_id 를 안 가르는 스크립트: {offenders} — "
+        "`cfg.variant(tag, {...})` 를 쓸 것. 안 그러면 진짜 run 을 덮어쓴다")

@@ -42,7 +42,6 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import sys
 import time
 from pathlib import Path
@@ -79,11 +78,25 @@ def spec(text: str) -> tuple[str, float]:
 
 
 def tweak(cfg, *, renege: bool, kind: str, shape: float):
-    """`demand` 만 바꾼 변이. scenario_id 는 **그대로 둔다** — 같은 세계다."""
+    """물리를 바꾼 변이. **`scenario_id` 를 반드시 가른다.**
 
-    return dataclasses.replace(
-        cfg, demand=dataclasses.replace(
-            cfg.demand, renege=renege, patience_kind=kind, patience_shape=shape))
+    ★ 전에는 `dataclasses.replace` 로 `demand` 만 바꾸고 "scenario_id 는 그대로
+      둔다 — 같은 세계다" 라고 적어 뒀다. **틀렸다.** 포기와 인내 가족은 물리다.
+      물리가 다른데 `run_id` 가 같으면 이 스크립트가 **진짜 run 을 덮어쓴다.**
+
+      2026-11-12 에 같은 모양의 버그가 `sweep_patience.py` 에서 실제로 터졌다 —
+      추석 adoption 의 S0·S2 시드 2·3 이 스윕 결과로 덮였고, 사다리 CSV 와
+      run 폴더가 갈라져서 알았다. `stale_reason` 은 run 을 *다시 쓸 때* 막는
+      장치라 이미 덮인 파일은 못 되돌린다.
+    """
+
+    tag = f"ren-{'on' if renege else 'off'}-{kind}-{shape:g}".replace(".", "p")
+
+    return cfg.variant(tag, {
+        "demand.renege": renege,
+        "demand.patience_kind": kind,
+        "demand.patience_shape": shape,
+    })
 
 
 def main() -> int:
