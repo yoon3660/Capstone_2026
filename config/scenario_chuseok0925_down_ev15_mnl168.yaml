@@ -1,0 +1,74 @@
+# #168 천장값 본 실행용. #162 passenger266 의 config_2026-09-25_DOWN.yaml 을 그대로 복사하고
+# scenario_id·label 과 EV 보급률 레이어(15%, 가정)만 바꿨다.
+# 상대 경로(reports/issue160_ctm_daily/...)는 원래 저장소 루트 기준 — --data-root 로 준다.
+# DB: #162 passenger266/scenario_sep18.sqlite 의 사본 (충전기 266기).
+scenario_id: mnl168_chuseok_20260925_down_ev15
+label: '#168 MNL 천장값 — 2026-09-25 DOWN · EV 15% 가정 · #162 passenger266 공급'
+corridor_id: gyeongbu_down
+direction: DOWN
+day_type: CHUSEOK_PEAK
+time:
+  start_min: 0
+  end_min: 1440
+  dt_min: 5
+demand:
+  period: chuseok2026
+  volume_profile: reports/issue160_ctm_daily/inputs/2026-09-25/DOWN/volume.csv
+  demand_multiplier: 1.0
+  ev_share: 0.05
+  ev_count_method: fixed
+  beta_binomial_concentration: 10000.0
+  poisson_lognormal_sigma: 0.05
+  charge_prob: 0.95
+  layers:
+  - kind: ev_adoption
+    ev_share: 0.15
+  safety_buffer_km: 30.0
+  low_soc_threshold: 0.2
+  through_profile: reports/issue160_ctm_daily/inputs/2026-09-25/DOWN/through.csv
+  entry_exit_profile: reports/issue160_ctm_daily/inputs/2026-09-25/DOWN/entry_exit.csv
+  od_profile: null
+  cruise_speed_kmh: 80.0
+  escape_cost_min: 120.0
+  escape_cost_sigma: 0.0
+  travel_time: fixed
+vehicles:
+  seed: 7
+  departure_soc: holiday
+  soc_profiles:
+    holiday:
+      dist: lognormal
+      mu: -0.3567
+      sigma: 0.35
+      lo: 0.33
+      hi: 1.0
+    low:
+      a: 2.0
+      b: 5.0
+      lo: 0.1
+      hi: 0.95
+    high:
+      a: 5.0
+      b: 2.0
+      lo: 0.3
+      hi: 0.95
+  target_soc_cap: 0.8
+  habit_soc: 0.0
+  habit_soc_sigma: 0.0
+environment:
+  temp_c: 22.18125
+policy:
+  stage: UE
+  participation: 1.0
+  params: {}
+  ue:
+    max_iter: 50
+    gap_tol: 0.008
+    min_gain_min: 1.0
+    max_stops: 3
+queue:
+  discipline: FIFO
+  charger_select: MAX_POWER_IDLE
+output:
+  write_snapshots: false
+  snapshot_every_min: 5
