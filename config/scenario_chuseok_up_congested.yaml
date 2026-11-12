@@ -47,7 +47,7 @@
 #   (`ctm_run.py` 가 CellSpeedField 를 CTM 출력으로만 채운다).
 #   여기서 보는 혼잡은 **충전 대기**뿐이다. 그걸 발표에서 먼저 말한다.
 scenario_id: chuseok_2026_up_congested
-label: "2026 추석 2026-09-25 경부선 UP — 혼잡 시나리오 (EV 20%, ⚠ 실측 비율 아님)"
+label: "2026 추석 2026-09-25 경부선 UP — 혼잡 시나리오 (EV 15%, ⚠ 실측 비율 아님)"
 corridor_id: gyeongbu_up
 direction: UP
 day_type: CHUSEOK_PEAK
