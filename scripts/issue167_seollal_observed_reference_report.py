@@ -32,14 +32,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 
 # ============================================================
 # 1. 경로 및 검증 기준
@@ -748,7 +746,8 @@ def agg_percentiles(df, group_columns):
         if not isinstance(key, tuple):
             key = (key,)
 
-        row = dict(zip(group_columns, key))
+        # groupby 키는 group_columns 와 길이가 같다 — 어긋나면 그게 버그다
+        row = dict(zip(group_columns, key, strict=True))
 
         row["starts"] = len(group)
 
