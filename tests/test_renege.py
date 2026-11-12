@@ -303,28 +303,69 @@ def test_the_escape_cost_total_is_a_kpi() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_every_scenario_with_an_escape_has_renege_on() -> None:
-    """이탈 기제가 있는 config 는 **전부** 포기를 켠다.
+def test_every_scenario_states_its_renege_choice() -> None:
+    """이탈 기제가 있는 config 는 `renege` 를 **적어야 한다** (true 든 false 든).
 
-    끄면 "이탈 기준 120분" 이라고 선언한 모형에서 372.5분을 기다리는 차가
-    생기고, 그 혼란 요인이 S0 에 가장 많이 얹혀 사다리를 부풀린다
-    (S0-S2 격차 884.3h 중 540.7h).
+    처음에는 "전부 켜라" 였다. 그런데 켜면 **안 되는** config 가 생겼다 —
+    #168 의 MNL 보정용 config 는 휴게소 **분배(TVD)** 를 재는 자리라, 포기를
+    켜면 줄에서 차가 빠져 분배 자체가 달라진다. 그러면 "MNL 이 분배를 잘
+    맞추나" 와 "포기가 분배를 바꾸나" 가 섞인다.
 
-    새 config 가 이 줄을 빼먹으면 **조용히 옛 물리로 돌아간다.** 그걸 막는다.
+    그래서 규칙을 바꾼다 — **빠뜨린 것과 일부러 끈 것을 글로 가른다.**
+    적어 두면 리뷰에서 보이고, 안 적으면 여기서 멈춘다.
+
+    왜 중요한가: 끄면 "이탈 기준 120분" 이라고 선언한 모형에서 그보다 오래
+    기다리는 차가 생긴다 (설 상행 S0 에서 **372.5분**). 그 혼란 요인이 바닥에
+    가장 많이 얹혀 사다리를 부풀린다 — 설 S0−S2 격차 884.3h 중 **540.7h** 다.
+    그래서 **포기를 끈 config 의 run 으로 사다리 격차를 재면 안 된다.**
     """
     import yaml
 
     from evdt.paths import CONFIG_DIR
 
-    missing = []
+    silent = []
     for f in sorted(CONFIG_DIR.glob("scenario_*.yaml")):
-        d = yaml.safe_load(f.read_text(encoding="utf-8")).get("demand", {})
+        raw = f.read_text(encoding="utf-8")
+        d = yaml.safe_load(raw).get("demand", {})
         if not float(d.get("escape_cost_min", 0.0)):
-            continue                      # 이탈 기제가 없는 config — 켤 수 없다
-        if not d.get("renege", False):
-            missing.append(f.name)
+            continue                      # 이탈 기제가 없는 config — 고를 것이 없다
+        if "renege" not in d:
+            silent.append(f.name)
 
-    assert not missing, f"포기가 꺼진 config: {missing}"
+    assert not silent, (
+        f"`renege` 를 안 적은 config: {silent} — true 든 false 든 **적을 것**. "
+        "빠뜨린 것과 일부러 끈 것이 구분되지 않으면 조용히 옛 물리로 돌아간다")
+
+
+def test_the_engine_comparison_stages_have_renege_on() -> None:
+    """**엔진 비교에 쓰는 무대**는 포기를 켠다.
+
+    위 테스트가 "적어라" 라면 이건 "우리 무대는 켜라" 다. 끈 무대의 사다리는
+    바닥이 부풀어 있어서 격차를 재면 안 된다.
+    """
+    import yaml
+
+    from evdt.paths import CONFIG_DIR
+
+    #: 포기를 끄는 것이 **의도인** config. 늘릴 때는 이유를 여기 적는다
+    EXEMPT = {
+        # #168 MNL 보정·검증용 — 휴게소 분배(TVD)를 재는 자리라 포기를 켜면
+        # 분배 자체가 달라진다. 사다리 격차 계산에는 쓰지 않는다
+        "scenario_chuseok0925_up_ev15_mnl168.yaml",
+        "scenario_chuseok0925_down_ev15_mnl168.yaml",
+    }
+
+    off = []
+    for f in sorted(CONFIG_DIR.glob("scenario_*.yaml")):
+        if f.name in EXEMPT:
+            continue
+        d = yaml.safe_load(f.read_text(encoding="utf-8")).get("demand", {})
+        if float(d.get("escape_cost_min", 0.0)) and not d.get("renege", False):
+            off.append(f.name)
+
+    assert not off, (
+        f"포기가 꺼진 엔진 비교 config: {off} — 켜거나, 끄는 이유를 "
+        "이 테스트의 EXEMPT 에 적을 것")
 
 
 def test_a_distribution_needs_the_patience_split() -> None:
