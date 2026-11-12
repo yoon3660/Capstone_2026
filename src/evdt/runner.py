@@ -595,7 +595,13 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
 RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4",
-                                   "S3_EXACT", "MEC", "PERFECT_ROLLING")
+                                   "S3_EXACT", "MEC", "PERFECT_ROLLING",
+                                   "PERFECT_S3", "PERFECT_S4")
+
+#: 완전한 미래를 받는 칸 (#168 2/2 천장 포락선). **구조는 서로 다르다** —
+#: PERFECT_ROLLING 은 S2, PERFECT_S3 는 S3, PERFECT_S4 는 S4 다.
+#: 천장은 시드마다 이 셋 중 **가장 싼 값**이다.
+PERFECT_STAGES: tuple[str, ...] = ("PERFECT_ROLLING", "PERFECT_S3", "PERFECT_S4")
 
 #: KPI 는 숫자만 받는다. solver 와 후보 범위를 코드로 적어 둔다 (#143) — 문자열로
 #: 넣을 칸이 없는데, 이 둘이 적혀 있지 않으면 "어느 solver 의 결과인가" 를
@@ -700,24 +706,25 @@ def run_once(
     # S2 그대로 두고 결합 축만 올리는 칸이라, 예측을 빼면 그 차이가 결합으로 보고된다
     if ((oracle is not None or observed is not None)
             and cfg.policy.stage not in ("S2", "S3", "S4", "S3_EXACT",
-                                         "PERFECT_ROLLING")):
+                                         *PERFECT_STAGES)):
         raise ValueError(
             f"{cfg.policy.stage} 는 예측을 쓰지 않는데 예측 설정이 들어왔다. "
             "조용히 무시하면 '예측을 쓰는 줄 알았는데 안 쓰고 있던' 결과가 나온다")
 
     # 윈도우는 S3 만 쓴다. 다른 칸이 조용히 받으면 params_json 에 윈도우가 적히고도
     # 아무 효과가 없어서, 나중에 "윈도우를 바꿨는데 결과가 같다" 를 설명할 수 없다
-    if s3_window is not None and cfg.policy.stage not in ("S3", "S4", "S3_EXACT"):
+    if s3_window is not None and cfg.policy.stage not in (
+            "S3", "S4", "S3_EXACT", "PERFECT_S3", "PERFECT_S4"):
         raise ValueError(
-            f"`s3_window` 는 S3·S4·S3_EXACT 만 쓴다 (#139) — {cfg.policy.stage} 에 "
-            "주면 기록에는 남고 효과는 없는 값이 된다")
+            f"`s3_window` 는 S3·S4·S3_EXACT·PERFECT_S3·PERFECT_S4 만 쓴다 (#139) — "
+            f"{cfg.policy.stage} 에 주면 기록에는 남고 효과는 없는 값이 된다")
 
     # 리드타임은 S4 만 쓴다. S3 는 가고 있는 차를 아예 안 묻기 때문에(reask_en_route
     # 가 False) 리드타임을 줘도 막을 대상이 없다 — 기록에만 남고 효과가 없다
-    if s4_lead_min is not None and cfg.policy.stage != "S4":
+    if s4_lead_min is not None and cfg.policy.stage not in ("S4", "PERFECT_S4"):
         raise ValueError(
-            f"`s4_lead_min` 은 S4 만 쓴다 (#142) — {cfg.policy.stage} 에 주면 "
-            "기록에는 남고 효과는 없는 값이 된다")
+            f"`s4_lead_min` 은 S4·PERFECT_S4 만 쓴다 (#142) — {cfg.policy.stage} 에 "
+            "주면 기록에는 남고 효과는 없는 값이 된다")
 
     # 엔진 설정(solver·후보 범위·재배정 비용)은 그룹 최적화를 쓰는 칸만 받는다 (#143).
     # 다른 칸이 조용히 받으면 위의 둘과 똑같은 고장이 된다
@@ -933,7 +940,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
     stage = cfg.policy.stage
 
     if stage not in ("S0", "S1", "S2", "S3", "S4", "S3_EXACT", "MEC",
-                     "PERFECT_ROLLING"):
+                     *PERFECT_STAGES):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
     # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
@@ -959,7 +966,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
     # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
     # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
     ledger = forecast = None
-    if stage in ("S2", "S3", "S4", "S3_EXACT", "PERFECT_ROLLING"):
+    if stage in ("S2", "S3", "S4", "S3_EXACT", *PERFECT_STAGES):
         # 예측은 **S2 부터만** 쓴다. S1 에 주면 안 쓰고도 받는 셈이라 "무엇이
         # 달라졌나" 가 흐려진다 (원장을 S0 에 주지 않는 것과 같은 이유)
         # **어느 예측을 쓰느냐가 곧 스테이지다.** 같은 S2Policy 를 쓰지만 run_id 가
@@ -970,11 +977,11 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 "`observed=ObservedSpec(...)` 가 필요하다. 시뮬레이터의 실제 미래를 "
                 "넣고 싶으면 그건 엔진 칸이 아니라 벤치마크다: "
                 "stage='PERFECT_ROLLING' 으로 `oracle=` 을 줄 것 (#118 · DESIGN §8.2)")
-        if stage == "PERFECT_ROLLING" and oracle is None:
+        if stage in PERFECT_STAGES and oracle is None:
             raise ValueError(
-                "PERFECT_ROLLING 은 시뮬레이터의 실제 미래를 넣는 **벤치마크**다 "
+                f"{stage} 는 시뮬레이터의 실제 미래를 넣는 **벤치마크**다 "
                 "(#118 · DESIGN §8.2) — `oracle=OracleSource(...)` 가 필요하다")
-        if stage == "S4":
+        if stage in ("S4", "PERFECT_S4"):
             # S4 는 S3 의 알고리즘을 그대로 쓰고 **세계에게 더 많은 차를 달라고 한다**.
             # 거기에 목적함수의 재배정 비용이 더해진다 (#143 · docs/objective.md §2b)
             policy = S4Policy(S4Settings(
@@ -983,7 +990,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 **({} if s4_lead_min is None
                    else {"hard_lock_min": float(s4_lead_min)}),
                 **engine_settings(engine_opts, S4Settings)))
-        elif stage in ("S3", "S3_EXACT"):
+        elif stage in ("S3", "S3_EXACT", "PERFECT_S3"):
             # ★ 윈도우는 **이탈 수를 흔드는 손잡이**다. 기본값으로 조용히 돌면 어느
             #   윈도우의 결과인지 모른 채 사다리에 올라간다 — #101·#123 과 같은 고장
             #
@@ -999,10 +1006,18 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 **({"exact_group": True} if stage == "S3_EXACT" else {}),
                 **engine_settings(engine_opts, S3Settings)))
         else:
+            # ★ `PERFECT_ROLLING` 이 **여기로** 떨어진다 — 즉 **S2 구조 + 완전한
+            #   미래**다. 이름만 보면 "모든 엔진의 천장" 같지만 아니다. 설 상행
+            #   10시드에서 S4 가 그걸 6/10 시드에서 넘었고 평균으로는 동점이었다
+            #   (−27.6h, CI [−131.6, +76.4]). 고장이 아니라 **이름이 틀린 것**이다.
+            #
+            #   그래서 `PERFECT_S3`·`PERFECT_S4` 를 따로 둔다 (#168 2/2). 구조마다
+            #   완전한 미래를 주고, 시드마다 셋 중 **가장 싼 값**을 천장으로 쓴다.
+            #   정보가 불완전한 S1~S4 가 그 포락선을 넘으면 그건 버그 신호다.
             policy = S2Policy(S2Settings(**kw))
         ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
 
-        if stage == "PERFECT_ROLLING":
+        if stage in PERFECT_STAGES:
             forecast = OracleForecast.from_rows(
                 oracle.rows, specs_from_trips(built.trips),
                 source_run_id=oracle.source_run_id, round_no=oracle.round_no)

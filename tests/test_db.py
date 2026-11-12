@@ -324,7 +324,29 @@ def test_an_existing_db_gets_a_new_stage_in_the_check(tmp_path) -> None:
 
 def test_the_stage_migration_is_idempotent(seeded_db) -> None:
     """이미 맞는 DB 에는 **아무것도 하지 않는다.** 매번 테이블을 다시 만들면 안 된다."""
+    import sqlite3
+
     from evdt.io.db import migrate_stage_check
 
-    with get_conn(seeded_db) as conn:
+    # 외래키를 끄고 부른다 — `init_db` 가 하는 것과 같다 (아래 테스트 참조)
+    with sqlite3.connect(seeded_db) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = OFF")
         assert migrate_stage_check(conn) is False
+
+
+def test_the_stage_migration_refuses_with_foreign_keys_on(seeded_db) -> None:
+    """★ 외래키가 켜져 있으면 **거절한다** (2026-11-13).
+
+    `run` 을 다시 만드는 함수인데 `run_kpi` 가 `ON DELETE CASCADE` 로 매달려
+    있다. 외래키를 켠 채로 부르면 **KPI 가 통째로 날아간다.** docstring 에
+    경고가 있었지만 막지는 않았고, 그래서 884개 run 의 KPI 를 잃었다
+    (raw parquet 이 남아 `scripts/rebuild_run_kpi.py` 로 복구했다).
+
+    주석은 사람이 읽어야 지켜지고, 이 검사는 안 읽어도 지켜진다.
+    """
+    from evdt.io.db import SchemaError, migrate_stage_check
+
+    with get_conn(seeded_db) as conn:        # get_conn 은 외래키를 켠다
+        with pytest.raises(SchemaError, match="외래키를"):
+            migrate_stage_check(conn)

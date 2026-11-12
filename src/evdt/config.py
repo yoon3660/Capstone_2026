@@ -34,6 +34,10 @@ from evdt.replay import describe as describe_period
 VALID_STAGES: tuple[str, ...] = (
     "UE", "S0", "S1", "S2", "S3", "S4",
     "MEC", "PAPER", "PERFECT_ROLLING",
+    # 천장 포락선 (#168 2/2). `PERFECT_ROLLING` 이 **S2 구조**라서 S3·S4 가
+    # 그걸 넘는 일이 생긴다 — 천장이 아니라 이름이 틀린 것이다. 그래서 구조마다
+    # 완전한 미래를 주고, 시드마다 **가장 싼 값**을 천장으로 쓴다.
+    "PERFECT_S3", "PERFECT_S4",
     # S3 의 그룹을 **전수 열거**한 진단 런 (#143). 같은 S3Policy 를 쓰지만 run_id 가
     # 갈라져야 S3 를 덮어쓰지 않는다 — PERFECT_ROLLING 이 S2Policy 를 쓰면서 따로
     # 스테이지를 받은 것과 **같은 이유**다 (runner.py 의 그 주석 참조)

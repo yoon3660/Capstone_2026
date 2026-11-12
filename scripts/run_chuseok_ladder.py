@@ -117,10 +117,36 @@ def main() -> int:
     ap.add_argument("--seeds", type=int, nargs="+", default=[1])
     ap.add_argument("--stages", nargs="+", default=LADDER)
     ap.add_argument("--out", default=None)
+    # ★ EV 보급률 축 (#146 "EV 대수 증가 실험"). `variant` 로 돌리므로 **scenario_id
+    #   가 갈라진다** — 기본 config 의 run 을 덮어쓰지 않는다. 물리를 바꿔 돌리면서
+    #   이름을 그대로 두면 진짜 run 이 날아간다 (2026-11-12 에 실제로 그랬다)
+    ap.add_argument("--ev-share", type=float, default=None,
+                    help="EV 보급 레이어의 비율을 덮어쓴다 (예: 0.10). "
+                         "주면 scenario_id 뒤에 __ev<nn> 이 붙는다")
     args = ap.parse_args()
 
     _need_config(args.config)
     cfg = {st: load_config(args.config, stage=st) for st in args.stages}
+    if args.ev_share is not None:
+        if not 0.0 < args.ev_share <= 1.0:
+            ap.error(f"--ev-share 는 (0, 1] 이어야 한다 (받은 값: {args.ev_share})")
+        import yaml as _yaml
+        tag = f"ev{round(args.ev_share * 100):02d}"
+        for st, c in cfg.items():
+            raw = _yaml.safe_load(c.raw_yaml)
+            layers = []
+            found = False
+            for layer in raw["demand"].get("layers") or []:
+                layer = dict(layer)
+                if layer.get("kind") == "ev_adoption":
+                    layer["ev_share"] = args.ev_share
+                    found = True
+                layers.append(layer)
+            if not found:
+                raise SystemExit(
+                    f"{args.config} 에 ev_adoption 레이어가 없다 — "
+                    "--ev-share 로 덮을 대상이 없다")
+            cfg[st] = c.variant(tag, {"demand.layers": layers})
     any_cfg = next(iter(cfg.values()))
     escape_cost = float(any_cfg.demand.escape_cost_min)
     out = Path(args.out or (ROOT / "runs" / "sweeps" /

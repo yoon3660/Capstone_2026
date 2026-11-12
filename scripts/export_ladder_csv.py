@@ -61,6 +61,31 @@ METRICS = ("n_ev", "n_ev_charging", "n_charge_visits",
            *SOCIAL_COST_TERMS)
 
 
+def _cfg(path: str, stage: str, ev_share: float | None):
+    """config 를 읽되, `--ev-share` 가 있으면 **사다리와 같은 변형**을 만든다.
+
+    `run_chuseok_ladder.py --ev-share` 가 `cfg.variant(f"ev{nn}", ...)` 로
+    scenario_id 를 가른다. 내보내기도 같은 이름을 만들어야 그 run 을 찾는다.
+    """
+
+    import yaml
+
+    cfg = load_config(path, stage=stage)
+    if ev_share is None:
+        return cfg
+    raw = yaml.safe_load(cfg.raw_yaml)
+    layers, found = [], False
+    for layer in raw["demand"].get("layers") or []:
+        layer = dict(layer)
+        if layer.get("kind") == "ev_adoption":
+            layer["ev_share"] = ev_share
+            found = True
+        layers.append(layer)
+    if not found:
+        raise SystemExit(f"{path} 에 ev_adoption 레이어가 없다")
+    return cfg.variant(f"ev{round(ev_share * 100):02d}", {"demand.layers": layers})
+
+
 def ci95(xs: Sequence[float]) -> tuple[float, float, float]:
     n = len(xs)
     mu = sum(xs) / n
@@ -89,9 +114,14 @@ def main() -> int:
     ap.add_argument("--floor", default="S0")
     ap.add_argument("--out", default=None,
                     help="내보낼 폴더 (기본 docs/handoff/ladder_<scenario_id>)")
+    # ★ `run_chuseok_ladder.py --ev-share` 와 **같은 변형**을 만들어야 한다.
+    #   안 그러면 15% run 을 ev10 폴더에 담는다 (2026-11-13 에 실제로 그랬다)
+    ap.add_argument("--ev-share", type=float, default=None,
+                    help="EV 보급 레이어 비율. 사다리를 --ev-share 로 돌렸으면 "
+                         "여기에도 같은 값을 줘야 한다")
     args = ap.parse_args()
 
-    base = load_config(args.config, stage=args.stages[0])
+    base = _cfg(args.config, args.stages[0], args.ev_share)
     out = ROOT / (args.out or f"docs/handoff/ladder_{base.scenario_id}")
     out.mkdir(parents=True, exist_ok=True)
 
@@ -102,7 +132,7 @@ def main() -> int:
     rows, missing = [], []
     for seed in args.seeds:
         for stage in args.stages:
-            cfg = load_config(args.config, stage=stage)
+            cfg = _cfg(args.config, stage, args.ev_share)
             rid = make_run_id(cfg.scenario_id, stage, seed, cfg.policy.participation)
             if not (RUNS_DIR / rid / "charge_event.parquet").exists():
                 missing.append(rid)

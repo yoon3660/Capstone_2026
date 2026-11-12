@@ -14,7 +14,7 @@
                      중앙값 70분
   통행시간           fixed · 80 km/h
   시드               [np.int64(1), np.int64(2), np.int64(3), np.int64(4), np.int64(5), np.int64(6), np.int64(7), np.int64(8), np.int64(9), np.int64(10)]
-  커밋               0506995
+  커밋               4744dd2
 
 파일
   ladder_seeds.csv     시드 × 칸 한 줄씩 — **원자료**. 다시 집계할 때 이걸 쓴다
