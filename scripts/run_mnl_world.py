@@ -71,7 +71,7 @@ from evdt.engine.participation import (  # noqa: E402
     ParticipationPolicy,
     participants,
 )
-from evdt.engine.ue import UESettings  # noqa: E402
+from evdt.engine.ue import UENotConverged, UESettings  # noqa: E402
 from evdt.paths import PROJECT_ROOT, RUNS_DIR, default_db_path  # noqa: E402
 
 #: 오라클 행에 들어가는 열 (run_perfect_rolling.ARRIVAL_COLS 와 같다)
@@ -403,6 +403,10 @@ def summarize(cells: pd.DataFrame) -> pd.DataFrame:
                     to_ue = (f - g[col]) / (f - u) * 100.0
                     rec[f"closed_to_ue{sfx}_pct"] = to_ue.mean()
                     rec[f"closed_to_ue{sfx}_pct_ci95"] = _ci(to_ue)
+                    # ★ UE 가 수렴 못 한 시드는 NaN 이고 `.mean()` 이 **조용히 뺀다.**
+                    #   그러면 이 칸만 n 이 다른데 표에는 `n_seeds` 하나뿐이라 들키지
+                    #   않는다. 실제로 쓴 시드 수를 따로 적는다
+                    rec[f"closed_to_ue{sfx}_n_seeds"] = int(to_ue.notna().sum())
             if not s1.empty and rec["stage"] in ("S2", "S3", "S4", ORACLE):
                 ref = s1.reindex(g.index)
                 # 둘 다 0 이면 맞춘 것이다. S1 이 0 인데 이 칸이 0 이 아니면 못 맞춘 것이다
@@ -419,7 +423,8 @@ def summarize(cells: pd.DataFrame) -> pd.DataFrame:
 
 SHOW = ["cell", "n_seeds", "total_h", "total_ex_h", "n_escaped", "n_exhausted",
         "drop_vs_floor_pct", "drop_vs_floor_ex_pct", "gap_closed_pct", "gap_closed_ex_pct",
-        "closed_to_ue_pct", "closed_to_ue_ex_pct", "escape_matched", "moved_share_last"]
+        "closed_to_ue_pct", "closed_to_ue_ex_pct", "closed_to_ue_n_seeds",
+        "escape_matched", "moved_share_last"]
 
 
 def merge(dirs: list[str], out: Path) -> int:
@@ -545,6 +550,7 @@ def main() -> int:
     mnl_kw = {"theta": args.theta, "wait_weight": args.wait_weight,
               "escape_mode": args.escape_mode}
     rows: list[dict] = []
+    ue_unconverged: list[int] = []
 
     def keep(row: dict, events: list[dict], name: str) -> None:
         _save(events, out / f"seed{row['seed']}" / f"{name}.parquet")
@@ -614,10 +620,25 @@ def main() -> int:
 
         # --- 참고 천장 UE (--ue): 27.5% 의 분모 끝점 -------------------------------
         if args.ue:
-            row, ev = run_ue_cell(world, quiet)
-            keep({**row, "round": 0, "final": True}, ev, "classic_UE")
+            # ★ UE 는 **시드에 따라 수렴하지 못한다** — `escape_cost_of` 의 설명대로
+            #   값이 한 점에 몰리면 gap 이 5~6% 에서 추세 없이 흔들린다. 그것을
+            #   그대로 던지면 **그 시드에서 스크립트가 통째로 죽고 뒤의 시드가
+            #   날아간다** (2026-11-13: 시드 5 에서 죽어 6~10 을 잃었다).
+            #   UE 는 참고 끝점일 뿐이고 S0·엔진·천장 칸은 멀쩡하므로, 이 시드만
+            #   UE 없이 두고 넘어간다. 빠진 시드는 끝에서 **반드시 밝힌다**
+            try:
+                row, ev = run_ue_cell(world, quiet)
+                keep({**row, "round": 0, "final": True}, ev, "classic_UE")
+            except UENotConverged as exc:
+                ue_unconverged.append(seed)
+                print(f"  {'classic:UE':<16} ★ 수렴 실패 — 이 시드는 UE 없이 간다\n"
+                      f"      {exc}")
 
     cells = pd.DataFrame(rows)
+    if ue_unconverged:
+        print(f"\n★ UE 가 수렴하지 않은 시드: {ue_unconverged} "
+              f"— `closed_to_ue_*` 는 이 시드를 뺀 값이다 (n 은 요약의 "
+              f"`closed_to_ue_n_seeds` 를 볼 것)")
 
     # 같은 시드인데 칸마다 차가 다르면 비교가 성립하지 않는다 (run_perfect_rolling 과 같은 검사)
     bad_seed = {s: g["n_ev_charging"].unique().tolist()
