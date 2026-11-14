@@ -73,6 +73,14 @@ from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
 #: 하루이므로 1기당 부하를 견줄 때 반드시 이걸로 나눈다
 OBS_DAYS = 10
 
+#: 원장에서 뽑은 휴게소 요약 (`build_observed_station_daily.py`).
+#: ★ 하드코딩된 `OBS_UP` 보다 **이쪽이 정본**이다 — 2월 기준 충전기 수까지 있다
+OBS_STATIONS = "data/processed/observed_station_daily__stations.csv"
+
+#: 원장 충전기 / DB 충전기 비율이 이 위면 "분모가 거의 같다" 로 본다.
+#: 2월 기준이라 2026-09 API 추정보다 믿을 만하다 — 건천 2/2 · 황간 6/6 · 양산 4/4
+CLEAN_SHARE = 0.80
+
 OBS_UP: dict[str, float] = {
     "천안삼거리휴게소": 1107, "신탄진휴게소": 893, "죽암휴게소": 733,
     "죽전휴게소": 724, "건천휴게소": 543, "안성휴게소": 480,
@@ -174,6 +182,42 @@ def me_coverage(corridor_like: str = "gyeongbu_up%") -> pd.DataFrame:
     t["db_units"] = [db_units.get(i, 0) for i in t.index]
     t["max_kw"] = [max_kw.get(i, 0.0) for i in t.index]
     return t.set_index("name").sort_values("me_frac")
+
+
+def observed_stations(direction: str = "UP") -> pd.DataFrame:
+    """원장 요약을 읽는다 — 시작 건수 + **2월 기준 충전기 수**.
+
+    `build_observed_station_daily.py` 가 만든다. 없으면 멈춘다 — 하드코딩된
+    `OBS_UP` 으로 조용히 되돌아가면 2월 충전기 수를 못 쓰게 된다.
+    """
+
+    p = ROOT / OBS_STATIONS
+    if not p.is_file():
+        raise SystemExit(
+            f"[중단] {OBS_STATIONS} 가 없다 — 먼저 돌릴 것:\n"
+            "  python scripts/build_observed_station_daily.py")
+    t = pd.read_csv(p)
+    t = t[t["direction"] == direction].set_index("name")
+    t["load"] = t.starts_seollal / t.ledger_chargers_feb / OBS_DAYS
+    return t
+
+
+def shape_table(model_load: pd.Series, obs: pd.DataFrame) -> pd.DataFrame:
+    """**척도 없는 쏠림 모양** — 각자의 평균으로 나눈 1기당 부하.
+
+    EV 대수가 늘면 수준은 커지지만 **모양은 유지되어야 한다.** 그래서 양쪽을
+    각자의 평균으로 나눠 수준을 지운 뒤 견준다. 그러면 "EV 보급률이 가정" 이라는
+    한계가 이 지표에는 닿지 않는다.
+    """
+
+    idx = [i for i in obs.index if i in model_load.index]
+    o = obs.loc[idx, "load"]
+    m = model_load.reindex(idx)
+    return pd.DataFrame({
+        "obs": o / o.mean(), "model": m / m.mean(),
+        "chargers_feb": obs.loc[idx, "ledger_chargers_feb"],
+        "share": obs.loc[idx, "ledger_share"],
+    })
 
 
 def mnl_sessions(d: Path, cell: str = "MNL") -> tuple[pd.Series, int]:

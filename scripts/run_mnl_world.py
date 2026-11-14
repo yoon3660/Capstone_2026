@@ -539,6 +539,10 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--drop-layer", default=None,
+                    help="수요 레이어 하나를 뺀 세계로 돌린다 (예: opportunity_charge). "
+                         "`cfg.variant` 로 scenario_id 에 꼬리표가 붙는다 — 기존 run 을 "
+                         "덮지 않는다")
     ap.add_argument("--data-root", default=str(PROJECT_ROOT),
                     help="수요 프로파일(data/processed) 을 찾을 루트")
     ap.add_argument("--classic", action="store_true",
@@ -558,6 +562,23 @@ def main() -> int:
     if args.config is None or args.p is None:
         raise SystemExit("[중단] --config 와 --p 가 필요하다 (--merge 만 예외)")
     cfg0 = R.load_config(args.config)
+    if args.drop_layer:
+        # ★ `cfg.variant` 로 간다 — scenario_id 에 꼬리표가 붙어야 기존 run 을
+        #   덮지 않는다 (#123). 레이어를 지우는 것은 **세계를 바꾸는** 일이다
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg0.raw_yaml)
+        before = raw["demand"].get("layers") or []
+        after = [lay for lay in before
+                 if str(lay.get("kind")) != args.drop_layer]
+        if len(after) == len(before):
+            raise SystemExit(
+                f"[중단] 뺄 레이어가 없다: {args.drop_layer!r} "
+                f"(지금 {[lay.get('kind') for lay in before]}). 오타면 "
+                "'레이어를 뺐다' 고 믿은 채 원래 세계를 돌리게 된다")
+        cfg0 = cfg0.variant(f"no-{args.drop_layer}".replace("_", "-"),
+                            {"demand.layers": after})
+        print(f"  ★ 레이어 제거 — {args.drop_layer} "
+              f"(scenario_id {cfg0.scenario_id})")
     seeds = R.parse_seeds(args.seeds)
     if not 0.0 < args.p <= 1.0:
         raise SystemExit(f"[중단] 참여율은 0 초과 1 이하여야 한다: {args.p} "

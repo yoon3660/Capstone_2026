@@ -81,7 +81,7 @@ EXPECT = {"starts": 11405, "up": 6577, "down": 4828, "stations": 29}
 
 MATCH_KM = 2.0
 NEEDED = ("충전소명", "충전소 유형(대분류)", "충전소 유형(소분류)",
-          "충전시작일시", "충전종료일시", "충전량")
+          "충전기ID", "충전기용량(KW)", "충전시작일시", "충전종료일시", "충전량")
 
 
 def haversine(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -215,6 +215,12 @@ def main() -> int:
     daily: dict[tuple[str, str], list[float]] = collections.defaultdict(
         lambda: [0.0, 0.0, 0.0])
     seen_names: collections.Counter = collections.Counter()
+    # ★ 원장에서 **2월 기준 충전기 수**를 뽑는다 — (휴게소, 충전기ID) 의 가짓수.
+    #   이게 그 세션들을 실제로 만든 충전기 대수다. 2026-09 API 덤프로 역추정하던
+    #   것을 대체한다 (2월↔9월 사이에 구성이 바뀌므로 그 추정은 틀릴 수 있었다)
+    units: dict[str, set[str]] = collections.defaultdict(set)
+    unit_kw: dict[str, collections.Counter] = collections.defaultdict(
+        collections.Counter)
     seollal_starts: collections.Counter = collections.Counter()
     seollal_occ = 0.0
 
@@ -260,6 +266,10 @@ def main() -> int:
 
             kept += 1
             seen_names[cells[idx["충전소명"]].strip()] += 1
+            if SEOLLAL[0] <= start < SEOLLAL[1]:
+                cid = cells[idx["충전기ID"]].strip()
+                units[sid].add(f"{cells[idx['충전소명']].strip()}#{cid}")
+                unit_kw[sid][cells[idx["충전기용량(KW)"]].strip()] += 1
 
             # 시작 건수 — 시작 시각의 날짜
             daily[(start.date().isoformat(), sid)][0] += 1
@@ -317,6 +327,28 @@ def main() -> int:
 
     if args.verify_only:
         return 0
+
+    # --- 휴게소 요약 (2월 충전기 수 포함) -----------------------------------
+    summ = ROOT / args.out.replace(".csv", "__stations.csv")
+    summ.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(f"file:{default_db_path()}?mode=ro", uri=True) as con:
+        db_units = dict(con.execute(
+            "SELECT s.station_id, SUM(c.n_units) FROM station s JOIN charger c "
+            "ON c.station_id = s.station_id WHERE c.is_active = 1 GROUP BY 1"))
+    with summ.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["station_id", "name", "direction", "starts_seollal",
+                    "ledger_chargers_feb", "db_chargers_sep", "ledger_share",
+                    "starts_per_charger_day", "kw_mix"])
+        for sid, st in sorted(seollal_starts.items(), key=lambda x: -x[1]):
+            n_led = len(units.get(sid, ()))
+            n_db = int(db_units.get(sid, 0) or 0)
+            mix = " + ".join(f"{k}x{v}" for k, v in
+                             unit_kw.get(sid, collections.Counter()).most_common(3))
+            w.writerow([sid, names.get(sid, sid), dirs.get(sid, "?"), st, n_led,
+                        n_db, f"{n_led / n_db:.3f}" if n_db else "",
+                        f"{st / n_led / 10:.2f}" if n_led else "", mix])
+    print(f"  휴게소 요약 → {summ}")
 
     out = ROOT / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
