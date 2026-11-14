@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from evdt.engine.ledger import Arrival  # queue_rule 의 호출자를 늘리지 않는다 (test_queue_rule)
@@ -69,6 +69,15 @@ ESCAPE_ALT = "__escape__"
 
 #: 이탈 판정 방식 (MnlSettings.escape_mode)
 ESCAPE_MODES = ("s0", "noisy")
+
+#: 지각 충전 출력의 통계. `charger_powers_kw` 는 **개별 충전기** 목록이라
+#: `mean` 이 대수 가중 평균이다.
+POWER_STATS: dict[str, Callable[[tuple[float, ...]], float]] = {
+    "max": max,
+    "mean": lambda p: sum(p) / len(p),
+    "p50": lambda p: sorted(p)[len(p) // 2],
+    "min": min,
+}
 
 #: 해시 흐름 이름. 같은 (seed, ev_id) 라도 흐름이 다르면 독립이다
 TASTE_STREAM = "mnl_taste"
@@ -102,6 +111,32 @@ class MnlSettings:
     seed: int = 0
     #: 이탈 판정 방식. "s0" = 잡음 없이 S0 규칙 (기본) · "noisy" = 이탈에도 ε (민감도)
     escape_mode: str = "s0"
+    #: ★ **운전자가 지각하는 충전 출력** (#T2).
+    #:
+    #:   "max"   그 휴게소의 **가장 빠른** 충전기 (S0 와 같다. 기본값 — 되돌림 없음)
+    #:   "mean"  대수 가중 평균      "p50" 중위      "min" 가장 느린 것
+    #:
+    #: 왜 손잡이가 필요한가 — `max` 는 **큰 휴게소를 과대평가한다.** 언양은
+    #: `1x100 + 9x200 + 2x260 + 3x350 + 4x360` 인데 `max` 로 보면 **360kW 짜리
+    #: 휴게소**다. 느린 기계가 18대 있어도 상관없다. `MAX_POWER_IDLE` 로 빈 것 중
+    #: 가장 빠른 것을 쓰는 것은 맞지만, **붐빌 때는 남는 것을 쓴다.**
+    #:
+    #: ⚠ 이것은 **선택의 비용**에만 들어간다. 이탈 판정(`escape_mode="s0"`)과
+    #:   실제 충전 시간은 그대로 `max` 다 — 그래야 "S0 와 같은 판정" 이 유지된다.
+    #:
+    #: ⚠⚠ **차량 `vmax_kw` 가 이 손잡이를 상당히 가린다.** 우리 선단의 최대는
+    #:   250 kW 다 (mini 100 · compact 128 · mid800v 235 · large800v 240 ·
+    #:   import 250). 충전 속도는 min(충전기, 차량, 곡선) 이므로
+    #:
+    #:     언양 1x100+9x200+2x260+3x350+4x360 → max 360 · mean 258
+    #:          둘 다 차량 한도(≤250) 위 → **차이 없음**
+    #:     김천 2x50+1x100+8x200+2x350       → max 350 · mean 192
+    #:          max 는 한도에 걸리고 mean 은 안 걸림 → **23% 느려짐**
+    #:
+    #:   즉 `mean` 은 **출력이 섞인 중간 휴게소만** 느리게 보이게 하고, 균일하게
+    #:   높은 큰 휴게소는 그대로 둔다. 과대 배정을 바로잡는 방향이 **아닐 수
+    #:   있다** — 그래서 T2 는 자유모수 0개로 **먼저 재 보는** 티켓이다.
+    power_stat: str = "max"
 
     def __post_init__(self) -> None:
         if not self.theta > 0:
@@ -110,6 +145,14 @@ class MnlSettings:
             raise ValueError(f"wait_weight 는 음수일 수 없다: {self.wait_weight}")
         if self.escape_mode not in ESCAPE_MODES:
             raise ValueError(f"escape_mode 는 {ESCAPE_MODES} 중 하나: {self.escape_mode!r}")
+        if self.power_stat not in POWER_STATS:
+            raise ValueError(
+                f"power_stat 은 {sorted(POWER_STATS)} 중 하나: {self.power_stat!r}")
+
+    def perceived_kw(self, powers: tuple[float, ...]) -> float:
+        """이 운전자가 그 휴게소의 충전 출력을 얼마로 보나."""
+
+        return POWER_STATS[self.power_stat](powers)
 
     def noise(self, ev_id: str, alt: str) -> float:
         """인지 비용에서 빼는 값 ε/θ (분). θ = inf 면 0."""
@@ -169,14 +212,25 @@ class MnlPolicy(S0Policy):
             if soc_out <= soc_in + SOC_EPS:
                 continue
 
-            charge_min = charge_time_min(
-                soc_from=soc_in, soc_to=soc_out, battery_kwh=ev.battery_kwh,
-                vmax_kw=ev.vmax_kw, charger_kw=max(st.charger_powers_kw),
-                curve=ev.curve, charge_power_factor=world.cold_factor,
-            )
+            def _charge_min(kw: float, *, _si=soc_in, _so=soc_out, _ev=ev) -> float:
+                return charge_time_min(
+                    soc_from=_si, soc_to=_so, battery_kwh=_ev.battery_kwh,
+                    vmax_kw=_ev.vmax_kw, charger_kw=kw,
+                    curve=_ev.curve, charge_power_factor=world.cold_factor,
+                )
+
+            # ★ 두 값을 가른다 (#T2):
+            #   `charge_min`     가장 빠른 충전기 기준. **S0 와 같은 값**이므로
+            #                    이탈 판정(`s0_best`)은 이것으로 한다
+            #   `perceived_min`  운전자가 지각하는 출력 기준. **선택의 비용**에만
+            #                    들어간다. `power_stat="max"` 면 둘이 같다
+            charge_min = _charge_min(max(st.charger_powers_kw))
             s0_best = min(s0_best, st.wait_min + charge_min)
+            perceived_min = (
+                charge_min if self.mnl.power_stat == "max"
+                else _charge_min(self.mnl.perceived_kw(st.charger_powers_kw)))
             # ★ MNL 의 전부: S0 의 비용에 대기 가중치를 걸고, 이 사람의 ε 를 뺀다
-            cost = (self.mnl.wait_weight * st.wait_min + charge_min
+            cost = (self.mnl.wait_weight * st.wait_min + perceived_min
                     - self.mnl.noise(ev.ev_id, st.station_id))
 
             if cost < best_cost:

@@ -66,7 +66,13 @@ from evdt.engine.forecast import (  # noqa: E402
     OracleSource,
     describe_shift,
 )
-from evdt.engine.mnl import ESCAPE_MODES, MnlPolicy, MnlSettings, background_settings  # noqa: E402
+from evdt.engine.mnl import (  # noqa: E402
+    ESCAPE_MODES,
+    POWER_STATS,
+    MnlPolicy,
+    MnlSettings,
+    background_settings,
+)
 from evdt.engine.participation import (  # noqa: E402
     NONPART_INFO,
     NonParticipantAwareForecast,
@@ -265,7 +271,8 @@ def run_cell(world: World, stage: str, *, p: float, mnl: MnlSettings,
     row = {
         "seed": seed, "family": "classic" if classic else "mnl", "cell": cell,
         "stage": stage, "p": 1.0 if classic else (0.0 if stage == BASE else p),
-        "theta": mnl.theta, "wait_weight": mnl.wait_weight, "escape_mode": mnl.escape_mode,
+        "theta": mnl.theta, "wait_weight": mnl.wait_weight,
+        "escape_mode": mnl.escape_mode, "power_stat": mnl.power_stat,
         "n_ev_charging": len(trip_ids), "n_participants": len(part),
         "dwell_total_h": dwell_h, "n_escaped": n_esc,
         "n_escaped_balked": sum(1 for r in escapes if r["reason"] == "balked"),
@@ -515,6 +522,10 @@ def main() -> int:
                     help="MNL 척도 (1/분). 기본은 추석 보정 채택값 0.05 "
                          "(docs/data_validation/mnl_calibration_168.md). inf 면 S0 와 같다")
     ap.add_argument("--wait-weight", type=float, default=1.0)
+    ap.add_argument("--power-stat", choices=sorted(POWER_STATS), default="max",
+                    help="운전자가 지각하는 충전 출력 (#T2). max = 가장 빠른 충전기 "
+                         "(기본 · S0 와 같다) · mean = 대수 가중 평균 · p50 · min. "
+                         "`max` 는 느린 기계가 많은 큰 휴게소를 과대평가한다")
     ap.add_argument("--escape-mode", choices=ESCAPE_MODES, default="s0",
                     help="이탈 판정: s0 = 잡음 없이 S0 규칙 (기본) · noisy = 이탈에도 잡음 (#168 첫 실행 방식, 민감도)")
     ap.add_argument("--nonpart-info", choices=NONPART_INFO, default="none",
@@ -573,6 +584,7 @@ def main() -> int:
         "oracle_rounds_max": args.rounds, "floor_only": args.floor_only,
         "nonpart_info": args.nonpart_info,
         "observed_strength": args.strength, "s3_window": args.s3_window,
+        "power_stat": args.power_stat,
         "escape_cost_min": cfg0.demand.escape_cost_min, "data_root": str(root),
         "db_path": str(default_db_path()), "git": _git_sha(),
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -586,7 +598,7 @@ def main() -> int:
     print(f"수요: {cfg0.demand_label}\n출력: {out}\n")
 
     mnl_kw = {"theta": args.theta, "wait_weight": args.wait_weight,
-              "escape_mode": args.escape_mode}
+              "escape_mode": args.escape_mode, "power_stat": args.power_stat}
     rows: list[dict] = []
     ue_unconverged: list[int] = []
 

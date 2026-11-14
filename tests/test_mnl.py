@@ -462,3 +462,103 @@ def test_oracle_forecast_shows_past_non_participants_only():
         "np_late", "p_late"]
     assert fc.arrivals_between("B", after_min=0.0, before_min=10.0) == ()
     assert fc.round_no == inner.round_no                              # 나머지는 위임
+
+
+# ---------------------------------------------------------------------------
+# T2 — 지각 충전 출력 (`power_stat`)
+# ---------------------------------------------------------------------------
+
+
+def _mixed(sid: str, specs: list[tuple[float, int]]) -> StationSpec:
+    """출력이 섞인 휴게소 — `max` 와 `mean` 이 달라지는 자리."""
+
+    return StationSpec(
+        station_id=sid, lat=36.0, lon=127.0,
+        chargers=expand_chargers([
+            {"charger_id": f"{sid}_{kw:.0f}", "power_kw": kw, "n_units": n}
+            for kw, n in specs]),
+    )
+
+
+def test_power_stat_max_is_the_old_behaviour() -> None:
+    """★ 되돌림이 없어야 한다 — `max` 가 기본이고, 전과 **한 글자도 다르지 않다**.
+
+    기존 측정값(설 격자·추석 바닥)이 전부 `max` 로 재어졌다. 기본값이 바뀌면
+    그 값들과 새 값을 나란히 놓을 수 없다.
+    """
+
+    assert MnlSettings().power_stat == "max"
+    stations = [_mixed("A", [(100.0, 1), (350.0, 3)]), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    old = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1)))
+    new = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(),
+                         mnl=MnlSettings(theta=0.05, seed=1, power_stat="max")))
+    assert _key(old) == _key(new)
+
+
+def test_perceived_power_follows_the_statistic() -> None:
+    """`charger_powers_kw` 는 **개별 충전기** 목록이라 mean 이 대수 가중이다."""
+
+    powers = (100.0, 350.0, 350.0, 350.0)          # 1x100 + 3x350
+    assert MnlSettings(power_stat="max").perceived_kw(powers) == 350.0
+    assert MnlSettings(power_stat="min").perceived_kw(powers) == 100.0
+    assert MnlSettings(power_stat="mean").perceived_kw(powers) == pytest.approx(287.5)
+    assert MnlSettings(power_stat="p50").perceived_kw(powers) == 350.0
+
+
+def test_mean_changes_the_choice_when_powers_are_mixed() -> None:
+    """출력이 섞인 휴게소에서 `mean` 은 `max` 와 **다른 선택**을 낸다.
+
+    섞이지 않았으면 (모든 충전기가 같은 출력) 둘이 같아야 한다 — 그래야
+    "손잡이가 엉뚱한 데서 작동한다" 는 걱정이 없다.
+    """
+
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(40)
+
+    # ★ 출력을 차량 `vmax_kw`(200) **아래로** 둔다. 위로 두면 둘 다 차량 한도에
+    #   걸려서 같은 충전 시간이 나오고, 손잡이가 작동하는지 알 수 없다.
+    #   실제 선단도 최대 250 kW 라 350/360 kW 충전기에서는 이 손잡이가 거의
+    #   안 먹는다 (`MnlSettings.power_stat` 의 설명 참조)
+    #   그리고 **순위가 뒤집히도록** 격차를 크게 둔다. max 190 vs mean 110 이면
+    #   A 의 지각 충전시간이 B(150kW)보다 빨랐다가 느려진다
+    mixed = [_mixed("A", [(30.0, 1), (190.0, 1)]), _spec("B", 150.0)]
+    a = _run(fleet, mixed, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="max")))
+    b = _run(fleet, mixed, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="mean")))
+    assert _key(a) != _key(b), "출력이 섞였는데 지각 출력을 바꿔도 선택이 같다"
+
+    flat = [_mixed("A", [(190.0, 2)]), _spec("B", 150.0)]
+    c = _run(fleet, flat, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="max")))
+    d = _run(fleet, flat, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="mean")))
+    assert _key(c) == _key(d), "출력이 다 같은데 max 와 mean 이 다른 결과를 낸다"
+
+
+def test_the_escape_rule_still_uses_the_real_fastest_charger() -> None:
+    """★ 지각 출력은 **선택의 비용**에만 들어간다.
+
+    이탈 판정(`escape_mode="s0"`)은 "S0 와 같은 판정" 이어야 한다. 거기에
+    지각 출력을 넣으면 S0 와 MNL 의 이탈이 달라져서, 이탈 수 맞춤(기준 2)이
+    선택 모형 탓인지 지각 출력 탓인지 못 가른다.
+    """
+
+    import inspect
+
+    from evdt.engine import mnl as m
+
+    src = inspect.getsource(m.MnlPolicy)
+    assert "s0_best = min(s0_best, st.wait_min + charge_min)" in src, (
+        "`s0_best` 가 지각 출력을 쓰고 있다 — 이탈 판정은 실제 최고 출력으로 한다")
+    assert "perceived_min" in src
+
+
+def test_an_unknown_power_stat_is_refused() -> None:
+    with pytest.raises(ValueError, match="power_stat"):
+        MnlSettings(power_stat="median")
