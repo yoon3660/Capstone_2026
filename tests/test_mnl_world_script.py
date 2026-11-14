@@ -74,3 +74,35 @@ def test_the_summary_says_how_many_seeds_the_ue_metric_used() -> None:
     assert "closed_to_ue_n_seeds" in ast.literal_eval(show.value), (
         "`SHOW` 에 `closed_to_ue_n_seeds` 가 없다 — CSV 에만 있고 화면에는 "
         "안 뜨면 못 본다")
+
+
+def test_the_ladder_refuses_a_participation_it_cannot_honor(tmp_path) -> None:
+    """★ 사다리는 참여율을 **run_id 에만** 쓴다 — 그래서 받으면 안 된다.
+
+    `runner.run_once` 안에서 `cfg.policy.participation` 이 쓰이는 곳은
+    `make_run_id` 하나뿐이다. 물리에는 한 줄도 닿지 않는다. 그래서 config 에
+    `participation: 0.6` 을 적으면 **이름만 다른, 내용이 똑같은 run** 이 나온다.
+
+    그걸 결과로 읽으면 "참여율 60% 에서도 효과가 같다" 는 **완전히 틀린 결론**이
+    조용히 나온다. 발표 §8-4 가 바로 그 질문이라 특히 위험하다 (2026-11-14).
+
+    참여율은 `engine.participation.ParticipationPolicy` 에 있고 그것을 쓰는 것은
+    `scripts/run_mnl_world.py --p` 뿐이다. 그쪽으로 보낸다.
+    """
+
+    import dataclasses
+
+    import pytest
+
+    from evdt.runner import load_config, run_once
+
+    cfg = load_config("config/scenario_chuseok_up_congested.yaml", stage="S0")
+    cfg = dataclasses.replace(
+        cfg, policy=dataclasses.replace(cfg.policy, participation=0.6))
+
+    # `runs_dir=tmp_path` — 가드가 쓰기 전에 멈추지만, 정적 검사
+    # (`test_no_test_writes_into_the_real_runs_dir`) 는 호출만 보고 걸러낸다.
+    # 그 검사가 옳다: 가드가 나중에 느슨해지면 이 테스트가 진짜 run 을 덮는다
+    with pytest.raises(ValueError, match="참여율"):
+        run_once(cfg, seed=1, overwrite=True, log=lambda *_: None,
+                 runs_dir=tmp_path)

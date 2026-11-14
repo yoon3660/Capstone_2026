@@ -748,6 +748,23 @@ def run_once(
     if seed is not None:
         cfg = with_seed(cfg, seed)
 
+    # ★ **참여율은 이 경로에 구현되어 있지 않다.** `cfg.policy.participation` 은
+    #   아래에서 `make_run_id` 를 만들 때만 쓰이고, 물리에는 한 줄도 닿지 않는다.
+    #   그래서 config 에 `participation: 0.6` 을 적으면 **이름만 다른, 내용이
+    #   똑같은 run** 이 나온다. 그걸 결과로 읽으면 "참여율 60% 에서도 효과가
+    #   같다" 는 **완전히 틀린 결론**이 조용히 나온다 (2026-11-14).
+    #
+    #   참여율은 `engine.participation.ParticipationPolicy` 에 있고, 그것을 쓰는
+    #   것은 `scripts/run_mnl_world.py` 뿐이다 (`--p`). 부분 참여 실험은 거기서 한다.
+    if cfg.policy.participation != 1.0:
+        raise ValueError(
+            f"참여율 {cfg.policy.participation} 로는 사다리를 돌릴 수 없다 — "
+            "`runner` 는 참여율을 **run_id 에만** 쓰고 물리에는 반영하지 않는다. "
+            "그대로 돌면 물리가 똑같은 run 이 다른 이름으로 저장돼, 부분 참여를 "
+            "잰 것처럼 보이는 틀린 결과가 된다. 부분 참여는 "
+            "`scripts/run_mnl_world.py --p <값> --nonpart-info present` 로 잰다 "
+            "(#168 결정 문서 조건 ②)")
+
     check_queue_config(cfg.queue.discipline, cfg.queue.charger_select)
     db = Path(db_path) if db_path is not None else default_db_path()
     runs = Path(runs_dir) if runs_dir is not None else RUNS_DIR
