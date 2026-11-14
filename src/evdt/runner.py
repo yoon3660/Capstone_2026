@@ -621,6 +621,74 @@ SOLVER_CODE: dict[str, float] = {"local": 0.0, "exact": 1.0, "milp": 2.0}
 SCOPE_CODE: dict[str, float] = {"group": 0.0, "feasible": 1.0, "all": 2.0}
 
 
+def _apply_charger_delta(charger_rows: list[dict], cfg: ScenarioConfig,
+                         log: Log) -> list[dict]:
+    """`supply.charger_delta` 만큼 충전기 행을 더한다 (#8-2 증설 랭킹).
+
+    증설분은 **휴게소마다 같은 사양**(`charger_delta_kw`)으로 한 행에 몰아
+    넣는다. `expand_chargers` 가 `n_units` 를 개별 충전기로 펼친다.
+
+    ★ 없는 휴게소에 놓으려 하면 **멈춘다.** 오타 하나로 "증설했는데 아무 일도
+      일어나지 않은" run 이 나오고, 그 결과는 대조군과 구별되지 않는다.
+    """
+
+    delta = cfg.supply.charger_delta
+    if not delta:
+        return charger_rows
+
+    known = {str(r["station_id"]) for r in charger_rows}
+    missing = sorted(set(delta) - known)
+    if missing:
+        raise ValueError(
+            f"증설하려는 휴게소가 이 코리도에 없다: {missing} "
+            f"(코리도 {cfg.corridor_id}). 오타면 증설이 조용히 무효가 되고, "
+            "그 run 은 대조군과 구별되지 않는다")
+
+    kw = float(cfg.supply.charger_delta_kw)
+    added = [
+        {"charger_id": f"{sid}_added{kw:g}kw", "station_id": sid,
+         "power_kw": kw, "n_units": int(n), "is_active": 1}
+        for sid, n in sorted(delta.items())
+    ]
+    log("  ★ 증설 — " + " · ".join(
+        f"{sid.rsplit('_', 1)[-1]} +{n}기" for sid, n in sorted(delta.items()))
+        + f" @{kw:g}kW (합 {sum(delta.values())}기)")
+    return [*charger_rows, *added]
+
+
+def with_charger_delta(cfg: ScenarioConfig, delta: Mapping[str, int], *,
+                       power_kw: float = 100.0) -> ScenarioConfig:
+    """충전기를 더 놓은 세계. **scenario_id 에 꼬리표가 붙는다** (#8-2 증설 랭킹).
+
+        cfg2 = with_charger_delta(cfg, {"gyeongbu_up_a00069": 3})
+        cfg2.scenario_id            # ...__addch-a00069x3-100kw
+
+    `with_stage` 와 반대로 **이것은 세계를 바꾼다.** 공급이 달라지면 같은 차가
+    다른 결과를 낸다. run_id 는 (시나리오, 스테이지, 시드, 참여율) 뿐이라 이름을
+    안 갈면 **기존 run 을 조용히 덮어쓴다** (#123). 그래서 꼬리표를 **여기서**
+    붙인다 — 부르는 쪽이 잊을 수 있는 일로 두지 않는다.
+
+    꼬리표는 증설 내용에서 만든다. 그래서 폴더 이름만 보고 "어느 휴게소에 몇 대를
+    몇 kW 로 놓은 run 인가" 를 되읽을 수 있다.
+    """
+
+    if not delta:
+        raise ValueError("증설이 비었다 — 바꿀 게 없으면 원래 cfg 를 그대로 쓸 것")
+
+    data = yaml.safe_load(cfg.raw_yaml)
+    data["supply"] = {"charger_delta": {str(k): int(v) for k, v in delta.items()},
+                      "charger_delta_kw": float(power_kw)}
+
+    # 꼬리표: 휴게소 id 의 **끝 토큰**만 쓴다 (`gyeongbu_up_a00069` → `a00069`).
+    # 전체를 쓰면 이름이 run_id 길이를 넘어 읽을 수 없게 된다
+    parts = "-".join(f"{str(sid).rsplit('_', 1)[-1]}x{int(n)}"
+                     for sid, n in sorted(delta.items()))
+    tag = f"addch-{parts}-{power_kw:g}kw"
+    data["scenario_id"] = f"{cfg.scenario_id}__{tag}"
+    data["label"] = f"{cfg.label} [증설 {parts} @{power_kw:g}kW]"
+    return ScenarioConfig.from_dict(data, source=f"{cfg.source_path}#{tag}")
+
+
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
     """같은 세계를 다른 스테이지로. **scenario_id 는 바꾸지 않는다.**
 
@@ -775,6 +843,8 @@ def run_once(
         corridor_end_km = float(conn.execute(
             "SELECT length_km FROM corridor WHERE corridor_id = ?", (cfg.corridor_id,)
         ).fetchone()[0])
+
+    charger_rows = _apply_charger_delta(charger_rows, cfg, log)
 
     specs = station_specs(station_rows, charger_rows)
     chargers = {s.station_id: s.chargers for s in specs}

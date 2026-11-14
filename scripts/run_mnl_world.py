@@ -124,6 +124,11 @@ def prepare(cfg, seed: int, *, root: Path, log: Callable[[str], None]) -> World:
             "SELECT length_km FROM corridor WHERE corridor_id = ?", (cfg.corridor_id,)
         ).fetchone()[0])
 
+    # ★ 증설(`supply.charger_delta`)을 **여기서도** 적용한다. 이 함수는
+    #   `run_once` 의 준비 부분을 베껴 온 것이라, 한쪽만 고치면 MNL 바닥은
+    #   증설을 조용히 무시하고 사다리만 반영하게 된다 (2026-11-14)
+    charger_rows = R._apply_charger_delta(charger_rows, cfg, log)
+
     specs = R.station_specs(station_rows, charger_rows)
     chargers = {s.station_id: s.chargers for s in specs}
     stations = [r for r in station_rows if r["station_id"] in chargers]

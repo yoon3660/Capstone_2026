@@ -414,6 +414,30 @@ class PolicyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SupplyConfig:
+    """충전기 **증설** 실험 (#8-2 증설 랭킹). 기본은 "DB 그대로" 다.
+
+        supply:
+          charger_delta: {gyeongbu_up_a00069: 3}
+          charger_delta_kw: 100.0
+
+    왜 config 에 두는가 — `run_once` 의 인자로 받으면 **run_id 에 안 들어간다.**
+    run_id 는 (시나리오, 스테이지, 시드, 참여율) 뿐이라, 충전기를 바꿔 돌려도
+    이름이 같아서 기존 run 을 조용히 덮어쓴다 (#123 과 같은 고장). config 에
+    있으면 `scenario` 테이블과 `runs/<run_id>/config.yaml` 에 그대로 남고,
+    `runner.with_charger_delta` 가 scenario_id 에 꼬리표를 붙인다.
+
+    증설분은 **휴게소마다 같은 사양**이어야 한다 — 그래야 "안성에 1대 vs 칠곡에
+    3대" 가 배치의 비교가 된다. 사양이 다르면 출력을 비교하는 셈이 된다.
+    """
+
+    #: 휴게소 id → 더 놓을 대수. 빈 사전이면 DB 그대로다
+    charger_delta: dict[str, int] = field(default_factory=dict)
+    #: 더 놓는 충전기의 출력 (kW). 이동형 급속 충전기를 100 kW 로 둔다
+    charger_delta_kw: float = 100.0
+
+
+@dataclass(frozen=True, slots=True)
 class QueueConfig:
     discipline: str
     charger_select: str
@@ -453,6 +477,9 @@ class ScenarioConfig:
     source_path: str
     raw_yaml: str
     config_hash: str
+
+    #: 충전기 증설 실험. 기본은 "DB 그대로" — 기존 config 는 한 줄도 안 바뀐다
+    supply: SupplyConfig = field(default_factory=SupplyConfig)
 
     # -- 생성 ---------------------------------------------------------------
     @classmethod
@@ -705,6 +732,29 @@ class ScenarioConfig:
                 f"(받은 값: {participation})",
             )
 
+        # supply — 충전기 증설 실험. 없으면 "DB 그대로" ------------------------
+        sup = data.get("supply") or {}
+        if not isinstance(sup, dict):
+            e.add("supply", "매핑이어야 한다")
+            sup = {}
+        for key in sup:
+            if key not in {"charger_delta", "charger_delta_kw"}:
+                e.add(f"supply.{key}", "알 수 없는 키다 (오타인지 확인)")
+        raw_delta = sup.get("charger_delta") or {}
+        if not isinstance(raw_delta, dict):
+            e.add("supply.charger_delta", "휴게소 id → 대수 의 매핑이어야 한다")
+            raw_delta = {}
+        charger_delta: dict[str, int] = {}
+        for sid, n in raw_delta.items():
+            if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+                e.add(f"supply.charger_delta.{sid}",
+                      f"1 이상의 정수여야 한다: {n!r} (대수를 줄이는 실험은 "
+                      "없는 충전기로 대기를 계산하게 되므로 막는다)")
+                continue
+            charger_delta[str(sid)] = n
+        charger_delta_kw = e.number(sup.get("charger_delta_kw", 100.0),
+                                    "supply.charger_delta_kw", lo=1.0)
+
         # queue ------------------------------------------------------------
         q = data.get("queue") or {}
         if not isinstance(q, dict):
@@ -739,6 +789,7 @@ class ScenarioConfig:
         known_top = {
             "scenario_id", "label", "corridor_id", "direction", "day_type",
             "time", "demand", "vehicles", "environment", "policy", "queue", "output",
+            "supply",
         }
         for key in data:
             if key not in known_top:
@@ -791,6 +842,8 @@ class ScenarioConfig:
             queue=QueueConfig(discipline, charger_select), # type: ignore[arg-type]
             output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min,  # type: ignore[arg-type]
                                 ctm_warmup_min),  # type: ignore[arg-type]
+            supply=SupplyConfig(charger_delta=charger_delta,
+                                charger_delta_kw=charger_delta_kw),  # type: ignore[arg-type]
             source_path=source_path,
             raw_yaml=raw_yaml,
             config_hash=hashlib.sha256(raw_yaml.encode("utf-8")).hexdigest()[:16],
