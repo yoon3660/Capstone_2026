@@ -111,6 +111,8 @@ def main() -> int:
     ap.add_argument("--seeds", default="1-10")
     ap.add_argument("--mnl-dir",
                     default="runs/mnl_world/chuseok_congested_floor/theta0p05_w1p0")
+    ap.add_argument("--top", type=int, default=0,
+                    help="첫 칸 기준 상위 N 곳만 크게. 0 이면 `--min-wait` 로 거른다")
     ap.add_argument("--min-wait", type=float, default=1.0,
                     help="첫 칸 대기가 이 아래인 휴게소는 줄에서 빼고 각주로 적는다. "
                          "0 분짜리 줄이 그림 절반을 먹으면 봉우리가 안 보인다")
@@ -143,8 +145,12 @@ def main() -> int:
     #   "고르게 됐다" 의 분모가 바뀌어 다른 주장이 된다 (전체 10.5 → 3.2 가
     #   거른 뒤에는 9.8 → 3.5 로 보인다)
     full = frame
-    quiet = frame[frame[frame.columns[0]] < args.min_wait]
-    frame = frame[frame[frame.columns[0]] >= args.min_wait]
+    if args.top:
+        quiet = frame.iloc[:-args.top]
+        frame = frame.tail(args.top)
+    else:
+        quiet = frame[frame[frame.columns[0]] < args.min_wait]
+        frame = frame[frame[frame.columns[0]] >= args.min_wait]
 
     # --- 표 (대비 WARN 의 구제책 겸 검산) -----------------------------------
     keys = list(full.columns)
@@ -167,7 +173,9 @@ def main() -> int:
     cols = SERIES_DARK if args.dark else SERIES
     _korean_font(plt)
     n = len(frame)
-    fig, ax = plt.subplots(figsize=(11.2, 0.46 * n + 2.4))
+    big = n <= 6                      # 줄이 적으면 슬라이드용으로 키운다
+    fs = 15.0 if big else 10.5
+    fig, ax = plt.subplots(figsize=(11.2, (0.92 if big else 0.46) * n + 2.6))
     fig.patch.set_facecolor(C["surface"])
     ax.set_facecolor(C["surface"])
 
@@ -175,13 +183,14 @@ def main() -> int:
     lo = frame[keys].min(axis=1).to_numpy()
     hi = frame[keys].max(axis=1).to_numpy()
     # 항목 안에서만 잇는다 — 휴게소 **사이** 를 잇지 않는다
-    ax.hlines(y, lo, hi, color=C["rule"], linewidth=2.0, zorder=1)
+    ax.hlines(y, lo, hi, color=C["rule"], linewidth=3.0 if big else 2.0, zorder=1)
 
     for i, k in enumerate(keys):
         # 겹친 점에 바탕색 테두리를 둘러 앞뒤를 가른다. 2px 는 이 크기에서
         # 초승달처럼 깨져 보여서 1.4px 로 낮췄다
-        ax.scatter(frame[k], y, s=104, color=cols[i], zorder=3 + i,
-                   edgecolors=C["surface"], linewidths=1.4, label=k)
+        ax.scatter(frame[k], y, s=250 if big else 104, color=cols[i], zorder=3 + i,
+                   edgecolors=C["surface"], linewidths=2.0 if big else 1.4,
+                   label=k)
 
     # 직접 라벨 — 청록의 배경 대비가 3:1 아래라 **의무**다.
     # ★ **그 줄의 최소·최대 점**에 바깥쪽으로 붙인다. 처음에는 "첫 칸은 오른쪽,
@@ -202,7 +211,7 @@ def main() -> int:
                         color=C["ink2"], zorder=9)
 
     ax.set_yticks(y)
-    ax.set_yticklabels(frame.index, fontsize=10.5, color=C["ink"])
+    ax.set_yticklabels(frame.index, fontsize=fs, color=C["ink"])
     ax.set_xlabel("휴게소별 평균 대기 (분)", fontsize=10.5, color=C["ink2"])
     top = float(frame[keys].to_numpy().max())
     ax.set_xlim(-top * 0.085, top * 1.17)
@@ -227,12 +236,18 @@ def main() -> int:
         textcoords="offset points", fontsize=10, color=C["ink2"])
 
     if len(quiet):
+        # ★ 각주는 **거른 방식에 맞춰** 쓴다. `--top` 으로 자른 뒤에도
+        #   "1분 미만" 이라고 적으면 거짓말이 된다 (상위 5곳만 남기면 나머지에
+        #   경산 12.9분이 들어 있다)
+        worst_nm = str(quiet[keys[0]].idxmax())
         worst = float(quiet[keys[0]].max())
-        ax.annotate(
-            f"나머지 {len(quiet)}곳은 {keys[0]} 기준 {args.min_wait:g}분 미만 "
-            f"(가장 큰 곳 {worst:.1f}분) — 막히는 곳은 몇 곳뿐이다",
-            xy=(0, 0), xycoords="axes fraction", xytext=(0, -46),
-            textcoords="offset points", fontsize=9.5, color=C["ink2"])
+        note = (f"나머지 {len(quiet)}곳은 그림에서 뺐다 — 가장 큰 곳이 "
+                f"{worst_nm} {worst:.1f}분"
+                if args.top else
+                f"나머지 {len(quiet)}곳은 {keys[0]} 기준 {args.min_wait:g}분 미만 "
+                f"(가장 큰 곳 {worst_nm} {worst:.1f}분) — 막히는 곳은 몇 곳뿐이다")
+        ax.annotate(note, xy=(0, 0), xycoords="axes fraction", xytext=(0, -46),
+                    textcoords="offset points", fontsize=9.5, color=C["ink2"])
 
     leg = ax.legend(loc="lower right", frameon=False, fontsize=11,
                     handletextpad=0.4, borderaxespad=1.2)
