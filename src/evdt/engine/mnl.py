@@ -137,6 +137,21 @@ class MnlSettings:
     #:   높은 큰 휴게소는 그대로 둔다. 과대 배정을 바로잡는 방향이 **아닐 수
     #:   있다** — 그래서 T2 는 자유모수 0개로 **먼저 재 보는** 티켓이다.
     power_stat: str = "max"
+    #: ★ **휴게소 고정효과 (ASC)** — station_id → 분. 비용에 그대로 더한다.
+    #:
+    #:   양수면 "그 휴게소를 그만큼 더 멀게 느낀다" (덜 간다)
+    #:   음수면 "그만큼 더 가깝게 느낀다" (더 간다)
+    #:
+    #: 용량·출력·위치로 설명되지 않는 선호를 담는다. 천안삼거리는 바로 옆
+    #: 입장거봉포도와 충전기 수·출력이 같은데 실측 점유가 2.4:1 이다 — 그 차이를
+    #: 낼 수 있는 항이 이것뿐이다.
+    #:
+    #: ⚠ **식별**: 전체에 같은 값을 더해도 선택이 안 바뀐다 (argmin 이므로).
+    #:   그래서 적합기가 매 번 평균을 0 으로 맞춘다.
+    #: ⚠ 이것도 `power_stat` 과 같이 **선택의 비용에만** 들어간다. 이탈 판정
+    #:   (`escape_mode="s0"`)은 ASC 없는 비용으로 한다 — 그래야 "S0 와 같은
+    #:   판정" 이 유지되고, 이탈 수 맞춤이 ASC 탓인지 아닌지 가를 수 있다
+    asc: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.theta > 0:
@@ -231,6 +246,7 @@ class MnlPolicy(S0Policy):
                 else _charge_min(self.mnl.perceived_kw(st.charger_powers_kw)))
             # ★ MNL 의 전부: S0 의 비용에 대기 가중치를 걸고, 이 사람의 ε 를 뺀다
             cost = (self.mnl.wait_weight * st.wait_min + perceived_min
+                    + self.mnl.asc.get(st.station_id, 0.0)
                     - self.mnl.noise(ev.ev_id, st.station_id))
 
             if cost < best_cost:

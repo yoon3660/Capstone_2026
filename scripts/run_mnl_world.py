@@ -539,6 +539,9 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--asc", default=None,
+                    help="휴게소 고정효과 JSON (station_id -> 분). "
+                         "`scripts/fit_asc.py` 가 만든 asc.json 을 준다")
     ap.add_argument("--habit-soc", type=float, default=None,
                     help="습관 목표 SoC (#82). 0 이면 '목적지까지 갈 만큼만' 이고, "
                          "그게 지금 기본값이라 차들이 조금씩 자주 찍는다. "
@@ -644,7 +647,7 @@ def main() -> int:
         "oracle_rounds_max": args.rounds, "floor_only": args.floor_only,
         "nonpart_info": args.nonpart_info,
         "observed_strength": args.strength, "s3_window": args.s3_window,
-        "power_stat": args.power_stat,
+        "power_stat": args.power_stat, "asc_file": args.asc,
         "escape_cost_min": cfg0.demand.escape_cost_min, "data_root": str(root),
         "db_path": str(default_db_path()), "git": _git_sha(),
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -657,8 +660,15 @@ def main() -> int:
           f"엔진 {stages or '-'} · Oracle 회차 ≤ {args.rounds}")
     print(f"수요: {cfg0.demand_label}\n출력: {out}\n")
 
+    asc: dict[str, float] = {}
+    if args.asc:
+        asc = {k: float(v) for k, v in
+               json.loads(Path(args.asc).read_text(encoding="utf-8")).items()}
+        print(f"  ★ ASC {len(asc)}곳 (폭 {max(asc.values()) - min(asc.values()):.1f}분) "
+              f"← {args.asc}")
     mnl_kw = {"theta": args.theta, "wait_weight": args.wait_weight,
-              "escape_mode": args.escape_mode, "power_stat": args.power_stat}
+              "escape_mode": args.escape_mode, "power_stat": args.power_stat,
+              "asc": asc}
     rows: list[dict] = []
     ue_unconverged: list[int] = []
 

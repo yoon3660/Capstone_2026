@@ -562,3 +562,109 @@ def test_the_escape_rule_still_uses_the_real_fastest_charger() -> None:
 def test_an_unknown_power_stat_is_refused() -> None:
     with pytest.raises(ValueError, match="power_stat"):
         MnlSettings(power_stat="median")
+
+
+# ---------------------------------------------------------------------------
+# T5 — 휴게소 고정효과 (ASC)
+# ---------------------------------------------------------------------------
+
+
+def test_no_asc_is_the_old_behaviour() -> None:
+    """★ 되돌림이 없어야 한다 — 기본은 빈 사전이고 전과 한 글자도 다르지 않다."""
+
+    assert MnlSettings().asc == {}
+    stations = [_spec("A", 200.0), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    old = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1)))
+    new = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, asc={})))
+    assert _key(old) == _key(new)
+
+
+def test_a_positive_asc_pushes_cars_away() -> None:
+    """양수 ASC = "그만큼 더 멀게 느낀다" → 그 휴게소로 덜 간다."""
+
+    stations = [_spec("A", 200.0, n_units=5), _spec("B", 200.0, n_units=5)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(40)
+
+    def share_a(asc: dict) -> float:
+        r = _run(fleet, stations, offsets,
+                 MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, asc=asc)))
+        n = [e for e in r.charge_events if e["station_id"] == "A"]
+        return len(n) / max(len(r.charge_events), 1)
+
+    base = share_a({})
+    away = share_a({"A": +30.0})
+    toward = share_a({"A": -30.0})
+
+    assert away < base < toward, (
+        f"ASC 가 방향대로 안 움직인다: +30 → {away:.3f} · 0 → {base:.3f} · "
+        f"-30 → {toward:.3f}")
+
+
+def test_adding_the_same_asc_everywhere_changes_nothing() -> None:
+    """★ **식별 문제** — argmin 이므로 전체에 같은 값을 더해도 선택이 같다.
+
+    그래서 적합기가 매 번 평균을 0 으로 맞춰야 한다. 안 그러면 값이 떠돌아
+    다니면서 "ASC 폭" 이 의미를 잃는다.
+    """
+
+    stations = [_spec("A", 200.0), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    a = _run(fleet, stations, offsets, MnlPolicy(
+        _settings(), mnl=MnlSettings(theta=0.05, seed=1, asc={"A": 5.0, "B": 5.0})))
+    b = _run(fleet, stations, offsets, MnlPolicy(
+        _settings(), mnl=MnlSettings(theta=0.05, seed=1, asc={"A": 0.0, "B": 0.0})))
+    assert _key(a) == _key(b)
+
+
+def test_asc_stays_out_of_the_escape_rule() -> None:
+    """★ ASC 는 **선택의 비용**에만 들어간다.
+
+    이탈 판정(`escape_mode="s0"`)에 ASC 가 섞이면, 이탈 수 맞춤(기준 2)이
+    ASC 탓인지 배정 탓인지 못 가른다. `power_stat` 과 같은 원칙이다.
+    """
+
+    import inspect
+
+    from evdt.engine import mnl as m
+
+    src = inspect.getsource(m.MnlPolicy)
+    assert "s0_best = min(s0_best, st.wait_min + charge_min)" in src, (
+        "`s0_best` 가 ASC 를 쓰고 있다 — 이탈 판정은 ASC 없는 비용으로 한다")
+    # ★ **혼잡이 없는 세계**에서 검사한다. ASC 를 줘도 이탈 수가 같아야 한다.
+    #
+    #   혼잡한 세계에서는 ASC 가 **간접적으로** 이탈을 바꾼다 — 고르는 곳이
+    #   바뀌면 줄이 바뀌고, 줄이 바뀌면 `s0_best` 가 바뀌기 때문이다. 그건
+    #   막을 수도 없고 막아서도 안 된다 (세계가 실제로 달라진 것이다).
+    #   처음에 혼잡한 세계로 검사했더니 이탈이 22 → 0 으로 바뀌었다.
+    #
+    #   그래서 충전기를 넉넉히 둬서 **줄이 안 서게** 만든다. 그러면 `s0_best`
+    #   는 충전시간만으로 정해지고 ASC 와 무관해야 한다.
+    roomy = [_spec("A", 100.0, n_units=30), _spec("B", 100.0, n_units=30)]
+    offsets = {"A": 100.0, "B": 150.0}
+    varied = _fleet(40, escape=22.0, socs=(0.30, 0.45, 0.60))
+    base = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1)),
+        escape_cost_min=22.0)
+    big = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1, asc={"A": 500.0})),
+        escape_cost_min=22.0)
+
+    assert max(e["wait_min"] for e in base.charge_events) == 0.0, (
+        "줄이 섰다 — 이 검사는 혼잡 없는 세계여야 한다")
+    assert len(base.escape_events) > 0, "이탈이 0 이면 검사가 무의미하다"
+    assert len(base.escape_events) == len(big.escape_events), (
+        f"혼잡 없는 세계인데 ASC 가 이탈 수를 바꿨다: "
+        f"{len(base.escape_events)} → {len(big.escape_events)} — "
+        "이탈 판정에 ASC 가 섞였다")
+    # 고르는 곳은 바뀌어야 한다 (손잡이가 작동한다는 확인)
+    a_base = sum(1 for e in base.charge_events if e["station_id"] == "A")
+    a_big = sum(1 for e in big.charge_events if e["station_id"] == "A")
+    assert a_big < a_base, f"ASC +500 인데 A 선택이 안 줄었다: {a_base} → {a_big}"
