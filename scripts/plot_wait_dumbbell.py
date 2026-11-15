@@ -42,6 +42,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -56,6 +57,7 @@ from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
 from evdt.runner import load_config, parse_seeds  # noqa: E402
 from evdt.viz.plots import _korean_font  # noqa: E402
+from evdt.viz.sources import Sources  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -152,6 +154,25 @@ def main() -> int:
         quiet = frame[frame[frame.columns[0]] < args.min_wait]
         frame = frame[frame[frame.columns[0]] >= args.min_wait]
 
+    # --- 자료 출처 — 그림마다 **무엇을 썼는지** 같이 찍는다 -------------------
+    mf = ROOT / args.mnl_dir / "manifest.json"
+    mnl_note = "(manifest 없음)"
+    if mf.is_file():
+        m = json.loads(mf.read_text(encoding="utf-8"))
+        mnl_note = (f"θ {m.get('theta')} · w {m.get('wait_weight')} · "
+                    f"ASC {'있음' if m.get('asc_file') else '없음'}")
+    src = Sources(cfg.scenario_id, seeds=seeds, config=args.config)
+    src.column("charge_event.wait_min",
+               "실제로 기다린 시간 — 막대 그림·2D 히트맵과 같은 열이다")
+    src.note("묶음", "휴게소별 평균", "시드마다 내고 시드 평균")
+    src.files("MNL", [ROOT / args.mnl_dir / f"seed{s}" / "MNL.parquet"
+                      for s in seeds], f"run_mnl_world.py · {mnl_note}")
+    for st in stages:
+        src.files(st, [RUNS_DIR / make_run_id(cfg.scenario_id, st, s,
+                                              cfg.policy.participation)
+                       / "charge_event.parquet" for s in seeds])
+    src.print()
+
     # --- 표 (대비 WARN 의 구제책 겸 검산) -----------------------------------
     keys = list(full.columns)
     print(f"\n{cfg.scenario_id} · 시드 {len(seeds)}개")
@@ -227,7 +248,7 @@ def main() -> int:
     ax.set_title(
         f"엔진이 봉우리를 깎는다 — {lead} {frame[keys[0]].iloc[-1]:.1f} → "
         f"{frame[keys[-1]].iloc[-1]:.1f}분",
-        fontsize=14.5, color=C["ink"], loc="left", pad=26, fontweight="medium")
+        fontsize=14.5, color=C["ink"], loc="left", pad=26)
     ax.annotate(
         f"휴게소 사이 편차 {stat[keys[0]][2]:.1f} → {stat[keys[-1]][2]:.1f}분 "
         f"({drop:.0f}% 감소) · 평균 {stat[keys[0]][0]:.1f} → "

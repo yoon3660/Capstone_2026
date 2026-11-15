@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -46,13 +47,22 @@ from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import RUNS_DIR, default_db_path  # noqa: E402
 from evdt.runner import load_config, parse_seeds  # noqa: E402
 from evdt.viz.plots import _korean_font  # noqa: E402
+from evdt.viz.sources import Sources  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-#: 검증된 범주형 1·2·3 번 칸 — 덤벨 그림과 **같은 색**이어야 나란히 놓인다
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]
-SERIES_DARK = ["#3987e5", "#d95926", "#199e70"]
+#: ★ **색은 칸(entity)을 따라간다. 순서를 따라가면 안 된다.** S0 을 넣었다고
+#: S2 의 색이 바뀌면 덤벨 그림과 색이 어긋나 나란히 못 놓는다.
+#: 검증된 범주형 고정 순서 1·2·3·4 번 칸을 칸마다 묶어 둔다
+#: (`validate_palette.js`: 명도대·채도·색각분리·정상시야 전부 PASS,
+#:  light 에서 청록 2.74 · 노랑 2.11 이 3:1 아래라 **직접 라벨 의무** —
+#:  이 그림은 패널마다 한 선이고 **제목이 이름을 지므로** 색만으로 읽지 않는다)
+STAGE_COLOR = {"MNL": "#2a78d6", "S2": "#eb6834", "S4": "#1baf7a", "S0": "#eda100"}
+STAGE_COLOR_DARK = {"MNL": "#3987e5", "S2": "#d95926", "S4": "#199e70",
+                    "S0": "#c98500"}
+#: 패널을 놓는 순서 — 나쁜 쪽에서 좋은 쪽으로 내려간다
+PANEL_ORDER = ["MNL", "S0", "S1", "S2", "S3", "S4"]
 LIGHT = {"surface": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "grid": "#e8e7e2"}
 DARK = {"surface": "#1a1a19", "ink": "#f0efec", "ink2": "#c3c2b7", "grid": "#2c2c29"}
 
@@ -81,7 +91,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_chuseok_up_congested.yaml")
-    ap.add_argument("--stages", default="S2,S4")
+    ap.add_argument("--stages", default="S0,S2,S4")
     ap.add_argument("--seeds", default="1-10")
     ap.add_argument("--mnl-dir",
                     default="runs/mnl_world/chuseok_congested_floor/theta0p05_w1p0")
@@ -97,8 +107,10 @@ def main() -> int:
     cfg = load_config(args.config, stage="S0")
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
     seeds = parse_seeds(args.seeds)
-    if len(stages) + 1 > len(SERIES):
-        raise SystemExit(f"[중단] 칸이 {len(stages) + 1}개다 — 색이 3칸까지다")
+    unknown = [s for s in stages if s not in STAGE_COLOR]
+    if unknown:
+        raise SystemExit(f"[중단] 색을 정해 둔 칸이 아니다: {unknown} "
+                         f"(있는 것: {sorted(STAGE_COLOR)})")
 
     # ★ 휴게소 **이름은 상·하행에 둘 다 있다** (건천휴게소가 UP·DOWN 두 곳).
     #   코리도로 좁히지 않으면 이름 → id 사전이 반대 방향을 가리켜 빈 결과가 난다
@@ -118,6 +130,10 @@ def main() -> int:
              / "charge_event.parquet" for s in seeds],
             args.bin, args.station, sid_of)
 
+    # 패널 순서 — 나쁜 쪽에서 좋은 쪽으로
+    order = [k for k in PANEL_ORDER if k in series]
+    series = {k: series[k] for k in order}
+
     lo, hi = args.from_hour * 60, args.to_hour * 60
     grid = np.arange(lo, hi + args.bin, args.bin)
     frame = pd.DataFrame({k: v.reindex(grid).fillna(0.0) for k, v in series.items()},
@@ -125,6 +141,28 @@ def main() -> int:
     keys = list(frame.columns)
 
     where = args.station or "코리도 전체"
+
+    # --- 자료 출처 — 그림마다 **무엇을 썼는지** 같이 찍는다 -------------------
+    mf = ROOT / args.mnl_dir / "manifest.json"
+    mnl_note = "(manifest 없음)"
+    if mf.is_file():
+        m = json.loads(mf.read_text(encoding="utf-8"))
+        mnl_note = (f"θ {m.get('theta')} · w {m.get('wait_weight')} · "
+                    f"ASC {'있음' if m.get('asc_file') else '없음'}")
+    src = Sources(cfg.scenario_id, seeds=seeds, config=args.config)
+    src.column("charge_event.wait_min",
+               "실제로 기다린 시간. 스냅샷의 wait_min(앱 화면 값)이 아니다 — "
+               "그건 차 없는 프레임까지 평균에 넣어 희석되고 MNL 은 스냅샷이 없다")
+    src.note("구간", f"도착 시각 {args.bin:g}분", "시드마다 내고 시드 평균")
+    src.note("범위", f"{args.from_hour:g}시 ~ {args.to_hour:g}시", where)
+    src.files("MNL", [ROOT / args.mnl_dir / f"seed{s}" / "MNL.parquet"
+                      for s in seeds], f"run_mnl_world.py · {mnl_note}")
+    for st in stages:
+        src.files(st, [RUNS_DIR / make_run_id(cfg.scenario_id, st, s,
+                                              cfg.policy.participation)
+                       / "charge_event.parquet" for s in seeds])
+    src.print()
+
     print(f"\n{cfg.scenario_id} · {where} · 시드 {len(seeds)}개 · {args.bin:g}분 구간")
     print(f"\n{'칸':<6}{'평균':>8}{'최대':>8}{'봉우리 시각':>12}{'편차':>8}")
     for k in keys:
@@ -136,7 +174,7 @@ def main() -> int:
 
     # --- 그림 ---------------------------------------------------------------
     C = DARK if args.dark else LIGHT
-    cols = SERIES_DARK if args.dark else SERIES
+    cmap = STAGE_COLOR_DARK if args.dark else STAGE_COLOR
     _korean_font(plt)
     n = len(keys)
     fig, axes = plt.subplots(n, 1, figsize=(11.0, 2.35 * n + 1.6), sharex=True,
@@ -144,14 +182,15 @@ def main() -> int:
     fig.patch.set_facecolor(C["surface"])
     top = float(frame.to_numpy().max()) * 1.22
 
-    for i, (k, ax) in enumerate(zip(keys, axes, strict=True)):
+    for k, ax in zip(keys, axes, strict=True):
+        col = cmap[k]
         ax.set_facecolor(C["surface"])
         x = frame.index / 60.0
-        ax.fill_between(x, frame[k], color=cols[i], alpha=0.16, zorder=2)
-        ax.plot(x, frame[k], color=cols[i], linewidth=2.0, zorder=3)
+        ax.fill_between(x, frame[k], color=col, alpha=0.16, zorder=2)
+        ax.plot(x, frame[k], color=col, linewidth=2.0, zorder=3)
 
         pk = frame[k].idxmax()
-        ax.plot([pk / 60.0], [frame[k].max()], "o", markersize=9, color=cols[i],
+        ax.plot([pk / 60.0], [frame[k].max()], "o", markersize=9, color=col,
                 markeredgecolor=C["surface"], markeredgewidth=2.0, zorder=4)
         ax.annotate(f"최대 {frame[k].max():.1f}분",
                     (pk / 60.0, frame[k].max()), textcoords="offset points",
@@ -183,7 +222,7 @@ def main() -> int:
              f"{frame[keys[0]].max():.1f} → {frame[keys[-1]].max():.1f}분 "
              f"({cut:.0f}% 감소)",
              fontsize=15, color=C["ink"], ha="left", va="top")
-    fig.text(0.012, 0.947, f"세 칸이 세로 눈금을 공유한다 · 시드 {len(seeds)}개 · "
+    fig.text(0.012, 0.947, f"{n}개 칸이 세로 눈금을 공유한다 · 시드 {len(seeds)}개 · "
              f"{args.bin:g}분 구간 평균 실제 대기",
              fontsize=10, color=C["ink2"], ha="left", va="top")
 
