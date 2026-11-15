@@ -74,6 +74,9 @@ def main() -> int:
     ap.add_argument("--config", default="config/scenario_seollal_up_adoption.yaml")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--stages", default=",".join(DEFAULT_STAGES))
+    ap.add_argument("--mnl-dir", default=None,
+                    help="MNL 바닥 칸을 **맨 앞**에 붙인다 — `run_mnl_world.py` 출력 폴더. "
+                         "MNL 은 DB 에 run 이 없어 parquet 로 직접 격자를 만든다")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -118,6 +121,43 @@ def main() -> int:
         print(f"  가로축 {hours}시간 — 귀성 심야 도착이 자정을 넘는다 (익일은 점선 뒤)")
 
     panels, mismatch = [], []
+
+    # --- MNL 바닥을 맨 앞에 ---------------------------------------------------
+    #     MNL 은 `run_mnl_world.py` 로 돌아서 DB 에 run 이 없다. 격자는 같은
+    #     정의(`station_hourly_wait.sql`: 도착 시각 시간별 평균 실제 대기)로
+    #     parquet 에서 직접 만든다.
+    #
+    #     ⚠ **교차 검사는 이 칸에만 적용되지 않는다.** 사다리 칸은 그린 격자를
+    #       다시 세어 `run_kpi` 와 대조하지만, MNL 은 대조할 기록이 없다.
+    #       그래서 센 칸 수를 화면에 찍고 "기록 없음" 이라고 밝힌다
+    if args.mnl_dir:
+        # 사다리 칸과 **같은 시드**를 쓴다 — 다른 시드면 다른 세계다 (#59)
+        seed_dir = Path(args.mnl_dir) / f"seed{args.seed}"
+        mnl_f = seed_dir / "MNL.parquet"
+        if not mnl_f.is_file():
+            raise SystemExit(f"[중단] {mnl_f} 가 없다 — 시드 {args.seed} 를 먼저 돌릴 것")
+        mf = pd.read_parquet(mnl_f)
+        mg = (mf.assign(hour=(mf["t_arrive_min"] // 60).astype(int))
+                .groupby(["station_id", "hour"])
+                .agg(n_ev=("ev_id", "size"), value=("wait_min", "mean"))
+                .reset_index())
+        n_cells = int((mg["value"] >= BOTTLENECK_WAIT_MIN).sum())
+
+        # ★ 이탈을 반드시 같이 적는다 (이 파일의 머리말 경고). MNL 은 run_kpi 가
+        #   없지만 이탈 원장은 parquet 로 저장된다 — 없으면 세지 못했다고 밝힌다
+        esc_f = seed_dir / "MNL__escape.parquet"
+        if esc_f.is_file():
+            n_esc = len(pd.read_parquet(esc_f))
+            esc_txt = f"이탈 {n_esc}대"
+        else:
+            n_esc = None
+            esc_txt = "이탈 기록 없음"
+        print(f"  MNL 바닥 — 시드 {args.seed} · 병목 {n_cells}칸 · {esc_txt} "
+              f"(⚠ run_kpi 기록이 없어 교차 검사 없음)")
+        panels.append((f"MNL (현재)\n병목 {n_cells}칸 · 평균 대기 "
+                       f"{mf['wait_min'].mean():.1f}분 · {esc_txt}", mg))
+        hours = max(hours, int(mg["hour"].max()) + 1)
+
     for stage, rid in zip(stages, run_ids, strict=True):
         grid = hourly[hourly["run_id"] == rid].rename(columns={"mean_wait_min": "value"})
         # ★ 그리는 격자에서 **다시 센다**. 기록된 KPI 와 같아야 "칸을 세 보라" 가 성립한다
@@ -158,10 +198,13 @@ def main() -> int:
         axis=1)
     print(t.to_string(float_format=lambda v: f"{v:,.1f}"))
 
-    print("\n  ⚠ S0 칸이 S1 칸보다 밝으면 그것은 S0 가 좋아서가 아니다 — "
-          f"이탈 {int(t.loc['S0', 'n_escaped']) if 'S0' in t.index else 0}대 대 "
-          f"{int(t.loc['S1', 'n_escaped']) if 'S1' in t.index else 0}대를 같이 볼 것.\n"
-          "  이탈 그림: python scripts/plot_escaped.py <run_id>")
+    # 머리말의 경고는 S0·S1 이 같이 있을 때만 성립한다. 그 둘이 없으면
+    # 칸 제목의 이탈 숫자가 이미 같은 일을 한다 — 없는 칸을 0 으로 찍지 않는다
+    if {"S0", "S1"} <= set(t.index):
+        print("\n  ⚠ S0 칸이 S1 칸보다 밝으면 그것은 S0 가 좋아서가 아니다 — "
+              f"이탈 {int(t.loc['S0', 'n_escaped'])}대 대 "
+              f"{int(t.loc['S1', 'n_escaped'])}대를 같이 볼 것.\n"
+              "  이탈 그림: python scripts/plot_escaped.py <run_id>")
     return 0
 
 
