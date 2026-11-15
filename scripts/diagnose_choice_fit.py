@@ -316,6 +316,9 @@ def main() -> int:
     nch = dict(zip(up.index, up.db_units, strict=True))
 
     cases: list[tuple[str, pd.Series, pd.DataFrame, int]] = []
+    #: 설정 이름 → (총 사회적 비용 h, 이탈 대수). ⑥ 절이 MAPE 옆에 찍는다 —
+    #: 분배만 맞추고 물리를 망가뜨리는 설정을 숨길 수 없게 하기 위해서다
+    mnl_summaries: dict[str, tuple[float, float]] = {}
     for d in args.mnl_dirs:
         p = ROOT / d
         if not p.is_dir():
@@ -323,6 +326,10 @@ def main() -> int:
             continue
         s, n = mnl_sessions(p)
         cases.append((p.name, s, _waits(p, "MNL"), n))
+        sm = p / "summary.csv"
+        if sm.is_file():
+            row = pd.read_csv(sm).iloc[0]
+            mnl_summaries[p.name] = (float(row["total_h"]), float(row["n_escaped"]))
     s0, n0 = ladder_sessions(args.scenario, "S0", range(1, args.seeds + 1))
     cases.append(("S0 (사다리)", s0, _ladder_waits(args.scenario, "S0",
                                                    range(1, args.seeds + 1)), n0))
@@ -393,18 +400,31 @@ def main() -> int:
     print(f"⑥ 쏠림 **모양**의 MAPE — 공공 100% {len(pure)}곳 (수준을 지운 뒤)")
     print("=" * 78)
     on = obs_pc / obs_pc.mean()
-    print(f"  {'설정':<22}{'MAPE':>8}{'중앙값 APE':>12}   가장 나쁜 곳")
+    print(f"  {'설정':<22}{'MAPE':>8}{'중앙값':>8}{'총비용h':>10}{'이탈':>8}"
+          f"   가장 나쁜 곳")
     for label, mp in model_pc.items():
         mn = mp.reindex(on.index).astype(float)
         mn = mn / mn.mean()
         ape = (mn - on).abs() / on * 100
         worst = ape.idxmax()
-        print(f"  {label[:21]:<22}{ape.mean():>7.0f}%{ape.median():>11.0f}%"
-              f"   {worst[:9]} {ape[worst]:.0f}% "
+        # ★ MAPE 를 **혼자 보면 안 된다.** 분배만 맞추고 물리를 망가뜨리는
+        #   설정이 실제로 있다 (ASC 258분: MAPE 20% · 이탈 5.5배). 같은 줄에
+        #   총비용·이탈을 찍어 그 거래를 숨길 수 없게 한다
+        cost = esc = float("nan")
+        s = mnl_summaries.get(label)
+        if s is not None:
+            cost, esc = s
+        cost_s = f"{cost:>10,.0f}" if cost == cost else f"{'—':>10}"
+        esc_s = f"{esc:>8,.0f}" if esc == esc else f"{'—':>8}"
+        print(f"  {label[:21]:<22}{ape.mean():>7.0f}%{ape.median():>7.0f}%"
+              f"{cost_s}{esc_s}   {worst[:9]} {ape[worst]:.0f}% "
               f"(모델 {mn[worst]:.2f} vs 실측 {on[worst]:.2f})")
-    print("\n  ⚠ 이 값은 **낮지 않다.** 순위(건천 1위)와 방향은 맞지만 격차가 틀린다.")
-    print("    발표에서 '어디가 밀리는지도 맞췄다' 고 말할 근거가 되지 못한다 —")
-    print("    쓸 수 있는 것은 순위와 방향(②)까지다.")
+    print("\n  ⚠ MAPE 를 **혼자 보지 말 것.** 50% 아래로 내리는 길은 있다 —")
+    print("    ASC 를 폭 258분까지 열면 20% 까지 내려간다. 그런데 그 설정은")
+    print("    이탈이 5.5배(310 → 1,691대)가 되고 총비용이 64% 늘어난다.")
+    print("    차가 꽉 찬 휴게소에서도 안 비키는 운전자를 만들어 분포를 맞춘 것이다.")
+    print("    폭을 40분으로 줄이면 물리는 멀쩡하지만 MAPE 가 101% 로 돌아온다.")
+    print("    → 발표 바닥(ASC 없음)에서 쓸 수 있는 것은 순위와 방향(②)까지다.")
 
     print("\n  ① 보정 없음 — 참고로만. 실측은 공공 운영사만, 모델은 전 운영사다")
     print("  ③ 공공 100% 휴게소만 — **판정은 이것으로**. 분모가 같다")
