@@ -539,6 +539,14 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--beta-dist", type=float, default=0.0,
+                    help="거리 항 β_d (분/km). 양수면 가까운 휴게소 선호, 음수면 먼 쪽. "
+                         "**선택의 비용에만** 들어가고 이탈 판정은 안 건드린다. "
+                         "ASC 와 같이 적합하면 식별이 안 된다 — ASC 를 끄고 쓸 것")
+    ap.add_argument("--ev-share", type=float, default=None,
+                    help="EV 보급 레이어의 비율을 덮어쓴다 (예: 0.10). scenario_id 뒤에 "
+                         "__ev<nn> 이 붙는다 — `run_chuseok_ladder.py --ev-share` 와 "
+                         "**같은 꼬리표**라 사다리 칸과 짝지어 비교할 수 있다")
     ap.add_argument("--ev-count", default=None,
                     help="EV 대수 생성 방식 (#53): fixed · poisson 등. `variant` 로 "
                          "scenario_id 에 꼬리표가 붙는다")
@@ -578,6 +586,27 @@ def main() -> int:
     if args.config is None or args.p is None:
         raise SystemExit("[중단] --config 와 --p 가 필요하다 (--merge 만 예외)")
     cfg0 = R.load_config(args.config)
+    if args.ev_share is not None:
+        # ★ `run_chuseok_ladder.py` 의 `--ev-share` 와 **글자 하나까지 같은 꼬리표**
+        #   를 만들어야 한다 (`ev10`). 다르면 MNL 바닥과 사다리 칸이 서로 다른
+        #   scenario_id 를 갖게 되고, 그러면 "같은 세계" 가 아니라 비교가 깨진다
+        if not 0.0 < args.ev_share <= 1.0:
+            raise SystemExit(f"[중단] --ev-share 는 (0, 1] 이어야 한다: {args.ev_share}")
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg0.raw_yaml)
+        layers, found = [], False
+        for layer in raw["demand"].get("layers") or []:
+            layer = dict(layer)
+            if layer.get("kind") == "ev_adoption":
+                layer["ev_share"] = args.ev_share
+                found = True
+            layers.append(layer)
+        if not found:
+            raise SystemExit(f"[중단] {args.config} 에 ev_adoption 레이어가 없다 — "
+                             "--ev-share 로 덮을 대상이 없다")
+        cfg0 = cfg0.variant(f"ev{round(args.ev_share * 100):02d}",
+                            {"demand.layers": layers})
+        print(f"  ★ EV 보급률 = {args.ev_share:.1%} · scenario_id {cfg0.scenario_id}")
     if args.ev_count:
         cfg0 = cfg0.variant(f"evc-{args.ev_count}".replace("_", "-"),
                             {"demand.ev_count_method": args.ev_count})
@@ -675,7 +704,10 @@ def main() -> int:
               f"← {args.asc}")
     mnl_kw = {"theta": args.theta, "wait_weight": args.wait_weight,
               "escape_mode": args.escape_mode, "power_stat": args.power_stat,
-              "asc": asc}
+              "asc": asc, "beta_dist_min_per_km": args.beta_dist}
+    if args.beta_dist:
+        print(f"  ★ 거리 항 β_d = {args.beta_dist:+.4f} 분/km "
+              f"({'가까운 쪽 선호' if args.beta_dist > 0 else '먼 쪽 선호'})")
     rows: list[dict] = []
     ue_unconverged: list[int] = []
 
