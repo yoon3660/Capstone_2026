@@ -539,6 +539,9 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--ev-count", default=None,
+                    help="EV 대수 생성 방식 (#53): fixed · poisson 등. `variant` 로 "
+                         "scenario_id 에 꼬리표가 붙는다")
     ap.add_argument("--asc", default=None,
                     help="휴게소 고정효과 JSON (station_id -> 분). "
                          "`scripts/fit_asc.py` 가 만든 asc.json 을 준다")
@@ -575,6 +578,10 @@ def main() -> int:
     if args.config is None or args.p is None:
         raise SystemExit("[중단] --config 와 --p 가 필요하다 (--merge 만 예외)")
     cfg0 = R.load_config(args.config)
+    if args.ev_count:
+        cfg0 = cfg0.variant(f"evc-{args.ev_count}".replace("_", "-"),
+                            {"demand.ev_count_method": args.ev_count})
+        print(f"  ★ EV 대수 생성 = {args.ev_count} · scenario_id {cfg0.scenario_id}")
     if args.habit_soc is not None:
         # ★ 세계를 바꾸는 손잡이 — `cfg.variant` 로 꼬리표를 붙인다 (#123)
         cfg0 = cfg0.variant(

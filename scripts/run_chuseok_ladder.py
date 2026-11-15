@@ -135,6 +135,10 @@ def main() -> int:
     # ★ EV 보급률 축 (#146 "EV 대수 증가 실험"). `variant` 로 돌리므로 **scenario_id
     #   가 갈라진다** — 기본 config 의 run 을 덮어쓰지 않는다. 물리를 바꿔 돌리면서
     #   이름을 그대로 두면 진짜 run 이 날아간다 (2026-11-12 에 실제로 그랬다)
+    ap.add_argument("--ev-count", default=None,
+                    help="EV 대수 생성 방식 (#53): fixed(기본) · poisson · binomial · "
+                         "beta_binomial · poisson_lognormal. `variant` 로 돌리므로 "
+                         "scenario_id 뒤에 __evc-<방식> 이 붙는다")
     ap.add_argument("--ev-share", type=float, default=None,
                     help="EV 보급 레이어의 비율을 덮어쓴다 (예: 0.10). "
                          "주면 scenario_id 뒤에 __ev<nn> 이 붙는다")
@@ -165,6 +169,14 @@ def main() -> int:
                     f"{args.config} 에 ev_adoption 레이어가 없다 — "
                     "--ev-share 로 덮을 대상이 없다")
             cfg[st] = c.variant(tag, {"demand.layers": layers})
+    if args.ev_count:
+        # ★ 수요 생성 방식을 바꾸는 것은 **세계를 바꾸는** 일이다 — `variant` 로
+        #   꼬리표를 붙여야 기존 run 을 안 덮는다 (#123)
+        cfg = {st: c.variant(f"evc-{args.ev_count}".replace("_", "-"),
+                             {"demand.ev_count_method": args.ev_count})
+               for st, c in cfg.items()}
+        print(f"  ★ EV 대수 생성 = {args.ev_count}")
+
     any_cfg = next(iter(cfg.values()))
     escape_cost = float(any_cfg.demand.escape_cost_min)
     # ★ **부분 실행은 1차 기록을 덮지 않는다** (2026-11-13).
