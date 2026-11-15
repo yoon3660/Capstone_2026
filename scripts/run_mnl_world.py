@@ -539,6 +539,13 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--habit-soc", type=float, default=None,
+                    help="습관 목표 SoC (#82). 0 이면 '목적지까지 갈 만큼만' 이고, "
+                         "그게 지금 기본값이라 차들이 조금씩 자주 찍는다. "
+                         "`--habit-sigma` 와 같이 쓴다")
+    ap.add_argument("--habit-sigma", type=float, default=0.05,
+                    help="습관 목표의 흩어짐. 0 이면 전원이 같은 값을 목표로 해서 "
+                         "무차별해진 차들이 한꺼번에 뒤집힌다 (#112)")
     ap.add_argument("--oc-prob", type=float, default=None,
                     help="기회충전 레이어의 prob 을 이 값으로 바꾼다 (0 이면 레이어를 "
                          "뺀다). 발표 대표 숫자가 이 가정에 얼마나 걸려 있나를 재는 축")
@@ -565,6 +572,14 @@ def main() -> int:
     if args.config is None or args.p is None:
         raise SystemExit("[중단] --config 와 --p 가 필요하다 (--merge 만 예외)")
     cfg0 = R.load_config(args.config)
+    if args.habit_soc is not None:
+        # ★ 세계를 바꾸는 손잡이 — `cfg.variant` 로 꼬리표를 붙인다 (#123)
+        cfg0 = cfg0.variant(
+            f"h{args.habit_soc * 100:.0f}s{args.habit_sigma * 100:.0f}",
+            {"vehicles.habit_soc": float(args.habit_soc),
+             "vehicles.habit_soc_sigma": float(args.habit_sigma)})
+        print(f"  ★ 습관 목표 SoC = {args.habit_soc:g} (σ {args.habit_sigma:g}) "
+              f"· scenario_id {cfg0.scenario_id}")
     if args.oc_prob is not None:
         # ★ `cfg.variant` 로 scenario_id 에 꼬리표를 붙인다 — 수요를 바꾸는 것은
         #   **세계를 바꾸는** 일이라 이름이 같으면 기존 run 을 덮는다 (#123)
