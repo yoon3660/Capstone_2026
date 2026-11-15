@@ -153,6 +153,30 @@ class MnlSettings:
     #:   판정" 이 유지되고, 이탈 수 맞춤이 ASC 탓인지 아닌지 가를 수 있다
     asc: Mapping[str, float] = field(default_factory=dict)
 
+    #: ★ **거리 항** — 지금 위치에서 그 휴게소까지의 거리 1 km 당 분 (#N1).
+    #:
+    #:   양수면 "가까운 데서 빨리 끊고 싶다" (앞쪽 휴게소를 선호)
+    #:   음수면 "좀 더 가고 나서 서고 싶다" (뒤쪽 휴게소를 선호)
+    #:
+    #: ## 왜 필요한가 — 줄이 없어도 분배가 틀린다
+    #:
+    #: 2026-11-16 에 쟀다. 실측 재현 무대(대기 평균 **1.22분**)에서도 모양
+    #: MAPE 가 113% 이고 그걸 고치는 데 191분짜리 ASC 가 필요하다. 혼잡이
+    #: 없으니 용량 상호작용이 아니다 — **비용에 거리가 없는 것**이 남은 설명이다.
+    #: 줄이 없으면 비용이 사실상 `perceived_min` 하나가 되어, 선택이 "어디가
+    #: 제일 빨리 충전되나" 로만 결정된다. 얼마나 멀리 가는지는 공짜였다.
+    #:
+    #: ⚠ **부호를 미리 정하지 않는다.** 코리도에서는 먼 휴게소로 가는 것이
+    #:   우회가 아니라 **목적지 쪽으로 가는 것**이다. 그래서 "멀수록 싫다"
+    #:   (양수)가 자명하지 않다. 적합이 내는 부호가 곧 발견이다 —
+    #:   음수가 나오면 "운전자는 첫 휴게소에서 안 서고 더 간다" 는 뜻이다.
+    #:
+    #: ⚠ ASC 와 같이 **선택의 비용에만** 들어간다. 이탈 판정(`s0_best`)은
+    #:   건드리지 않는다 — 그래야 이탈 수의 변화가 거리 항 탓인지 가려진다.
+    #: ⚠ ASC 와 **같이 적합하면 안 된다.** ASC 13개가 거리를 흉내 낼 수 있어
+    #:   β_d 가 식별되지 않는다. ASC 를 끈 채로 β_d 를 먼저 적합한다.
+    beta_dist_min_per_km: float = 0.0
+
     def __post_init__(self) -> None:
         if not self.theta > 0:
             raise ValueError(f"theta 는 양수여야 한다 (inf 허용): {self.theta}")
@@ -247,6 +271,7 @@ class MnlPolicy(S0Policy):
             # ★ MNL 의 전부: S0 의 비용에 대기 가중치를 걸고, 이 사람의 ε 를 뺀다
             cost = (self.mnl.wait_weight * st.wait_min + perceived_min
                     + self.mnl.asc.get(st.station_id, 0.0)
+                    + self.mnl.beta_dist_min_per_km * gap_km
                     - self.mnl.noise(ev.ev_id, st.station_id))
 
             if cost < best_cost:

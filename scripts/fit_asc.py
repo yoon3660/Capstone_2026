@@ -110,7 +110,8 @@ def tvd(model: pd.Series, obs: pd.Series) -> tuple[float, int]:
 
 
 def run_floor(cfg_path: str, seeds: str, theta: float, wait_weight: float,
-              asc: dict[str, float], out: Path, *, quiet: bool = True) -> pd.Series:
+              asc: dict[str, float], out: Path, *, quiet: bool = True,
+              beta_dist: float = 0.0) -> pd.Series:
     """MNL 바닥을 한 번 돌리고 휴게소별 세션 수를 돌려준다."""
 
     import run_mnl_world as W
@@ -121,7 +122,8 @@ def run_floor(cfg_path: str, seeds: str, theta: float, wait_weight: float,
     for seed in W.R.parse_seeds(seeds):
         world = W.prepare(cfg0, seed, root=ROOT, log=log)
         mnl = W.MnlSettings(seed=seed, theta=theta, wait_weight=wait_weight,
-                            escape_mode="s0", asc=dict(asc))
+                            escape_mode="s0", asc=dict(asc),
+                            beta_dist_min_per_km=beta_dist)
         _row, events, _esc = W.run_cell(
             world, W.BASE, p=0.0, mnl=mnl, strength=W.DEFAULT_STRENGTH,
             oracle=None, s3_window=None, log=log)
@@ -138,6 +140,9 @@ def main() -> int:
     ap.add_argument("--theta", type=float, default=0.05)
     ap.add_argument("--wait-weight", type=float, default=1.0)
     ap.add_argument("--rounds", type=int, default=6)
+    ap.add_argument("--beta-dist", type=float, default=0.0,
+                    help="거리 항 β_d 를 **고정한 채** ASC 를 적합한다 (N3). "
+                         "ASC 폭이 얼마나 줄어드나가 'ASC 가 거리를 대신 들고 있던 양' 이다")
     ap.add_argument("--out", default="runs/mnl_world/asc_fit")
     ap.add_argument("--eval-only", default=None,
                     help="적합하지 않고 이 asc.json 으로 검증만 한다")
@@ -168,7 +173,7 @@ def main() -> int:
     hist = []
     for it in range(rounds + 1):
         sess = run_floor(args.config, args.seeds, args.theta, args.wait_weight,
-                         asc, out)
+                         asc, out, beta_dist=args.beta_dist)
         share = sess / sess.sum()
         f_tvd, f_n = tvd(share, fit_t)
         v_tvd, v_n = tvd(share, val_t)

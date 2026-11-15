@@ -668,3 +668,81 @@ def test_asc_stays_out_of_the_escape_rule() -> None:
     a_base = sum(1 for e in base.charge_events if e["station_id"] == "A")
     a_big = sum(1 for e in big.charge_events if e["station_id"] == "A")
     assert a_big < a_base, f"ASC +500 인데 A 선택이 안 줄었다: {a_base} → {a_big}"
+
+
+# ---------------------------------------------------------------------------
+# N1 — 거리 항 (β_d)
+# ---------------------------------------------------------------------------
+
+
+def test_no_distance_term_is_the_old_behaviour() -> None:
+    """★ 되돌림이 없어야 한다 — 기본 0 이면 전과 한 글자도 다르지 않다."""
+
+    assert MnlSettings().beta_dist_min_per_km == 0.0
+    stations = [_spec("A", 200.0), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    old = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1)))
+    new = _run(fleet, stations, offsets, MnlPolicy(
+        _settings(), mnl=MnlSettings(theta=0.05, seed=1, beta_dist_min_per_km=0.0)))
+    assert _key(old) == _key(new)
+
+
+def test_the_distance_term_moves_choices_along_the_corridor() -> None:
+    """β_d 의 **부호가 방향이다** — 양수면 앞 휴게소, 음수면 뒤 휴게소.
+
+    ★ 두 휴게소를 **같은 출력·같은 대수**로 둔다. 그래야 거리 말고는 고를
+      이유가 없어서 이 항만 재는 것이 된다.
+    """
+
+    stations = [_spec("A", 200.0, n_units=20), _spec("B", 200.0, n_units=20)]
+    offsets = {"A": 100.0, "B": 200.0}       # 100 km 차이
+    fleet = _fleet(40)
+
+    def share_near(beta: float) -> float:
+        r = _run(fleet, stations, offsets, MnlPolicy(
+            _settings(), mnl=MnlSettings(theta=0.05, seed=1,
+                                         beta_dist_min_per_km=beta)))
+        near = [e for e in r.charge_events if e["station_id"] == "A"]
+        return len(near) / max(len(r.charge_events), 1)
+
+    base = share_near(0.0)
+    prefer_near = share_near(+0.5)       # 100 km 멀어지면 50분 비싸다
+    prefer_far = share_near(-0.5)
+
+    assert prefer_far < base < prefer_near, (
+        f"β_d 가 방향대로 안 움직인다: -0.5 → {prefer_far:.3f} · "
+        f"0 → {base:.3f} · +0.5 → {prefer_near:.3f}")
+
+
+def test_the_distance_term_stays_out_of_the_escape_rule() -> None:
+    """★ 거리 항도 **선택의 비용**에만 들어간다 (ASC 와 같은 원칙).
+
+    섞이면 이탈 수의 변화가 β_d 탓인지 배정 탓인지 못 가른다. ASC 검사와
+    같은 이유로 **혼잡이 없는 세계**에서 본다 — 혼잡한 세계에서는 고르는 곳이
+    바뀌면 줄이 바뀌어 이탈이 간접적으로 움직인다.
+    """
+
+    roomy = [_spec("A", 100.0, n_units=30), _spec("B", 100.0, n_units=30)]
+    offsets = {"A": 100.0, "B": 150.0}
+    varied = _fleet(40, escape=22.0, socs=(0.30, 0.45, 0.60))
+    base = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1)),
+        escape_cost_min=22.0)
+    far = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1,
+                                         beta_dist_min_per_km=-5.0)),
+        escape_cost_min=22.0)
+
+    assert max(e["wait_min"] for e in base.charge_events) == 0.0, (
+        "줄이 섰다 — 이 검사는 혼잡 없는 세계여야 한다")
+    assert len(base.escape_events) > 0, "이탈이 0 이면 검사가 무의미하다"
+    assert len(base.escape_events) == len(far.escape_events), (
+        f"혼잡 없는 세계인데 β_d 가 이탈 수를 바꿨다: "
+        f"{len(base.escape_events)} → {len(far.escape_events)} — "
+        "이탈 판정에 거리 항이 섞였다")
+    a_base = sum(1 for e in base.charge_events if e["station_id"] == "A")
+    a_far = sum(1 for e in far.charge_events if e["station_id"] == "A")
+    assert a_far < a_base, f"β_d 가 음수인데 가까운 A 선택이 안 줄었다: {a_base} → {a_far}"
