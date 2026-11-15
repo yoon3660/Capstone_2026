@@ -88,6 +88,46 @@ def kpis(run_id: str) -> dict[str, float]:
     return {m: float(v) for m, v in rows}
 
 
+def _runner_stage(stage: str) -> str:
+    """config 를 읽을 때 쓸 스테이지 이름.
+
+    **MNL 은 `runner` 의 스테이지가 아니다** (`run_mnl_world` 경로다). 그대로
+    넘기면 `with_stage` 가 "아직 구현되지 않은 스테이지" 로 멈춘다. MNL 바닥은
+    `policy.stage` 를 쓰지 않으므로 아무 유효한 값이면 된다.
+    """
+
+    return "S0" if stage == "MNL" else stage
+
+
+#: MNL 바닥의 설정 — 발표 바닥과 **같아야** 한다 (docs/mnl_redesign_plan.txt 5-8)
+MNL_THETA, MNL_W = 0.05, 1.0
+
+
+def measure_mnl(cfg, seed: int, *, log) -> dict[str, float]:
+    """MNL 바닥 한 칸. **사다리와 다른 경로**라 따로 돈다.
+
+    `run_mnl_world.prepare` 가 `supply.charger_delta` 를 적용하므로 증설이
+    그대로 반영된다. 비용은 `cost_terms` 세 항 — 사다리와 같은 자다 (#147).
+
+    ⚠ DB 에 쓰지 않으므로 `reusable_run` 재사용이 없다. 매번 다시 돈다
+      (1~2초라 괜찮다).
+    """
+
+    import run_mnl_world as W
+
+    world = W.prepare(cfg, seed, root=ROOT, log=log)
+    mnl = W.MnlSettings(seed=seed, theta=MNL_THETA, wait_weight=MNL_W,
+                        escape_mode="s0")
+    row, events, escapes = W.run_cell(
+        world, W.BASE, p=0.0, mnl=mnl, strength=W.DEFAULT_STRENGTH,
+        oracle=None, s3_window=None, log=log)
+    waits = [e["wait_min"] for e in events] or [0.0]
+    return {"run_id": f"MNL@{cfg.scenario_id}#s{seed}", "total_h": row["total_h"],
+            "wait_mean_min": sum(waits) / len(waits),
+            "wait_p95_min": float(sorted(waits)[int(len(waits) * 0.95) - 1]),
+            "n_escaped": float(len(escapes)), "bottleneck_slots": float("nan")}
+
+
 def measure(cfg, stage: str, seed: int, *, log) -> dict[str, float]:
     """한 칸. **이미 돈 run 은 다시 돌리지 않는다.**
 
@@ -100,6 +140,8 @@ def measure(cfg, stage: str, seed: int, *, log) -> dict[str, float]:
     세계가 다른 경우가 실제로 있었다 (#55).
     """
 
+    if stage == "MNL":
+        return measure_mnl(cfg, seed, log=log)
     kw = kw_for(stage)
     rid = make_run_id(cfg.scenario_id, stage, seed, cfg.policy.participation)
     ok, why = reusable_run(default_db_path(), rid, cfg, **kw)
@@ -134,7 +176,8 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_chuseok_up_congested.yaml")
     ap.add_argument("--seeds", default="1-5")
-    ap.add_argument("--stages", default="S0,S4")
+    ap.add_argument("--stages", default="MNL,S2,S4",
+                    help="MNL 은 `run_mnl_world` 경로로 따로 돈다 (DB 에 안 쓴다)")
     ap.add_argument("--units", default="1,2,3", help="더 놓을 대수")
     ap.add_argument("--power-kw", type=float, default=100.0,
                     help="증설 충전기 출력. 휴게소마다 **같아야** 배치의 비교가 된다")
@@ -168,7 +211,7 @@ def main() -> int:
     # --- 기준선: 증설 없음 ---------------------------------------------------
     base: dict[tuple[str, int], float] = {}
     for stage in stages:
-        cfg = load_config(args.config, stage=stage)
+        cfg = load_config(args.config, stage=_runner_stage(stage))
         for seed in seeds:
             got = measure(cfg, stage, seed, log=quiet)
             base[(stage, seed)] = got["total_h"]
@@ -181,7 +224,7 @@ def main() -> int:
     for sid, name in CANDIDATES.items():
         for n in units:
             for stage in stages:
-                cfg = with_charger_delta(load_config(args.config, stage=stage),
+                cfg = with_charger_delta(load_config(args.config, stage=_runner_stage(stage)),
                                          {sid: n}, power_kw=args.power_kw)
                 saved = []
                 for seed in seeds:
