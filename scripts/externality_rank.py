@@ -77,6 +77,7 @@ import random
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Sequence
+from pathlib import Path
 
 import pandas as pd
 from _bootstrap import ROOT  # noqa: E402,F401
@@ -97,7 +98,7 @@ RECON_TOL = 1e-6
 # ---------------------------------------------------------------------------
 # 실현된 하루를 다시 쌓는다
 # ---------------------------------------------------------------------------
-def rebuild(rid: str, corridor_id: str, db_path) -> tuple[
+def rebuild(rid: str, corridor_id: str, db_path, events: Path | None = None) -> tuple[
     dict[str, tuple[Charger, ...]], dict[str, list[Arrival]],
     dict[tuple[str, str], int], pd.DataFrame
 ]:
@@ -105,9 +106,15 @@ def rebuild(rid: str, corridor_id: str, db_path) -> tuple[
 
     충전기 대수·출력은 **DB 에서** 온다 (`io/stations.py` 의 경고). 기록에 있는
     charger_id 만 모으면 **쉬던 충전기가 사라져** 대기가 통째로 틀린다.
+
+    `events` 를 주면 그 parquet 를 그대로 읽는다 — MNL 바닥은
+    `run_mnl_world.py` 로 돌아서 DB 에 run 이 없기 때문이다. 열 이름은 같다
+    (`ev_id, stop_seq, vclass_id, station_id, t_arrive_min, t_end_min,
+    wait_min, soc_in, soc_out, cold_factor`). 다르면 아래 재구성 관문에서
+    걸린다 — 조용히 넘어가는 길은 없다.
     """
 
-    path = RUNS_DIR / rid / "charge_event.parquet"
+    path = Path(events) if events else RUNS_DIR / rid / "charge_event.parquet"
     if not path.exists():
         raise SystemExit(f"충전 기록이 없다: {path}\n먼저 run 을 돌릴 것")
 
@@ -257,15 +264,25 @@ def main() -> int:
                     help="상위 몇 %% 를 빼 보나 (기본 5)")
     ap.add_argument("--reps", type=int, default=20, help="대조군 반복 횟수")
     ap.add_argument("--rng-seed", type=int, default=12345)
+    ap.add_argument("--events", default=None,
+                    help="충전 기록 parquet 를 직접 준다 — MNL 바닥처럼 DB 에 run 이 "
+                         "없는 경우. `--stage` 는 설정을 읽는 데만 쓰인다")
+    ap.add_argument("--tag", default=None,
+                    help="`--events` 와 같이 쓸 출력 이름 (기본 run_id)")
     args = ap.parse_args()
 
+    # `--events` 로 MNL 을 잴 때도 설정은 러너 스테이지로 읽는다. MNL 은 러너
+    # 스테이지가 아니라서 load_config(stage="MNL") 이 실패한다 — 공급·차종만
+    # 필요하고 그것은 스테이지와 무관하다
     cfg = with_seed(load_config(args.config, stage=args.stage), args.seed)
     rid = make_run_id(cfg.scenario_id, args.stage, args.seed, cfg.policy.participation)
+    tag = args.tag or rid
 
     print(f"\n민폐 랭킹 · {cfg.label}")
-    print(f"  {rid}\n")
+    print(f"  {args.events if args.events else rid}\n")
 
-    chargers, by_station, stop_seq, ev = rebuild(rid, cfg.corridor_id, default_db_path())
+    chargers, by_station, stop_seq, ev = rebuild(
+        rid, cfg.corridor_id, default_db_path(), events=args.events)
     check_reconstruction(chargers, by_station, ev)
 
     t = externality_by_visit(chargers, by_station, stop_seq)
@@ -347,7 +364,7 @@ def main() -> int:
         print("\n  → 대조 B 를 못 이겼다. **'차를 뺐으니 줄었다' 와 구별되지 않는다.**\n"
               "     랭킹 자체는 맞을 수 있지만 이 run 에서는 증거가 되지 않는다")
 
-    out = ROOT / "runs" / "sweeps" / f"externality_{rid}.csv"
+    out = ROOT / "runs" / "sweeps" / f"externality_{tag}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     t.to_csv(out, index=False)
     print(f"\nCSV: {out}")
