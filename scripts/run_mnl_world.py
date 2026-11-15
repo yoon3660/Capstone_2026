@@ -539,6 +539,9 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--oc-prob", type=float, default=None,
+                    help="기회충전 레이어의 prob 을 이 값으로 바꾼다 (0 이면 레이어를 "
+                         "뺀다). 발표 대표 숫자가 이 가정에 얼마나 걸려 있나를 재는 축")
     ap.add_argument("--drop-layer", default=None,
                     help="수요 레이어 하나를 뺀 세계로 돌린다 (예: opportunity_charge). "
                          "`cfg.variant` 로 scenario_id 에 꼬리표가 붙는다 — 기존 run 을 "
@@ -562,6 +565,27 @@ def main() -> int:
     if args.config is None or args.p is None:
         raise SystemExit("[중단] --config 와 --p 가 필요하다 (--merge 만 예외)")
     cfg0 = R.load_config(args.config)
+    if args.oc_prob is not None:
+        # ★ `cfg.variant` 로 scenario_id 에 꼬리표를 붙인다 — 수요를 바꾸는 것은
+        #   **세계를 바꾸는** 일이라 이름이 같으면 기존 run 을 덮는다 (#123)
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg0.raw_yaml)
+        before = raw["demand"].get("layers") or []
+        if not any(str(lay.get("kind")) == "opportunity_charge" for lay in before):
+            raise SystemExit(
+                "[중단] 이 config 에 opportunity_charge 레이어가 없다 — "
+                "`--oc-prob` 이 조용히 무효가 된다")
+        after = []
+        for lay in before:
+            if str(lay.get("kind")) != "opportunity_charge":
+                after.append(lay)
+            elif args.oc_prob > 0:
+                after.append({**lay, "prob": float(args.oc_prob)})
+        cfg0 = cfg0.variant(f"oc{args.oc_prob:g}".replace(".", "p"),
+                            {"demand.layers": after})
+        print(f"  ★ 기회충전 prob = {args.oc_prob:g} "
+              f"({'레이어 제거' if args.oc_prob == 0 else '값 변경'}) "
+              f"· scenario_id {cfg0.scenario_id}")
     if args.drop_layer:
         # ★ `cfg.variant` 로 간다 — scenario_id 에 꼬리표가 붙어야 기존 run 을
         #   덮지 않는다 (#123). 레이어를 지우는 것은 **세계를 바꾸는** 일이다
