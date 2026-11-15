@@ -91,7 +91,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/scenario_chuseok_up_congested.yaml")
-    ap.add_argument("--stages", default="S0,S2,S4")
+    ap.add_argument("--stages", default="S2,S4",
+                    help="S0 도 넣을 수 있다 (`--stages S0,S2,S4`) — 색은 칸마다 "
+                         "묶여 있어 넣고 빼도 다른 칸의 색이 안 바뀐다")
     ap.add_argument("--seeds", default="1-10")
     ap.add_argument("--mnl-dir",
                     default="runs/mnl_world/chuseok_congested_floor/theta0p05_w1p0")
