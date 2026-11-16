@@ -1,0 +1,25 @@
+{
+  "conzone_keys_page": 132,
+  "conzone_keys_api": 132,
+  "volume_cells": 27308,
+  "volume_exact": 27308,
+  "missing_same_place": 29760,
+  "cells_both": 29760,
+  "speed_within_0_1": 23682,
+  "speed_cells": 27308,
+  "api_vs_old_cells": 16364,
+  "api_vs_old_exact": 16364,
+  "vds_points_per_day": {
+    "DOWN": 425,
+    "UP": 422
+  },
+  "vds_complete_share_mean": {
+    "DOWN": 0.5932,
+    "UP": 0.5858
+  },
+  "vds_valid_cell_share_mean": {
+    "DOWN": 0.615,
+    "UP": 0.61
+  },
+  "conzone_over_vds_mean_median": 1.1343814650043023
+}
