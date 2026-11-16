@@ -1,0 +1,80 @@
+# #178: 설의 노선·차량·충전 행태 설정을 유지하고 평시(2026-03-02~11) 수요·기온만 교체한다.
+# EV 5%는 설·추석과 같은 비교 가정이며 실제 EV 통행 비율이 아니다. 출발 SoC 도 설과 같은 holiday 프로파일이다.
+# 공급: #178 실행은 BASE215(sp3_64_daily_base215_runner.adapter). 3월 충전이력(29곳·115기)이 설과 같아 추가 장비 0기.
+# 진입량 최대일 3/6. 날짜별 실행·검증은 scripts/run_quiet_replay_178.py, docs/data_validation/issue178_quiet_replay.md.
+scenario_id: quiet_2026_down_base
+label: "2026 평시 2026-03-06 경부선 DOWN"
+corridor_id: gyeongbu_down
+direction: DOWN
+day_type: WEEKDAY_BASE  # 평시 10일(3월 2일 대체공휴일, 7~8일 주말 포함)의 대표일 3월 6일(금)
+
+time:
+  start_min: 0       # 00:00
+  end_min: 1440      # 24:00
+  dt_min: 5
+
+demand:
+  period: quiet202603
+  volume_profile: data/processed/issue178_quiet202603/2026-03-06/DOWN/volume.csv
+  demand_multiplier: 1.0
+  ev_share: 0.05            # 통과 차량 중 EV 비중
+  ev_count_method: fixed
+  beta_binomial_concentration: 10000.0
+  poisson_lognormal_sigma: 0.05
+  charge_prob: 0.95
+  layers: []
+  safety_buffer_km: 30.0    # Rupnik 규칙의 안전버퍼
+  low_soc_threshold: 0.2    # 이 아래면 무조건 충전
+  through_profile: data/processed/issue178_quiet202603/2026-03-06/DOWN/through.csv
+  entry_exit_profile: data/processed/issue178_quiet202603/2026-03-06/DOWN/entry_exit.csv
+  od_profile: null  # 설·추석과 같다. #146 에서 TCS 혼합이 VDS 통과량 오차를 키웠다
+  cruise_speed_kmh: 80.0    # 휴게소 사이 주행 속도. Sprint 2 에 CTM 속도로 바뀐다
+  escape_cost_min: 120.0
+  escape_cost_sigma: 0.0
+  travel_time: fixed  # 설·추석과 같다. CTM 정체 재현율 기준 미달(평시는 실측 정체가 드묾)
+
+vehicles:
+  seed: 7                   # 시드 고정. 같은 시드면 모든 스테이지가 같은 차량 집합을 받는다
+  departure_soc: holiday
+  soc_profiles:
+    holiday:                # 평균 66.5% · 중앙값 65.8% · p5 40.3%. docs/departure_soc.md
+      dist: lognormal       #   고속도로 EV 충전 부하 문헌의 표준 (Bai et al. 2026)
+      mu: -0.3567           #   ⚠ ln(0.70) 은 **절삭 전** 중앙값이다. 상단 1.0 절삭 때문에
+      sigma: 0.35           #   모른다는 것을 넓이로 반영했다. 꼬리가 중심보다 2배 더 움직인다
+      lo: 0.33              #   ⚠ 행태 가드레일. 관측이 아니라 가정이다.
+      hi: 1.00              #     1.6% 만 걸린다 — 바닥이 분포를 대신하면 안 된다.
+    low:                    # 평균 34%. ⚠ Rupnik 의 **휴게소 도착 SoC** 를 진입 SoC 로 쓴 것 (#55 이전 기본값)
+      a: 2.0
+      b: 5.0
+      lo: 0.10
+      hi: 0.95
+    high:                   # 평균 76%. "전날 집에서 충전하고 출발" 가정 (근거 없음)
+      a: 5.0
+      b: 2.0
+      lo: 0.30
+      hi: 0.95
+  target_soc_cap: 0.8       # 목표 SoC 상한 (§2.3). 결정변수에서 제외
+  habit_soc: 0.0
+  habit_soc_sigma: 0.0
+
+environment:
+  # https://www.weather.go.kr/w/weather/land/aws-obs.do
+  temp_c: 5.33  # 기상청 날씨누리 2026-03-06 서울·대전·대구·부산 00/06/12/18시 실측 16개 평균 (issue178_quiet202603/kma_daily_mean.csv)
+
+policy:
+  stage: UE
+  participation: 1.0        # UE/S0 는 조정을 안 하므로 반드시 1.0
+  params: {}
+  ue:                       # UE 균형 반복 (engine/ue.py, docs/UE_equilibrium.md)
+    max_iter: 50            # 반복 1회 = 전원이 도착 순서대로 한 번씩 다시 고름. 넘으면 FAILED
+    gap_tol: 0.008
+    min_gain_min: 1.0       # 1분도 안 줄어드는 변경은 하지 않는다
+    max_stops: 3            # 한 차가 계획할 수 있는 최대 충전 정차 수
+
+queue:
+  discipline: FIFO              # 도착순
+  charger_select: MAX_POWER_IDLE  # 유휴 충전기 중 최고출력, 없으면 최단 해제 대기
+
+output:
+  write_snapshots: true
+  snapshot_every_min: 5

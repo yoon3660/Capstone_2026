@@ -1,0 +1,40 @@
+{
+ "label": "quiet202603",
+ "start": "2026-03-02",
+ "end": "2026-03-11",
+ "datasets": [
+  "volume",
+  "speed",
+  "volume_daily"
+ ],
+ "windows": [
+  [
+   "2026-03-02",
+   "2026-03-11"
+  ]
+ ],
+ "n_conzones": 142,
+ "n_files": 426,
+ "fetched_at": "2026-11-16T19:51:04+09:00",
+ "resumed_by": "scripts/fetch_traffic_resume_178.py",
+ "resume_stats": {
+  "retries": 0,
+  "fetched": 333,
+  "skipped": 93
+ },
+ "source": "https://data.ex.co.kr",
+ "endpoints": {
+  "volume": {
+   "path": "/portal/traffic/getTrafficVds",
+   "xAxis": "time"
+  },
+  "speed": {
+   "path": "/portal/speed/getSpeedVDS",
+   "xAxis": "time"
+  },
+  "volume_daily": {
+   "path": "/portal/traffic/getTrafficVds",
+   "xAxis": "day"
+  }
+ }
+}

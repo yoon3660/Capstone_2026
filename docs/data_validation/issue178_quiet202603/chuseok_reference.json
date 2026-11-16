@@ -1,0 +1,13 @@
+{
+  "source": "docs/data_validation/issue162_20261108/passenger266/comparison_metrics.csv",
+  "model": "UE",
+  "supply": "9/18 승용 266",
+  "seed": 7,
+  "days": "2026-09-24~27 합산",
+  "station_tvd_all_at_observed": {
+    "BOTH": 0.5532546177839771,
+    "DOWN": 0.4239404055052398,
+    "UP": 0.5987904181642288
+  },
+  "note": "설정·채점 방식이 달라(4일 합산, 공급 266) 평시·설과 같은 표로 비교하지 않는다"
+}
