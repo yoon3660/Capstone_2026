@@ -1,0 +1,56 @@
+{
+  "issue": 180,
+  "window": [
+    "2026-03-02 00:00:00",
+    "2026-03-12 00:00:00"
+  ],
+  "source": "data\\processed\\issue178_quiet202603\\observed_sessions.csv",
+  "starts": 10973,
+  "starts_by_direction": {
+    "DOWN": 4299,
+    "UP": 6674
+  },
+  "observed_sites": 29,
+  "occupied_min_start_sessions": 298106.7,
+  "occupied_min_carry_in": 263.8,
+  "carry_in_sessions": 13,
+  "occupied_min_total": 298370.5,
+  "occupied_hours_total": 4972.84,
+  "carry_affected_site_hours": 11,
+  "energy_kwh_mean_p50_p90": [
+    21.863,
+    20.23,
+    39.418
+  ],
+  "elapsed_min_mean_p50_p90": [
+    27.178,
+    27.367,
+    40.6
+  ],
+  "reported_charge_min_mean_p50_p90": [
+    26.317,
+    26.983,
+    40.05
+  ],
+  "charger_id_blank": 0,
+  "max_concurrent": {
+    "where": "DOWN 칠곡휴게소",
+    "sessions": 8
+  },
+  "quality": {
+    "exact_duplicate_rows": 0,
+    "same_display_device_overlap_pairs": 72,
+    "overlap_by_station": {
+      "DOWN 칠곡휴게소": 12,
+      "UP 안성휴게소": 60
+    },
+    "overlap_pair_min_sum_not_deduction": 1045.567,
+    "over_120_min_sessions": 12,
+    "over_1440_min_sessions": 0,
+    "elapsed_mean_all_min": 27.178,
+    "elapsed_mean_le_120_min": 26.738,
+    "gimcheon_up_n": 53,
+    "gimcheon_up_elapsed_mean_all_min": 25.922,
+    "gimcheon_up_elapsed_mean_le_120_min": 25.922
+  }
+}
