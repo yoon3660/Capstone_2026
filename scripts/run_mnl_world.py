@@ -27,8 +27,10 @@ Oracle 은 기존 `PERFECT_ROLLING` 그대로다 — S2 정책에 **실현된 �
   시뮬레이터에 넘어가기 직전에 정책을 **감싸는 것** 하나뿐이다 (`_inject`)
 - **DB 에 쓰지 않는다.** `run.stage` 에 CHECK 제약이 있고, 같은 run_id 로 기존 런을
   덮어쓸 위험이 있다. 결과는 `--out` 폴더에 manifest 와 함께 남긴다
-- 총비용 정의는 기존과 같다: **총 체류 + 이탈 대수 × escape_cost_min**
-  (`run_perfect_rolling.social_cost`)
+- 총비용은 사다리와 **같은 세 항**이다 (`runner.social_cost_h`, #147):
+  **총 체류 + 이탈 비용 합 + 포기 전 대기**. 2026-11-14 까지 이 파일은 두 항만
+  (`체류 + 이탈 대수 × escape_cost_min`) 셌다 — 사다리와 **비용 정의가 달랐다.**
+  식은 `cost_terms` 한 곳에만 둔다
 
 ## 출력 (`--out`, 기본 runs/mnl_world/<scenario_id>/)
 
@@ -64,14 +66,20 @@ from evdt.engine.forecast import (  # noqa: E402
     OracleSource,
     describe_shift,
 )
-from evdt.engine.mnl import ESCAPE_MODES, MnlPolicy, MnlSettings, background_settings  # noqa: E402
+from evdt.engine.mnl import (  # noqa: E402
+    ESCAPE_MODES,
+    POWER_STATS,
+    MnlPolicy,
+    MnlSettings,
+    background_settings,
+)
 from evdt.engine.participation import (  # noqa: E402
     NONPART_INFO,
     NonParticipantAwareForecast,
     ParticipationPolicy,
     participants,
 )
-from evdt.engine.ue import UESettings  # noqa: E402
+from evdt.engine.ue import UENotConverged, UESettings  # noqa: E402
 from evdt.paths import PROJECT_ROOT, RUNS_DIR, default_db_path  # noqa: E402
 
 #: 오라클 행에 들어가는 열 (run_perfect_rolling.ARRIVAL_COLS 와 같다)
@@ -121,6 +129,11 @@ def prepare(cfg, seed: int, *, root: Path, log: Callable[[str], None]) -> World:
         corridor_end_km = float(conn.execute(
             "SELECT length_km FROM corridor WHERE corridor_id = ?", (cfg.corridor_id,)
         ).fetchone()[0])
+
+    # ★ 증설(`supply.charger_delta`)을 **여기서도** 적용한다. 이 함수는
+    #   `run_once` 의 준비 부분을 베껴 온 것이라, 한쪽만 고치면 MNL 바닥은
+    #   증설을 조용히 무시하고 사다리만 반영하게 된다 (2026-11-14)
+    charger_rows = R._apply_charger_delta(charger_rows, cfg, log)
 
     specs = R.station_specs(station_rows, charger_rows)
     chargers = {s.station_id: s.chargers for s in specs}
@@ -172,10 +185,32 @@ def _inject(transform: Callable[[Any, Any], tuple[Any, Any]]) -> Iterator[dict]:
         R.run_corridor = original
 
 
+def cost_terms(events: list[dict], escapes: list[dict]) -> tuple[float, float, float]:
+    """사회적 비용의 **세 항** (시간) — `runner.social_cost_h` 와 같은 정의 (#147).
+
+        총 = 총 체류 + 이탈 비용 합 + 포기 전 대기
+
+    `social_cost_h` 는 DB 의 `run_kpi` 를 받는다. 이 스크립트는 DB 에 쓰지 않고
+    메모리의 이벤트를 쓰므로 그 함수를 그대로 부를 수 없다. **그래서 식이 두 벌이
+    된다 — 한 벌로 묶어 둔다.** 같은 식이 여덟 벌 있다가 두 가지로 틀어진 것이
+    #147 의 사고였고, 이 파일 안에만도 `run_cell` 과 `run_ue_cell` 에 두 벌이
+    있었다 (둘 다 포기 전 대기를 빼먹고 있었다).
+
+    차마다 더한다 — 이탈 비용은 **차마다 다르고**, 이탈은 인내가 짧은 쪽에 쏠려서
+    중앙값 x 대수로 세면 과대계상된다 (`escape_cost_sigma: 0.0` 인 동안만 우연히
+    맞는다).
+    """
+
+    dwell_h = sum(e["dwell_min"] for e in events) / 60.0
+    esc_cost_h = sum(float(r.get("escape_cost_min") or 0.0) for r in escapes) / 60.0
+    renege_wait_h = sum(float(r.get("waited_min") or 0.0) for r in escapes) / 60.0
+    return dwell_h, esc_cost_h, renege_wait_h
+
+
 def run_cell(world: World, stage: str, *, p: float, mnl: MnlSettings,
              strength: float, oracle: OracleSource | None, s3_window: int | None,
              log: Callable[[str], None], classic: bool = False,
-             nonpart_info: str = "none") -> tuple[dict, list[dict]]:
+             nonpart_info: str = "none") -> tuple[dict, list[dict], list[dict]]:
     """칸 하나. stage 는 "MNL"(바닥) · 엔진 스테이지 · "ORACLE".
 
     `classic=True` 면 **기존 사다리 세계**다 — MNL 도 참여율 래퍼도 없이 runner 가 만든
@@ -220,9 +255,8 @@ def run_cell(world: World, stage: str, *, p: float, mnl: MnlSettings,
     wrapper = seen.get("policy")
     counters = getattr(wrapper, "counters", {}) if (stage != BASE and not classic) else {}
     waits = np.array([e["wait_min"] for e in events]) if events else np.zeros(1)
-    dwell_h = sum(e["dwell_min"] for e in events) / 60.0
     n_esc = len(escapes)
-    esc_h = world.escape_cost_min / 60.0
+    dwell_h, esc_cost_h, renege_wait_h = cost_terms(events, escapes)
     # ★ 예외 규칙의 재료 — **정차 한도를 다 쓰고 "갈 곳 없음" 으로 나간 차** (#168 진단).
     #   모든 정책이 같이 쓰는 충전 판단 규칙의 결함이라 배정의 질과 무관하다
     #   (docs/meeting_memo_stranded_escape_20261112.md). 지우지 않고 **따로 센다**
@@ -237,15 +271,22 @@ def run_cell(world: World, stage: str, *, p: float, mnl: MnlSettings,
     row = {
         "seed": seed, "family": "classic" if classic else "mnl", "cell": cell,
         "stage": stage, "p": 1.0 if classic else (0.0 if stage == BASE else p),
-        "theta": mnl.theta, "wait_weight": mnl.wait_weight, "escape_mode": mnl.escape_mode,
+        "theta": mnl.theta, "wait_weight": mnl.wait_weight,
+        "escape_mode": mnl.escape_mode, "power_stat": mnl.power_stat,
         "n_ev_charging": len(trip_ids), "n_participants": len(part),
         "dwell_total_h": dwell_h, "n_escaped": n_esc,
         "n_escaped_balked": sum(1 for r in escapes if r["reason"] == "balked"),
+        "n_escaped_reneged": sum(1 for r in escapes if r["reason"] == "reneged"),
         "n_exhausted": n_exhausted,
-        "escape_h": n_esc * esc_h,
-        "total_h": dwell_h + n_esc * esc_h,
-        # 통제 열: 정차 한도 소진 이탈을 뺀 비용 (예외 규칙 R2)
-        "total_ex_h": dwell_h + (n_esc - n_exhausted) * esc_h,
+        "escape_h": esc_cost_h,
+        "renege_wait_h": renege_wait_h,
+        "total_h": dwell_h + esc_cost_h + renege_wait_h,
+        # 통제 열: 정차 한도 소진 이탈을 뺀 비용 (예외 규칙 R2).
+        # ⚠ 그 차들의 이탈 비용만 뺀다 — 포기 전 대기는 `no_plan` 이탈에 없다
+        #   (줄에 서지도 않고 "갈 곳 없음" 으로 나간 차다)
+        "total_ex_h": dwell_h + esc_cost_h + renege_wait_h - sum(
+            float(r.get("escape_cost_min") or 0.0) for r in escapes
+            if r["reason"] == "no_plan" and stops[r["ev_id"]] >= max_stops) / 60.0,
         "wait_mean_min": float(waits.mean()), "wait_p95_min": float(np.percentile(waits, 95)),
         "n_charge_visits": len(events),
         "policy_stranded": float(kpis.get("policy_stranded", (0, ""))[0]),
@@ -255,7 +296,7 @@ def run_cell(world: World, stage: str, *, p: float, mnl: MnlSettings,
         "nonpart_booked": counters.get("nonpart_booked", 0),
         "seconds": secs,
     }
-    return row, list(events)
+    return row, list(events), list(escapes)
 
 
 class _NullWriter:
@@ -268,7 +309,8 @@ class _NullWriter:
         return None
 
 
-def run_ue_cell(world: World, log: Callable[[str], None]) -> tuple[dict, list[dict]]:
+def run_ue_cell(world: World,
+                log: Callable[[str], None]) -> tuple[dict, list[dict], list[dict]]:
     """기존 사다리의 **참고 천장 UE** — 27.5% 의 분모 끝점이다 (gap_table: FLOOR S0 · CEIL UE).
 
     UE 는 같은 차량·같은 수요로 따로 푼 균형이라 바닥이 S0 든 MNL 이든 **같은 값**이다.
@@ -288,23 +330,26 @@ def run_ue_cell(world: World, log: Callable[[str], None]) -> tuple[dict, list[di
     n_exhausted = sum(1 for r in escapes
                       if r["reason"] == "no_plan" and stops[r["ev_id"]] >= max_stops)
     waits = np.array([e["wait_min"] for e in events]) if events else np.zeros(1)
-    dwell_h = sum(e["dwell_min"] for e in events) / 60.0
-    esc_h = world.escape_cost_min / 60.0
     n_esc = len(escapes)
+    dwell_h, esc_cost_h, renege_wait_h = cost_terms(events, escapes)      # 세 항 (#147)
     return {
         "seed": seed, "family": "classic", "cell": "classic:UE", "stage": "UE", "p": 1.0,
         "theta": float("nan"), "wait_weight": float("nan"),
         "n_ev_charging": len(world.built.trips), "n_participants": len(world.built.trips),
         "dwell_total_h": dwell_h, "n_escaped": n_esc,
         "n_escaped_balked": sum(1 for r in escapes if r["reason"] == "balked"),
-        "n_exhausted": n_exhausted, "escape_h": n_esc * esc_h,
-        "total_h": dwell_h + n_esc * esc_h,
-        "total_ex_h": dwell_h + (n_esc - n_exhausted) * esc_h,
+        "n_escaped_reneged": sum(1 for r in escapes if r["reason"] == "reneged"),
+        "n_exhausted": n_exhausted, "escape_h": esc_cost_h,
+        "renege_wait_h": renege_wait_h,
+        "total_h": dwell_h + esc_cost_h + renege_wait_h,
+        "total_ex_h": dwell_h + esc_cost_h + renege_wait_h - sum(
+            float(r.get("escape_cost_min") or 0.0) for r in escapes
+            if r["reason"] == "no_plan" and stops[r["ev_id"]] >= max_stops) / 60.0,
         "wait_mean_min": float(waits.mean()), "wait_p95_min": float(np.percentile(waits, 95)),
         "n_charge_visits": len(events), "policy_stranded": 0.0,
         "engine_asked": 0, "background_asked": 0, "seconds": secs,
         "ue_final_gap": float(kpis.get("ue_final_gap", (float("nan"), ""))[0]),
-    }, list(events)
+    }, list(events), list(escapes)
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +448,10 @@ def summarize(cells: pd.DataFrame) -> pd.DataFrame:
                     to_ue = (f - g[col]) / (f - u) * 100.0
                     rec[f"closed_to_ue{sfx}_pct"] = to_ue.mean()
                     rec[f"closed_to_ue{sfx}_pct_ci95"] = _ci(to_ue)
+                    # ★ UE 가 수렴 못 한 시드는 NaN 이고 `.mean()` 이 **조용히 뺀다.**
+                    #   그러면 이 칸만 n 이 다른데 표에는 `n_seeds` 하나뿐이라 들키지
+                    #   않는다. 실제로 쓴 시드 수를 따로 적는다
+                    rec[f"closed_to_ue{sfx}_n_seeds"] = int(to_ue.notna().sum())
             if not s1.empty and rec["stage"] in ("S2", "S3", "S4", ORACLE):
                 ref = s1.reindex(g.index)
                 # 둘 다 0 이면 맞춘 것이다. S1 이 0 인데 이 칸이 0 이 아니면 못 맞춘 것이다
@@ -419,7 +468,8 @@ def summarize(cells: pd.DataFrame) -> pd.DataFrame:
 
 SHOW = ["cell", "n_seeds", "total_h", "total_ex_h", "n_escaped", "n_exhausted",
         "drop_vs_floor_pct", "drop_vs_floor_ex_pct", "gap_closed_pct", "gap_closed_ex_pct",
-        "closed_to_ue_pct", "closed_to_ue_ex_pct", "escape_matched", "moved_share_last"]
+        "closed_to_ue_pct", "closed_to_ue_ex_pct", "closed_to_ue_n_seeds",
+        "escape_matched", "moved_share_last"]
 
 
 def merge(dirs: list[str], out: Path) -> int:
@@ -472,6 +522,10 @@ def main() -> int:
                     help="MNL 척도 (1/분). 기본은 추석 보정 채택값 0.05 "
                          "(docs/data_validation/mnl_calibration_168.md). inf 면 S0 와 같다")
     ap.add_argument("--wait-weight", type=float, default=1.0)
+    ap.add_argument("--power-stat", choices=sorted(POWER_STATS), default="max",
+                    help="운전자가 지각하는 충전 출력 (#T2). max = 가장 빠른 충전기 "
+                         "(기본 · S0 와 같다) · mean = 대수 가중 평균 · p50 · min. "
+                         "`max` 는 느린 기계가 많은 큰 휴게소를 과대평가한다")
     ap.add_argument("--escape-mode", choices=ESCAPE_MODES, default="s0",
                     help="이탈 판정: s0 = 잡음 없이 S0 규칙 (기본) · noisy = 이탈에도 잡음 (#168 첫 실행 방식, 민감도)")
     ap.add_argument("--nonpart-info", choices=NONPART_INFO, default="none",
@@ -485,6 +539,34 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--beta-dist", type=float, default=0.0,
+                    help="거리 항 β_d (분/km). 양수면 가까운 휴게소 선호, 음수면 먼 쪽. "
+                         "**선택의 비용에만** 들어가고 이탈 판정은 안 건드린다. "
+                         "ASC 와 같이 적합하면 식별이 안 된다 — ASC 를 끄고 쓸 것")
+    ap.add_argument("--ev-share", type=float, default=None,
+                    help="EV 보급 레이어의 비율을 덮어쓴다 (예: 0.10). scenario_id 뒤에 "
+                         "__ev<nn> 이 붙는다 — `run_chuseok_ladder.py --ev-share` 와 "
+                         "**같은 꼬리표**라 사다리 칸과 짝지어 비교할 수 있다")
+    ap.add_argument("--ev-count", default=None,
+                    help="EV 대수 생성 방식 (#53): fixed · poisson 등. `variant` 로 "
+                         "scenario_id 에 꼬리표가 붙는다")
+    ap.add_argument("--asc", default=None,
+                    help="휴게소 고정효과 JSON (station_id -> 분). "
+                         "`scripts/fit_asc.py` 가 만든 asc.json 을 준다")
+    ap.add_argument("--habit-soc", type=float, default=None,
+                    help="습관 목표 SoC (#82). 0 이면 '목적지까지 갈 만큼만' 이고, "
+                         "그게 지금 기본값이라 차들이 조금씩 자주 찍는다. "
+                         "`--habit-sigma` 와 같이 쓴다")
+    ap.add_argument("--habit-sigma", type=float, default=0.05,
+                    help="습관 목표의 흩어짐. 0 이면 전원이 같은 값을 목표로 해서 "
+                         "무차별해진 차들이 한꺼번에 뒤집힌다 (#112)")
+    ap.add_argument("--oc-prob", type=float, default=None,
+                    help="기회충전 레이어의 prob 을 이 값으로 바꾼다 (0 이면 레이어를 "
+                         "뺀다). 발표 대표 숫자가 이 가정에 얼마나 걸려 있나를 재는 축")
+    ap.add_argument("--drop-layer", default=None,
+                    help="수요 레이어 하나를 뺀 세계로 돌린다 (예: opportunity_charge). "
+                         "`cfg.variant` 로 scenario_id 에 꼬리표가 붙는다 — 기존 run 을 "
+                         "덮지 않는다")
     ap.add_argument("--data-root", default=str(PROJECT_ROOT),
                     help="수요 프로파일(data/processed) 을 찾을 루트")
     ap.add_argument("--classic", action="store_true",
@@ -504,6 +586,77 @@ def main() -> int:
     if args.config is None or args.p is None:
         raise SystemExit("[중단] --config 와 --p 가 필요하다 (--merge 만 예외)")
     cfg0 = R.load_config(args.config)
+    if args.ev_share is not None:
+        # ★ `run_chuseok_ladder.py` 의 `--ev-share` 와 **글자 하나까지 같은 꼬리표**
+        #   를 만들어야 한다 (`ev10`). 다르면 MNL 바닥과 사다리 칸이 서로 다른
+        #   scenario_id 를 갖게 되고, 그러면 "같은 세계" 가 아니라 비교가 깨진다
+        if not 0.0 < args.ev_share <= 1.0:
+            raise SystemExit(f"[중단] --ev-share 는 (0, 1] 이어야 한다: {args.ev_share}")
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg0.raw_yaml)
+        layers, found = [], False
+        for layer in raw["demand"].get("layers") or []:
+            layer = dict(layer)
+            if layer.get("kind") == "ev_adoption":
+                layer["ev_share"] = args.ev_share
+                found = True
+            layers.append(layer)
+        if not found:
+            raise SystemExit(f"[중단] {args.config} 에 ev_adoption 레이어가 없다 — "
+                             "--ev-share 로 덮을 대상이 없다")
+        cfg0 = cfg0.variant(f"ev{round(args.ev_share * 100):02d}",
+                            {"demand.layers": layers})
+        print(f"  ★ EV 보급률 = {args.ev_share:.1%} · scenario_id {cfg0.scenario_id}")
+    if args.ev_count:
+        cfg0 = cfg0.variant(f"evc-{args.ev_count}".replace("_", "-"),
+                            {"demand.ev_count_method": args.ev_count})
+        print(f"  ★ EV 대수 생성 = {args.ev_count} · scenario_id {cfg0.scenario_id}")
+    if args.habit_soc is not None:
+        # ★ 세계를 바꾸는 손잡이 — `cfg.variant` 로 꼬리표를 붙인다 (#123)
+        cfg0 = cfg0.variant(
+            f"h{args.habit_soc * 100:.0f}s{args.habit_sigma * 100:.0f}",
+            {"vehicles.habit_soc": float(args.habit_soc),
+             "vehicles.habit_soc_sigma": float(args.habit_sigma)})
+        print(f"  ★ 습관 목표 SoC = {args.habit_soc:g} (σ {args.habit_sigma:g}) "
+              f"· scenario_id {cfg0.scenario_id}")
+    if args.oc_prob is not None:
+        # ★ `cfg.variant` 로 scenario_id 에 꼬리표를 붙인다 — 수요를 바꾸는 것은
+        #   **세계를 바꾸는** 일이라 이름이 같으면 기존 run 을 덮는다 (#123)
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg0.raw_yaml)
+        before = raw["demand"].get("layers") or []
+        if not any(str(lay.get("kind")) == "opportunity_charge" for lay in before):
+            raise SystemExit(
+                "[중단] 이 config 에 opportunity_charge 레이어가 없다 — "
+                "`--oc-prob` 이 조용히 무효가 된다")
+        after = []
+        for lay in before:
+            if str(lay.get("kind")) != "opportunity_charge":
+                after.append(lay)
+            elif args.oc_prob > 0:
+                after.append({**lay, "prob": float(args.oc_prob)})
+        cfg0 = cfg0.variant(f"oc{args.oc_prob:g}".replace(".", "p"),
+                            {"demand.layers": after})
+        print(f"  ★ 기회충전 prob = {args.oc_prob:g} "
+              f"({'레이어 제거' if args.oc_prob == 0 else '값 변경'}) "
+              f"· scenario_id {cfg0.scenario_id}")
+    if args.drop_layer:
+        # ★ `cfg.variant` 로 간다 — scenario_id 에 꼬리표가 붙어야 기존 run 을
+        #   덮지 않는다 (#123). 레이어를 지우는 것은 **세계를 바꾸는** 일이다
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg0.raw_yaml)
+        before = raw["demand"].get("layers") or []
+        after = [lay for lay in before
+                 if str(lay.get("kind")) != args.drop_layer]
+        if len(after) == len(before):
+            raise SystemExit(
+                f"[중단] 뺄 레이어가 없다: {args.drop_layer!r} "
+                f"(지금 {[lay.get('kind') for lay in before]}). 오타면 "
+                "'레이어를 뺐다' 고 믿은 채 원래 세계를 돌리게 된다")
+        cfg0 = cfg0.variant(f"no-{args.drop_layer}".replace("_", "-"),
+                            {"demand.layers": after})
+        print(f"  ★ 레이어 제거 — {args.drop_layer} "
+              f"(scenario_id {cfg0.scenario_id})")
     seeds = R.parse_seeds(args.seeds)
     if not 0.0 < args.p <= 1.0:
         raise SystemExit(f"[중단] 참여율은 0 초과 1 이하여야 한다: {args.p} "
@@ -530,6 +683,7 @@ def main() -> int:
         "oracle_rounds_max": args.rounds, "floor_only": args.floor_only,
         "nonpart_info": args.nonpart_info,
         "observed_strength": args.strength, "s3_window": args.s3_window,
+        "power_stat": args.power_stat, "asc_file": args.asc,
         "escape_cost_min": cfg0.demand.escape_cost_min, "data_root": str(root),
         "db_path": str(default_db_path()), "git": _git_sha(),
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -542,12 +696,30 @@ def main() -> int:
           f"엔진 {stages or '-'} · Oracle 회차 ≤ {args.rounds}")
     print(f"수요: {cfg0.demand_label}\n출력: {out}\n")
 
+    asc: dict[str, float] = {}
+    if args.asc:
+        asc = {k: float(v) for k, v in
+               json.loads(Path(args.asc).read_text(encoding="utf-8")).items()}
+        print(f"  ★ ASC {len(asc)}곳 (폭 {max(asc.values()) - min(asc.values()):.1f}분) "
+              f"← {args.asc}")
     mnl_kw = {"theta": args.theta, "wait_weight": args.wait_weight,
-              "escape_mode": args.escape_mode}
+              "escape_mode": args.escape_mode, "power_stat": args.power_stat,
+              "asc": asc, "beta_dist_min_per_km": args.beta_dist}
+    if args.beta_dist:
+        print(f"  ★ 거리 항 β_d = {args.beta_dist:+.4f} 분/km "
+              f"({'가까운 쪽 선호' if args.beta_dist > 0 else '먼 쪽 선호'})")
     rows: list[dict] = []
+    ue_unconverged: list[int] = []
 
-    def keep(row: dict, events: list[dict], name: str) -> None:
-        _save(events, out / f"seed{row['seed']}" / f"{name}.parquet")
+    def keep(row: dict, events: list[dict], name: str,
+             escapes: list[dict] | None = None) -> None:
+        seed_dir = out / f"seed{row['seed']}"
+        _save(events, seed_dir / f"{name}.parquet")
+        # ★ 이탈 이벤트도 남긴다. 전에는 버렸는데, 그러면 휴게소별 그림
+        #   (`plot_station_bars.py`) 의 **아래쪽 막대 — 그 휴게소가 밀어낸 차** 를
+        #   MNL 칸에 그릴 수 없다. `best_station_id` 가 거기에만 있다 (2026-11-14)
+        if escapes is not None:
+            _save(escapes, seed_dir / f"{name}__escape.parquet")
         rows.append(row)
         print(f"  {row['cell']:<16} 총비용 {row['total_h']:>10,.1f}h  이탈 {row['n_escaped']:>5,}  "
               f"평균대기 {row['wait_mean_min']:6.1f}분  ({row['seconds']:.0f}초)")
@@ -560,8 +732,9 @@ def main() -> int:
         common = {"mnl": mnl, "strength": args.strength, "s3_window": args.s3_window,
                   "log": quiet, "nonpart_info": args.nonpart_info}
 
-        base_row, base_events = run_cell(world, BASE, p=0.0, oracle=None, **common)
-        keep({**base_row, "round": 0, "final": True}, base_events, BASE)
+        base_row, base_events, base_esc = run_cell(
+            world, BASE, p=0.0, oracle=None, **common)
+        keep({**base_row, "round": 0, "final": True}, base_events, BASE, base_esc)
 
         def ceiling(src_events: list[dict], src_id: str, *, p: float, classic: bool,
                     tag: str, world: World = world, common: dict = common) -> None:
@@ -570,8 +743,8 @@ def main() -> int:
             src, prev = _arrivals(src_events), None
             for rnd in range(1, args.rounds + 1):
                 oracle = OracleSource(rows=src, source_run_id=src_id, round_no=rnd)
-                row, ev = run_cell(world, ORACLE, p=p, oracle=oracle, classic=classic,
-                                   **common)
+                row, ev, esc = run_cell(world, ORACLE, p=p, oracle=oracle,
+                                        classic=classic, **common)
                 now = _arrivals(ev)
                 moved = float("nan")
                 if prev is not None:
@@ -582,7 +755,7 @@ def main() -> int:
                 done = rnd == args.rounds or (not math.isnan(moved)
                                               and moved < FIXED_POINT_SHARE)
                 keep({**row, "round": rnd, "moved_share": moved, "final": done}, ev,
-                     f"{tag}_r{rnd}")
+                     f"{tag}_r{rnd}", esc)
                 if done:
                     break
                 src_id, src, prev = f"{tag}_r{rnd}", now, now
@@ -591,8 +764,8 @@ def main() -> int:
         for p in ps:
             # --floor-only: MNL 세계는 바닥만. p=1 이면 엔진 칸은 기존 세계와 같은 계산이다
             for st in ([] if args.floor_only else stages):
-                row, ev = run_cell(world, st, p=p, oracle=None, **common)
-                keep({**row, "round": 0, "final": True}, ev, f"{st}_p{p:g}")
+                row, ev, esc = run_cell(world, st, p=p, oracle=None, **common)
+                keep({**row, "round": 0, "final": True}, ev, f"{st}_p{p:g}", esc)
             if not (args.floor_only or args.skip_ceiling):
                 ceiling(base_events, f"{BASE}@seed{seed}", p=p, classic=False,
                         tag=f"{ORACLE}_p{p:g}")
@@ -605,8 +778,9 @@ def main() -> int:
                 if st in [r["stage"] for r in rows if r["seed"] == seed
                           and r["family"] == "classic"]:
                     continue
-                row, ev = run_cell(world, st, p=1.0, oracle=None, classic=True, **common)
-                keep({**row, "round": 0, "final": True}, ev, f"classic_{st}")
+                row, ev, esc = run_cell(world, st, p=1.0, oracle=None,
+                                        classic=True, **common)
+                keep({**row, "round": 0, "final": True}, ev, f"classic_{st}", esc)
                 if st == "S1":
                     s1_events = ev
             ceiling(s1_events or [], f"classic:S1@seed{seed}", p=1.0, classic=True,
@@ -614,10 +788,25 @@ def main() -> int:
 
         # --- 참고 천장 UE (--ue): 27.5% 의 분모 끝점 -------------------------------
         if args.ue:
-            row, ev = run_ue_cell(world, quiet)
-            keep({**row, "round": 0, "final": True}, ev, "classic_UE")
+            # ★ UE 는 **시드에 따라 수렴하지 못한다** — `escape_cost_of` 의 설명대로
+            #   값이 한 점에 몰리면 gap 이 5~6% 에서 추세 없이 흔들린다. 그것을
+            #   그대로 던지면 **그 시드에서 스크립트가 통째로 죽고 뒤의 시드가
+            #   날아간다** (2026-11-13: 시드 5 에서 죽어 6~10 을 잃었다).
+            #   UE 는 참고 끝점일 뿐이고 S0·엔진·천장 칸은 멀쩡하므로, 이 시드만
+            #   UE 없이 두고 넘어간다. 빠진 시드는 끝에서 **반드시 밝힌다**
+            try:
+                row, ev, esc = run_ue_cell(world, quiet)
+                keep({**row, "round": 0, "final": True}, ev, "classic_UE", esc)
+            except UENotConverged as exc:
+                ue_unconverged.append(seed)
+                print(f"  {'classic:UE':<16} ★ 수렴 실패 — 이 시드는 UE 없이 간다\n"
+                      f"      {exc}")
 
     cells = pd.DataFrame(rows)
+    if ue_unconverged:
+        print(f"\n★ UE 가 수렴하지 않은 시드: {ue_unconverged} "
+              f"— `closed_to_ue_*` 는 이 시드를 뺀 값이다 (n 은 요약의 "
+              f"`closed_to_ue_n_seeds` 를 볼 것)")
 
     # 같은 시드인데 칸마다 차가 다르면 비교가 성립하지 않는다 (run_perfect_rolling 과 같은 검사)
     bad_seed = {s: g["n_ev_charging"].unique().tolist()

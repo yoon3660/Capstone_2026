@@ -29,8 +29,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from evdt import demand_layers
 from evdt.config import ScenarioConfig
 from evdt.demand_layers import effective_ev_share, opportunity_charge
+from evdt.engine.amenity import NO_AMENITY, AmenityPrefs
 from evdt.engine.forecast import (
     ArrivalSpec,
     BlurredForecast,
@@ -41,6 +43,7 @@ from evdt.engine.forecast import (
     specs_from_trips,
 )
 from evdt.engine.mec import MecPolicy, MecSettings
+from evdt.engine.patience import Patience
 from evdt.engine.reservation import ReservationLedger
 from evdt.engine.s0 import S0Policy, S0Settings
 from evdt.engine.s1 import S1Policy, S1Settings
@@ -139,9 +142,15 @@ def load_config(
     #   반드시 이름 붙은 레이어로만 얹는다 (#54, `demand_layers.py`). 레이어로 넣어야
     #   `demand_label` 에 "EV 보급률 25%" 가 찍히고 **모든 그림 부제에 따라 붙는다**.
     #   직접 덮어쓰면 재현과 가정이 구분되지 않는다 — 그걸 막으려고 만든 장치다.
+    #
+    # ⚠ **ev_adoption 레이어만** 갈아끼운다 (#146). 예전에는 `demand.layers` 를 통째로
+    #   덮어써서 기회충전 레이어가 같이 날아갔다 — 보급률 하나를 바꿨다고 생각한
+    #   실험이 실은 **두 축을 동시에** 움직였다. 추석 config 에서 같은 ev_share 10%
+    #   인데 충전 필요 대수가 4,958 ↔ 2,138 로 2.3배 갈렸다.
     if ev_share is not None:
         tags.append(f"ev{ev_share * 100:g}")
-        overrides["demand.layers"] = [{"kind": "ev_adoption", "ev_share": float(ev_share)}]
+        overrides["demand.layers"] = demand_layers.replace_kind(
+            cfg.demand.layers, {"kind": "ev_adoption", "ev_share": float(ev_share)})
 
     # 실측 OD 목적지 (#99). **세계를 바꾸므로 반드시 이름이 바뀌어야 한다** — 안 바뀌면
     # 옛 수요 run 과 OD 수요 run 이 같은 run_id 를 갖고, #101 의 비교가 같은 run 을
@@ -228,7 +237,22 @@ def run_params(cfg: ScenarioConfig, *, oracle: OracleSource | None = None,
         # 그래서 이 칸은 **없으면 재사용을 막는다** (`stale_reason`). 이 파일의
         # 다른 칸들과 규칙이 다른 유일한 자리다 — 나머지는 "없으면 옛 run 을
         # 버리지 않는다" 이고, 여기는 **옛 run 이 틀렸다.**
+        # 인내의 **모양** (#146). 중앙값이 같아도 모양이 다르면 다른 세계다 —
+        # 기록에 없으면 "어느 인내로 돌았나" 를 나중에 알 수 없다. 옛 run 에는
+        # 이 칸이 없고, 그건 점질량(전원 120분) 이었다는 뜻이다
+        # 포기를 켰나 (#147). **물리가 바뀐다** — 끈 run 과 켠 run 은 비교 대상이
+        # 아니다. 옛 run 에는 이 칸이 없고, 그건 꺼져 있었다는 뜻이다
+        "renege": cfg.demand.renege,
+        # ★ 인내의 중앙값을 **따로** 적는다 (#147 후속). 전에는 이 칸에
+        #   `escape_cost_min` 이 중앙값으로 들어가 있어서, 둘을 가른 run 과
+        #   안 가른 run 이 `run_params` 에서 구분되지 않았다
+        "patience": Patience(median_min=cfg.demand.patience_median_min
+                             or cfg.demand.escape_cost_min,
+                             kind=cfg.demand.patience_kind,
+                             shape=cfg.demand.patience_shape).describe(),
+        "patience_median_min": cfg.demand.patience_median_min,
         "group_scorer": GROUP_SCORER,
+        "dispatch_rule": DISPATCH_RULE,
     }
 
 
@@ -272,6 +296,57 @@ def engine_settings(opts: Mapping[str, object] | None, cls: type) -> dict:
     return out
 
 
+#: 편의시설 선호를 켜는 engine_opts 키 (#146). Settings 필드가 아니라 **스칼라**다.
+AMENITY_KEYS = ("amenity_pull", "amenity_patience", "amenity_source")
+
+
+def _amenity_from_opts(opts: Mapping[str, object] | None, specs, log: Log):
+    """`engine_opts` 에서 편의시설 키를 꺼내 `AmenityPrefs` 를 만든다.
+
+    돌려주는 것: (편의시설 키를 **뺀** opts, AmenityPrefs)
+
+    키가 없으면 `NO_AMENITY` 다 — 그러면 `adjust` 가 정확히 0.0 이라 사다리가
+    지금과 비트 단위로 같다.
+
+    지수는 `amenity_source` 가 가리키는 CSV 에서 읽는다 (`station_id,amenity_index`).
+    커버리지가 모자라면 **그 자리에서 멈춘다** — 조용한 a_j=0 은 "껐다" 와 구분이
+    안 되고, 그러면 "선호를 켰는데 결과가 같다" 를 설명할 수 없다.
+    """
+
+    if not opts or not any(k in opts for k in AMENITY_KEYS):
+        return opts, NO_AMENITY
+
+    rest = {k: v for k, v in opts.items() if k not in AMENITY_KEYS}
+    pull = float(opts.get("amenity_pull", 0.0))
+    patience = float(opts.get("amenity_patience", 0.0))
+    source = str(opts.get("amenity_source", "") or "")
+
+    if (pull > 0.0 or patience > 0.0) and not source:
+        raise ValueError(
+            "편의시설 선호를 켰는데 amenity_source 가 없다 — 지수 CSV 경로를 줄 것 "
+            "(station_id,amenity_index)")
+
+    index: dict[str, float] = {}
+    if source:
+        table = pd.read_csv(PROJECT_ROOT / source)
+        missing = {"station_id", "amenity_index"} - set(table.columns)
+        if missing:
+            raise ValueError(f"{source} 에 열이 없다: {sorted(missing)}")
+        index = {str(r.station_id): float(r.amenity_index)
+                 for r in table.itertuples()}
+
+    prefs = AmenityPrefs(pull=pull, patience=patience, index=index, source=source)
+    prefs.require([s.station_id for s in specs])
+
+    if prefs.enabled:
+        covered = [prefs.amenity(s.station_id) for s in specs]
+        log(f"  편의시설 선호 — β={pull:g}분 · γ={patience:g} · 출처 {source}")
+        log(f"    휴게소 {len(covered)}곳 · 지수 평균 {sum(covered) / max(len(covered), 1):.3f} "
+            f"· 최대 {max(covered, default=0.0):.3f}")
+
+    return rest, prefs
+
+
 def stale_reason(stored: dict, cfg: ScenarioConfig,
                  *, oracle: OracleSource | None = None,
                  observed: ObservedSpec | None = None,
@@ -295,6 +370,23 @@ def stale_reason(stored: dict, cfg: ScenarioConfig,
     # 한 번도 안 센** 코드로 돌았다 (#143). 다른 칸들은 "없으면 나중에 추가된
     # 키" 라서 버리지 않는 것이 맞지만, 여기서는 **옛 run 이 틀린 값**이다.
     # 조용히 재사용하면 틀린 기준선 위에 사다리를 쌓는다 (#55 와 같은 고장).
+    # ★ 두 번째 예외 (#147). 배차 규칙은 **전 스테이지**가 쓴다 — `corridor_sim` 이
+    #   하는 일이라 정책과 무관하다. 기록이 없으면 옛 규칙으로 돈 것이고, 그 run 은
+    #   지금 결과와 **비교할 수 없다.**
+    # ★ 세 번째 예외 (#147). 포기를 켰는지는 **물리**다. 옛 run 에는 칸이 없고
+    #   그건 꺼져 있었다는 뜻이므로, 지금 켜고 돌리려 하면 재사용을 막아야 한다.
+    #   (꺼고 돌릴 때는 옛 run 과 같으므로 막지 않는다 — 쓸 수 있는 결과까지
+    #   버리지 않는 이 파일의 기본 규칙 그대로다)
+    if cfg.demand.renege and "renege" not in stored:
+        diffs.append(
+            "renege: 기록 없음 — 기다리다 포기하는 기제가 **없던** 때의 run 이다 "
+            "(#147). 지금은 켜져 있다")
+
+    if cfg.policy.stage != "UE" and "dispatch_rule" not in stored:
+        diffs.append(
+            "dispatch_rule: 기록 없음 — 결정보다 먼저 출발할 수 있던 배차로 돌았다 "
+            f"(#147). 지금은 {DISPATCH_RULE!r} 다")
+
     if cfg.policy.stage in ("S3", "S4", "S3_EXACT") and "group_scorer" not in stored:
         diffs.append(
             "group_scorer: 기록 없음 — 윈도우 안 상호작용을 세지 않는 채점기로 "
@@ -428,6 +520,11 @@ def build_demand(cfg: ScenarioConfig, stations, vclasses, curves, temps, corrido
         max_stops=cfg.policy.ue.max_stops,
         escape_cost_min=cfg.demand.escape_cost_min,
         escape_cost_sigma=cfg.demand.escape_cost_sigma,
+        patience=Patience(median_min=cfg.demand.patience_median_min
+                          or cfg.demand.escape_cost_min,
+                          kind=cfg.demand.patience_kind,
+                          shape=cfg.demand.patience_shape),
+        patience_median_min=cfg.demand.patience_median_min,
         opportunity_prob=opp_prob,
         opportunity_soc_margin=opp_margin,
     )
@@ -498,7 +595,13 @@ def build_travel_field(cfg: ScenarioConfig, corridor_end_km: float, *, log: Log 
 #: 지금 돌릴 수 있는 스테이지. 여기 없는 값은 config 로만 적히고 코드가 없다 —
 #: 조용히 UE 로 도는 것보다 멈추는 편이 낫다.
 RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4",
-                                   "S3_EXACT", "MEC", "PERFECT_ROLLING")
+                                   "S3_EXACT", "MEC", "PERFECT_ROLLING",
+                                   "PERFECT_S3", "PERFECT_S4")
+
+#: 완전한 미래를 받는 칸 (#168 2/2 천장 포락선). **구조는 서로 다르다** —
+#: PERFECT_ROLLING 은 S2, PERFECT_S3 는 S3, PERFECT_S4 는 S4 다.
+#: 천장은 시드마다 이 셋 중 **가장 싼 값**이다.
+PERFECT_STAGES: tuple[str, ...] = ("PERFECT_ROLLING", "PERFECT_S3", "PERFECT_S4")
 
 #: KPI 는 숫자만 받는다. solver 와 후보 범위를 코드로 적어 둔다 (#143) — 문자열로
 #: 넣을 칸이 없는데, 이 둘이 적혀 있지 않으면 "어느 solver 의 결과인가" 를
@@ -507,8 +610,83 @@ RUNNABLE_STAGES: tuple[str, ...] = ("UE", "S0", "S1", "S2", "S3", "S4",
 #: 그러면 옛 run 이 `stale_reason` 에서 걸린다. 지금 값: 도착 시각 순으로 쌓는다.
 GROUP_SCORER: str = "fifo-1"
 
+#: 배차 규칙의 판 (#147). `corridor_sim` 이 **어느 시각에서 출발시키는지**가 바뀌면
+#: 올린다. 지금 값: 결정 시각보다 먼저 떠나지 않는다 (`departure = max(t, car.t_min)`).
+#: 옛 run 은 `car.t_min` 에서 바로 쟀고, 답을 한 스텝 미룬 차가 **시간을 거슬러**
+#: 출발했다 — 그 차가 FIFO 에서 제자리보다 앞에 서므로 뒤차의 대기가 실제보다 길다.
+#: 재 보니 추석 ev10% 에서 S4 가 838.4 → 841.1h 로 움직였다 (S2·S3 는 그대로).
+DISPATCH_RULE: str = "decision-time-1"
+
 SOLVER_CODE: dict[str, float] = {"local": 0.0, "exact": 1.0, "milp": 2.0}
 SCOPE_CODE: dict[str, float] = {"group": 0.0, "feasible": 1.0, "all": 2.0}
+
+
+def _apply_charger_delta(charger_rows: list[dict], cfg: ScenarioConfig,
+                         log: Log) -> list[dict]:
+    """`supply.charger_delta` 만큼 충전기 행을 더한다 (#8-2 증설 랭킹).
+
+    증설분은 **휴게소마다 같은 사양**(`charger_delta_kw`)으로 한 행에 몰아
+    넣는다. `expand_chargers` 가 `n_units` 를 개별 충전기로 펼친다.
+
+    ★ 없는 휴게소에 놓으려 하면 **멈춘다.** 오타 하나로 "증설했는데 아무 일도
+      일어나지 않은" run 이 나오고, 그 결과는 대조군과 구별되지 않는다.
+    """
+
+    delta = cfg.supply.charger_delta
+    if not delta:
+        return charger_rows
+
+    known = {str(r["station_id"]) for r in charger_rows}
+    missing = sorted(set(delta) - known)
+    if missing:
+        raise ValueError(
+            f"증설하려는 휴게소가 이 코리도에 없다: {missing} "
+            f"(코리도 {cfg.corridor_id}). 오타면 증설이 조용히 무효가 되고, "
+            "그 run 은 대조군과 구별되지 않는다")
+
+    kw = float(cfg.supply.charger_delta_kw)
+    added = [
+        {"charger_id": f"{sid}_added{kw:g}kw", "station_id": sid,
+         "power_kw": kw, "n_units": int(n), "is_active": 1}
+        for sid, n in sorted(delta.items())
+    ]
+    log("  ★ 증설 — " + " · ".join(
+        f"{sid.rsplit('_', 1)[-1]} +{n}기" for sid, n in sorted(delta.items()))
+        + f" @{kw:g}kW (합 {sum(delta.values())}기)")
+    return [*charger_rows, *added]
+
+
+def with_charger_delta(cfg: ScenarioConfig, delta: Mapping[str, int], *,
+                       power_kw: float = 100.0) -> ScenarioConfig:
+    """충전기를 더 놓은 세계. **scenario_id 에 꼬리표가 붙는다** (#8-2 증설 랭킹).
+
+        cfg2 = with_charger_delta(cfg, {"gyeongbu_up_a00069": 3})
+        cfg2.scenario_id            # ...__addch-a00069x3-100kw
+
+    `with_stage` 와 반대로 **이것은 세계를 바꾼다.** 공급이 달라지면 같은 차가
+    다른 결과를 낸다. run_id 는 (시나리오, 스테이지, 시드, 참여율) 뿐이라 이름을
+    안 갈면 **기존 run 을 조용히 덮어쓴다** (#123). 그래서 꼬리표를 **여기서**
+    붙인다 — 부르는 쪽이 잊을 수 있는 일로 두지 않는다.
+
+    꼬리표는 증설 내용에서 만든다. 그래서 폴더 이름만 보고 "어느 휴게소에 몇 대를
+    몇 kW 로 놓은 run 인가" 를 되읽을 수 있다.
+    """
+
+    if not delta:
+        raise ValueError("증설이 비었다 — 바꿀 게 없으면 원래 cfg 를 그대로 쓸 것")
+
+    data = yaml.safe_load(cfg.raw_yaml)
+    data["supply"] = {"charger_delta": {str(k): int(v) for k, v in delta.items()},
+                      "charger_delta_kw": float(power_kw)}
+
+    # 꼬리표: 휴게소 id 의 **끝 토큰**만 쓴다 (`gyeongbu_up_a00069` → `a00069`).
+    # 전체를 쓰면 이름이 run_id 길이를 넘어 읽을 수 없게 된다
+    parts = "-".join(f"{str(sid).rsplit('_', 1)[-1]}x{int(n)}"
+                     for sid, n in sorted(delta.items()))
+    tag = f"addch-{parts}-{power_kw:g}kw"
+    data["scenario_id"] = f"{cfg.scenario_id}__{tag}"
+    data["label"] = f"{cfg.label} [증설 {parts} @{power_kw:g}kW]"
+    return ScenarioConfig.from_dict(data, source=f"{cfg.source_path}#{tag}")
 
 
 def with_stage(cfg: ScenarioConfig, stage: str) -> ScenarioConfig:
@@ -551,6 +729,7 @@ def _sim_evs(trips: Sequence) -> list[SimEV]:
             curve=t.curve, cold_factor=t.cold_factor,
             wants_opportunity_charge=t.wants_opportunity_charge,
             escape_cost_min=t.escape_cost_min,
+            patience_min=t.patience_min,
             habit_soc=t.habit_soc,
         )
         for t in trips
@@ -595,31 +774,38 @@ def run_once(
     # S2 그대로 두고 결합 축만 올리는 칸이라, 예측을 빼면 그 차이가 결합으로 보고된다
     if ((oracle is not None or observed is not None)
             and cfg.policy.stage not in ("S2", "S3", "S4", "S3_EXACT",
-                                         "PERFECT_ROLLING")):
+                                         *PERFECT_STAGES)):
         raise ValueError(
             f"{cfg.policy.stage} 는 예측을 쓰지 않는데 예측 설정이 들어왔다. "
             "조용히 무시하면 '예측을 쓰는 줄 알았는데 안 쓰고 있던' 결과가 나온다")
 
     # 윈도우는 S3 만 쓴다. 다른 칸이 조용히 받으면 params_json 에 윈도우가 적히고도
     # 아무 효과가 없어서, 나중에 "윈도우를 바꿨는데 결과가 같다" 를 설명할 수 없다
-    if s3_window is not None and cfg.policy.stage not in ("S3", "S4", "S3_EXACT"):
+    if s3_window is not None and cfg.policy.stage not in (
+            "S3", "S4", "S3_EXACT", "PERFECT_S3", "PERFECT_S4"):
         raise ValueError(
-            f"`s3_window` 는 S3·S4·S3_EXACT 만 쓴다 (#139) — {cfg.policy.stage} 에 "
-            "주면 기록에는 남고 효과는 없는 값이 된다")
+            f"`s3_window` 는 S3·S4·S3_EXACT·PERFECT_S3·PERFECT_S4 만 쓴다 (#139) — "
+            f"{cfg.policy.stage} 에 주면 기록에는 남고 효과는 없는 값이 된다")
 
     # 리드타임은 S4 만 쓴다. S3 는 가고 있는 차를 아예 안 묻기 때문에(reask_en_route
     # 가 False) 리드타임을 줘도 막을 대상이 없다 — 기록에만 남고 효과가 없다
-    if s4_lead_min is not None and cfg.policy.stage != "S4":
+    if s4_lead_min is not None and cfg.policy.stage not in ("S4", "PERFECT_S4"):
         raise ValueError(
-            f"`s4_lead_min` 은 S4 만 쓴다 (#142) — {cfg.policy.stage} 에 주면 "
-            "기록에는 남고 효과는 없는 값이 된다")
+            f"`s4_lead_min` 은 S4·PERFECT_S4 만 쓴다 (#142) — {cfg.policy.stage} 에 "
+            "주면 기록에는 남고 효과는 없는 값이 된다")
 
     # 엔진 설정(solver·후보 범위·재배정 비용)은 그룹 최적화를 쓰는 칸만 받는다 (#143).
     # 다른 칸이 조용히 받으면 위의 둘과 똑같은 고장이 된다
-    if engine_opts and cfg.policy.stage not in ("S3", "S4", "S3_EXACT", "MEC"):
+    #
+    # **편의시설 키는 예외다** (#146) — `S0Settings` 에 있어서 전 스테이지가 쓴다.
+    # 오히려 한 칸만 받으면 그 차이가 정책 차이로 보고된다. 그래서 그 키를 빼고
+    # 남은 것이 있을 때만 막는다
+    other = {k: v for k, v in (engine_opts or {}).items() if k not in AMENITY_KEYS}
+    if other and cfg.policy.stage not in ("S3", "S4", "S3_EXACT", "MEC"):
         raise ValueError(
             f"`engine_opts` 는 S3·S4·S3_EXACT·MEC 만 쓴다 (#143 · #138) — "
-            f"{cfg.policy.stage} 에 주면 기록에는 남고 효과는 없는 값이 된다")
+            f"{cfg.policy.stage} 에 주면 기록에는 남고 효과는 없는 값이 된다 "
+            f"(받은 키: {sorted(other)})")
 
     if oracle is not None and observed is not None:
         raise ValueError(
@@ -629,6 +815,23 @@ def run_once(
 
     if seed is not None:
         cfg = with_seed(cfg, seed)
+
+    # ★ **참여율은 이 경로에 구현되어 있지 않다.** `cfg.policy.participation` 은
+    #   아래에서 `make_run_id` 를 만들 때만 쓰이고, 물리에는 한 줄도 닿지 않는다.
+    #   그래서 config 에 `participation: 0.6` 을 적으면 **이름만 다른, 내용이
+    #   똑같은 run** 이 나온다. 그걸 결과로 읽으면 "참여율 60% 에서도 효과가
+    #   같다" 는 **완전히 틀린 결론**이 조용히 나온다 (2026-11-14).
+    #
+    #   참여율은 `engine.participation.ParticipationPolicy` 에 있고, 그것을 쓰는
+    #   것은 `scripts/run_mnl_world.py` 뿐이다 (`--p`). 부분 참여 실험은 거기서 한다.
+    if cfg.policy.participation != 1.0:
+        raise ValueError(
+            f"참여율 {cfg.policy.participation} 로는 사다리를 돌릴 수 없다 — "
+            "`runner` 는 참여율을 **run_id 에만** 쓰고 물리에는 반영하지 않는다. "
+            "그대로 돌면 물리가 똑같은 run 이 다른 이름으로 저장돼, 부분 참여를 "
+            "잰 것처럼 보이는 틀린 결과가 된다. 부분 참여는 "
+            "`scripts/run_mnl_world.py --p <값> --nonpart-info present` 로 잰다 "
+            "(#168 결정 문서 조건 ②)")
 
     check_queue_config(cfg.queue.discipline, cfg.queue.charger_select)
     db = Path(db_path) if db_path is not None else default_db_path()
@@ -640,6 +843,8 @@ def run_once(
         corridor_end_km = float(conn.execute(
             "SELECT length_km FROM corridor WHERE corridor_id = ?", (cfg.corridor_id,)
         ).fetchone()[0])
+
+    charger_rows = _apply_charger_delta(charger_rows, cfg, log)
 
     specs = station_specs(station_rows, charger_rows)
     chargers = {s.station_id: s.chargers for s in specs}
@@ -718,9 +923,17 @@ def run_once(
 
         waits = np.array([e["wait_min"] for e in charge_events]) if charge_events else np.zeros(1)
         n_escaped = len(escape_rows)
+        n_reneged = sum(1 for r in escape_rows if r.get("reason") == "reneged")
+        renege_wait_h = sum(float(r.get("waited_min", 0.0)) for r in escape_rows) / 60.0
+        # 이탈한 차들이 **실제로** 치른 비용의 합. `n_escaped x 중앙값` 으로 대신
+        # 세면 안 된다 — 인내가 분포면 이탈하는 차가 **짧은 쪽에 쏠리므로**
+        # 중앙값으로 세면 비용을 과대계상한다 (설 S1 에서 888h vs 실제 359h)
+        escape_cost_h = sum(
+            float(r.get("escape_cost_min", 0.0)) for r in escape_rows) / 60.0
         n_balked = sum(1 for r in escape_rows if r["reason"] == "balked")
         log(f"코리도 이탈 {n_escaped:,}대 ({n_escaped / max(len(built.trips), 1):.1%}) "
-            f"— 줄이 길어서 {n_balked:,} · 닿는 휴게소가 없어서 {n_escaped - n_balked:,}")
+            f"— 줄이 길어서 {n_balked:,} · 기다리다 포기 {n_reneged:,} · "
+            f"닿는 휴게소가 없어서 {n_escaped - n_balked - n_reneged:,}")
         run.kpis({
             # 평균 대기만 보면 이 차들이 빠져서 좋아 보인다. 문제가 사라진 게 아니라
             # 고속도로 밖으로 옮겨간 것이므로 항상 같이 본다 (#54)
@@ -729,6 +942,15 @@ def run_once(
             # 여기에 `n_escaped_stranded`(한 번 서고 나서 갇힌 차) 를 더한 것이
             # **배정의 과녁**이고, 나머지 no_plan 이 증설·SoC 의 몫이다
             "n_escaped_balked": (n_balked, "count"),
+            # 줄을 서 있다가 인내가 끝나 떠난 차 (#147). balked 와 **반드시 나눠
+            # 읽는다** — balked 는 예상 대기를 보고 안 간 것이고 이쪽은 실제로
+            # 기다리다 떠난 것이라, 예측이 나쁜 칸일수록 이 수가 커진다
+            "n_escaped_reneged": (n_reneged, "count"),
+            # 포기한 차들이 떠나기 전에 **이미 쓴** 시간. 이 칸이 없으면 그 시간이
+            # 사라져서 사다리가 실제보다 좋아 보인다
+            "renege_wait_total_h": (renege_wait_h, "h"),
+            # 이탈 비용 합 (시간). 총 사회적 비용 = 체류 + **이것** + 포기 전 대기
+            "escape_cost_total_h": (escape_cost_h, "h"),
             "n_charge_visits": (len(charge_events), "count"),
             "wait_mean_min": (float(waits.mean()), "min"),
             "wait_p95_min": (float(np.percentile(waits, 95)), "min"),
@@ -805,7 +1027,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
     stage = cfg.policy.stage
 
     if stage not in ("S0", "S1", "S2", "S3", "S4", "S3_EXACT", "MEC",
-                     "PERFECT_ROLLING"):
+                     *PERFECT_STAGES):
         raise ValueError(f"정책이 아직 없다: {stage}")
 
     # 두 정책이 **같은 값**을 받는다. 한쪽만 다르면 그 차이가 정책 차이로 보고된다
@@ -819,10 +1041,19 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
         "max_stops": cfg.policy.ue.max_stops,
         "escape_cost_min": cfg.demand.escape_cost_min,
     }
+
+    # ★ 편의시설 선호 (#146). **전 스테이지가 같은 값을 받아야 한다** — 한쪽만
+    #   다르면 그 차이가 정책 차이로 보고된다. 그래서 여기 `kw` 에 한 번 넣는다.
+    #
+    #   `engine_settings` 를 안 쓰는 이유: 그 함수는 스칼라를 Settings 필드 타입으로
+    #   캐스팅하는데, 여기서는 스칼라 셋(pull·patience·source)으로 **객체 하나**를
+    #   만들고 지수 파일까지 읽어야 한다.
+    engine_opts, amenity = _amenity_from_opts(engine_opts, specs, log)
+    kw["amenity"] = amenity
     # 원장은 **S1 부터** 쓴다. S0 에 주면 안 쓰고도 받는 셈이라 "무엇이 달라졌나" 가
     # 흐려진다 — 안 주면 S1 은 require_ledger() 에서 터진다 (#83)
     ledger = forecast = None
-    if stage in ("S2", "S3", "S4", "S3_EXACT", "PERFECT_ROLLING"):
+    if stage in ("S2", "S3", "S4", "S3_EXACT", *PERFECT_STAGES):
         # 예측은 **S2 부터만** 쓴다. S1 에 주면 안 쓰고도 받는 셈이라 "무엇이
         # 달라졌나" 가 흐려진다 (원장을 S0 에 주지 않는 것과 같은 이유)
         # **어느 예측을 쓰느냐가 곧 스테이지다.** 같은 S2Policy 를 쓰지만 run_id 가
@@ -833,11 +1064,11 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 "`observed=ObservedSpec(...)` 가 필요하다. 시뮬레이터의 실제 미래를 "
                 "넣고 싶으면 그건 엔진 칸이 아니라 벤치마크다: "
                 "stage='PERFECT_ROLLING' 으로 `oracle=` 을 줄 것 (#118 · DESIGN §8.2)")
-        if stage == "PERFECT_ROLLING" and oracle is None:
+        if stage in PERFECT_STAGES and oracle is None:
             raise ValueError(
-                "PERFECT_ROLLING 은 시뮬레이터의 실제 미래를 넣는 **벤치마크**다 "
+                f"{stage} 는 시뮬레이터의 실제 미래를 넣는 **벤치마크**다 "
                 "(#118 · DESIGN §8.2) — `oracle=OracleSource(...)` 가 필요하다")
-        if stage == "S4":
+        if stage in ("S4", "PERFECT_S4"):
             # S4 는 S3 의 알고리즘을 그대로 쓰고 **세계에게 더 많은 차를 달라고 한다**.
             # 거기에 목적함수의 재배정 비용이 더해진다 (#143 · docs/objective.md §2b)
             policy = S4Policy(S4Settings(
@@ -846,7 +1077,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 **({} if s4_lead_min is None
                    else {"hard_lock_min": float(s4_lead_min)}),
                 **engine_settings(engine_opts, S4Settings)))
-        elif stage in ("S3", "S3_EXACT"):
+        elif stage in ("S3", "S3_EXACT", "PERFECT_S3"):
             # ★ 윈도우는 **이탈 수를 흔드는 손잡이**다. 기본값으로 조용히 돌면 어느
             #   윈도우의 결과인지 모른 채 사다리에 올라간다 — #101·#123 과 같은 고장
             #
@@ -862,10 +1093,18 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
                 **({"exact_group": True} if stage == "S3_EXACT" else {}),
                 **engine_settings(engine_opts, S3Settings)))
         else:
+            # ★ `PERFECT_ROLLING` 이 **여기로** 떨어진다 — 즉 **S2 구조 + 완전한
+            #   미래**다. 이름만 보면 "모든 엔진의 천장" 같지만 아니다. 설 상행
+            #   10시드에서 S4 가 그걸 6/10 시드에서 넘었고 평균으로는 동점이었다
+            #   (−27.6h, CI [−131.6, +76.4]). 고장이 아니라 **이름이 틀린 것**이다.
+            #
+            #   그래서 `PERFECT_S3`·`PERFECT_S4` 를 따로 둔다 (#168 2/2). 구조마다
+            #   완전한 미래를 주고, 시드마다 셋 중 **가장 싼 값**을 천장으로 쓴다.
+            #   정보가 불완전한 S1~S4 가 그 포락선을 넘으면 그건 버그 신호다.
             policy = S2Policy(S2Settings(**kw))
         ledger = ReservationLedger.build({s.station_id: s.chargers for s in specs})
 
-        if stage == "PERFECT_ROLLING":
+        if stage in PERFECT_STAGES:
             forecast = OracleForecast.from_rows(
                 oracle.rows, specs_from_trips(built.trips),
                 source_run_id=oracle.source_run_id, round_no=oracle.round_no)
@@ -941,6 +1180,7 @@ def _run_policy_loop(built, specs, offsets, cfg, settings, range_factor, cpf,
         range_factor=range_factor,
         cruise_speed_kmh=cfg.demand.cruise_speed_kmh,
         escape_cost_min=cfg.demand.escape_cost_min,
+        renege=cfg.demand.renege,
         snapshot_every_min=float(cfg.output.snapshot_every_min),
         ledger=ledger,
         forecast=forecast,
@@ -1310,6 +1550,9 @@ KPI_LABELS: dict[str, str] = {
     # 몫과 증설로만 풀리는 몫이 뒤섞인다
     "n_escaped": "이탈 합계 (대)",
     "n_escaped_balked": "이탈: 줄이 길어서 (대)",
+    "n_escaped_reneged": "이탈: 기다리다 포기 (대)",
+    "renege_wait_total_h": "포기 전 대기 합계 (시간)",
+    "escape_cost_total_h": "이탈 비용 합계 (시간)",
     "n_escaped_stranded": "이탈: 정책이 몰아넣음 (대)",
     "ue_final_gap": "UE 마지막 gap",
     "ue_iterations": "UE 반복 수",
@@ -1326,6 +1569,49 @@ KPI_LABELS: dict[str, str] = {
     "n_entry_lifted": "가드레일: 닿을 곳이 없어 올림 (대)",
     "soc_lift_mean": "가드레일: 평균 올린 SoC",
 }
+
+
+#: 총 사회적 비용을 이루는 세 항. **전부 있어야 한다** (#147)
+SOCIAL_COST_TERMS = ("dwell_total_h", "escape_cost_total_h", "renege_wait_total_h")
+
+
+def social_cost_h(kpi: Mapping[str, float]) -> float:
+    """총 사회적 비용 (시간). **이 식의 유일한 정의다** (#147).
+
+        총 = 총 체류 + 이탈 비용 합 + 포기 전 대기
+
+    예전에는 스크립트마다 `dwell_total_h + n_escaped x escape_cost_min / 60` 을
+    직접 셌다. 같은 식이 여덟 벌 있었고, 두 가지로 틀어졌다.
+
+    ① **이탈 비용은 차마다 다르다.** 중앙값 x 대수로 세면 틀린다. 이탈은 인내가
+       짧은 쪽에 쏠리므로 **과대계상**된다 — 설 S1 에서 888h vs 실제 359h
+       (#78 회귀). `escape_cost_sigma: 0.0` 이던 동안만 우연히 맞았다.
+
+    ② **포기 전 대기를 아무도 안 더했다.** 포기한 차는 인내만큼 기다리다 떠났다.
+       빼먹으면 포기를 켤수록 비용이 줄어드는 것처럼 보인다.
+
+    ★ **되돌림이 없다 — 일부러다.**
+
+      처음에는 옛 run 을 위해 `escape_cost_min=` 을 주면 예전 식으로 돌아가게
+      했다. 그 되돌림이 **바로 다음 측정을 조용히 망쳤다**: 스크립트들이 KPI 를
+      `{m: s.get(m) for m in METRICS}` 로 추려서 넘기는데 METRICS 에 새 칸이
+      없어서, 멀쩡한 run 인데도 되돌림이 타고 **설 사다리가 534h 모자랐다.**
+
+      "없으면 적당히" 는 없다. 세 항이 다 없으면 멈춘다. 옛 run 은 다시 돌린다 —
+      포기를 켠 지금 어차피 `stale_reason` 이 재사용을 막는다.
+
+    `kpi` 는 `summarize_kpis(...).set_index("metric")["mean"]` 를 **추리지 말고**
+    그대로 넘긴다. pandas Series 도 Mapping 처럼 쓰인다.
+    """
+
+    missing = [k for k in SOCIAL_COST_TERMS if k not in kpi]
+    if missing:
+        raise KeyError(
+            f"총 사회적 비용을 셀 수 없다 — 없는 KPI: {missing}. "
+            "KPI 를 추려서 넘겼다면 METRICS 에 세 칸을 넣을 것. "
+            "옛 run 이라면 다시 돌릴 것 (#147 로 물리가 바뀌었다)")
+
+    return sum(float(kpi[k]) for k in SOCIAL_COST_TERMS)
 
 
 def summarize_kpis(run_ids: Sequence[str], *, db_path: Path | None = None) -> pd.DataFrame:

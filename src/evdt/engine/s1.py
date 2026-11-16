@@ -103,7 +103,8 @@ class S1Policy(S0Policy):
             #   그리디가 못 보면 **그 차들에게만 항이 안 걸린다.**
             key = (private
                    + self._extra_cost(ev.ev_id, st.station_id)
-                   + self._mec(ledger, st.station_id, arr, world))
+                   + self._mec(ledger, st.station_id, arr, world)
+                   + self._amenity(ledger, st.station_id, arr, world))
 
             if key < best_key:
                 best_id, best_key, best_private, best_arr = (
@@ -286,6 +287,28 @@ class S1Policy(S0Policy):
             best = min(best, self._dwell(ledger, st.station_id, arr, world))
 
         return 0.0 if best == float("inf") else best
+
+    def _amenity(self, ledger, station_id: str, arr: Arrival,
+                 world: WorldView) -> float:
+        """편의시설 선호 (#146). 꺼져 있으면 **0.0** 이라 비트 단위 동일성이 유지된다.
+
+        `key` 안에 있고 `_candidate` 안이 아닌 이유는 `_extra_cost` · `_mec` 와
+        같다 — `_candidate` 가 주는 값은 **사적 비용**이고, 이탈 판정과
+        `S3Policy._group_total` 의 이탈 가드가 그것을 본다.
+
+        γ(체감 대기)를 켜면 대기를 따로 물어야 한다. **예측을 보지 않는다** —
+        그래서 S2 이상에서는 거부한다 (`S2Policy._amenity`).
+        """
+
+        prefs = self.settings.amenity
+        if not prefs.enabled:
+            return 0.0
+
+        wait = 0.0
+        if prefs.needs_wait:
+            _, wait = ledger.dwell_parts_if_i_go(station_id, arr)
+
+        return prefs.adjust(station_id, wait)
 
     def _dwell(self, ledger, station_id: str, arr: Arrival, world: WorldView) -> float:
         """원장이 말하는 체류 — *"내가 그 시각에 들어가면 몇 분 머무는가"*.

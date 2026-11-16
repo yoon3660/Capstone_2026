@@ -1,0 +1,30 @@
+{
+  "scenario_id": "chuseok_2026_up_congested",
+  "config": "config/scenario_chuseok_up_congested.yaml",
+  "label": "2026 추석 2026-09-25 경부선 UP — 혼잡 시나리오 (EV 15%, ⚠ 실측 비율 아님)",
+  "period": "chuseok2026",
+  "direction": "UP",
+  "temp_c": 22.18,
+  "demand_label": "2026 추석 연휴 (chuseok2026) · 가정: EV 보급률 15% · 기회 충전 20% (도착 SoC<50%)",
+  "escape_cost_min": 120.0,
+  "escape_cost_sigma": 0.0,
+  "renege": true,
+  "patience_kind": "uniform",
+  "patience_shape": 0.142857,
+  "patience_median_min": 70.0,
+  "travel_time": "fixed",
+  "cruise_speed_kmh": 80.0,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "commit": "4744dd2"
+}

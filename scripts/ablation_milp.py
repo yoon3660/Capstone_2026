@@ -63,9 +63,11 @@ from evdt.engine.forecast import ObservedSpec  # noqa: E402
 from evdt.io.db import default_db_path  # noqa: E402
 from evdt.runner import (  # noqa: E402
     PROJECT_ROOT,
+    SOCIAL_COST_TERMS,
     load_config,
     parse_seeds,
     run_once,
+    social_cost_h,
     summarize_kpis,
 )
 
@@ -86,7 +88,10 @@ SETUPS: tuple[tuple[str, dict], ...] = (
     ("exact", {"solver": "exact"}),
 )
 
-METRICS = ("dwell_total_h", "n_escaped", "wait_mean_min", "bottleneck_slots",
+METRICS = (
+    # ★ 세 항은 빠지면 안 된다 — `social_cost_h` 가 멈춘다 (#147)
+    *SOCIAL_COST_TERMS,
+"dwell_total_h", "n_escaped", "wait_mean_min", "bottleneck_slots",
            "s3_window", "s3_move_done", "s3_swap_done", "s3_swap_ms",
            "milp_groups", "milp_better_groups", "milp_tied_groups",
            "milp_lost_groups", "milp_rejected_groups", "milp_timeouts",
@@ -253,7 +258,7 @@ def main() -> int:
                            log=lambda *_: None)
             k = kpis(rid, db)
             el = time.perf_counter() - t0
-            total = k["dwell_total_h"] + k["n_escaped"] * esc_cost / 60.0
+            total = social_cost_h(k)
             print(f"  {el:7.1f}s   총 {total:9.1f}h  이탈 {k['n_escaped']:.0f}")
             rows.append({"seed": seed, "setup": name, "wall_s": el,
                          "total_h": total, **k})

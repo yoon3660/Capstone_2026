@@ -153,13 +153,27 @@ def main():
     ap.add_argument("--reference-dir", type=Path, default=ROOT / "data/processed/issue145_chuseok/reference",
                     help="Shared TCS position reference inputs")
     ap.add_argument("--out", type=Path, required=True)
+    # ★ 원본 JSON 이 우리 쪽에 없다 (#145 자료는 팀원이 **포털 산출 규격 그대로**
+    #   CSV 로 내려줬고, `load_issue145_csv.py` 가 그걸 정리본에 적재한다 —
+    #   `offset_km` 이 기존 parquet 과 소수 9자리까지 같다). 그래서 이미 정리된
+    #   `traffic_gyeongbu.parquet` 에서 읽는 길을 둔다. 기본값은 바뀌지 않는다.
+    ap.add_argument("--vds-from", choices=("portal", "processed"), default="portal",
+                    help="portal: data/raw 의 원본 JSON · processed: 정리본 parquet")
     ap.add_argument("--ev-share", type=float, default=.041)
     args = ap.parse_args()
     if not 0 < args.ev_share <= 1:
         ap.error("--ev-share must be in (0, 1]")
     processed = ROOT / "data/processed"
     length = GyeongbuRoute.load().length_km
-    vds = prepare_vds(ROOT / "data/raw/issue145_chuseok/chuseok_vds", processed)
+    if args.vds_from == "processed":
+        vds = pd.read_parquet(processed / "traffic_gyeongbu.parquet")
+        vds = vds[vds.period.eq("chuseok2026")]
+        if vds.empty:
+            raise SystemExit(
+                "정리본에 chuseok2026 교통량이 없다 — 먼저 적재할 것: "
+                "python scripts/load_issue145_csv.py --bundle <#145 CSV 번들>")
+    else:
+        vds = prepare_vds(ROOT / "data/raw/issue145_chuseok/chuseok_vds", processed)
     seollal = pd.read_parquet(processed / "traffic_gyeongbu.parquet")
     daily, hourly = read_tcs(args.reference_dir)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -196,8 +210,12 @@ def main():
             ev.assign(day=str(day.date()), direction=direction).to_parquet(folder / "synthetic_ev.parquet", index=False)
             totals.append(dict(period="chuseok2026", day=day.date(), direction=direction,
                                entries=points.entry_veh.sum(), synthetic_ev=len(ev)))
-        for day in pd.date_range("2026-02-15", "2026-02-18"):
-            _, _, points = vds_profiles(seollal, "202602", direction, day)
+        # ⚠ 이 루프는 `holiday_comparison.csv` (설 ↔ 추석 대조표)만 채운다.
+        #   추석 수요 산출물에는 쓰이지 않는다. 기간 이름이 정리본에 없으면
+        #   건너뛴다 — 우리 정리본은 `seollal2026` 이고 여기는 `202602` 를 찾는다
+        seollal_period = "202602" if (seollal.period == "202602").any() else None
+        for day in pd.date_range("2026-02-15", "2026-02-18") if seollal_period else ():
+            _, _, points = vds_profiles(seollal, seollal_period, direction, day)
             profile = points.groupby("hour").entry_veh.sum().rename("volume_veh").reset_index()
             totals.append(dict(period="seollal2026", day=day.date(), direction=direction,
                                entries=points.entry_veh.sum(),

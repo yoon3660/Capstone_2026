@@ -14,6 +14,7 @@ from evdt.demand_layers import (
     MEASURED_ONLY,
     EvAdoption,
     LongDistance,
+    OpportunityCharge,
     effective_ev_share,
     label,
     long_distance_share,
@@ -139,3 +140,97 @@ def test_profile_tag_drops_the_year() -> None:
 
     assert PERIODS["seollal2026"].profile_tag() == "seollal"
     assert PERIODS["chuseok2026"].profile_tag() == "chuseok"
+
+
+# ---------------------------------------------------------------------------
+# 레이어 하나만 갈아끼우기 (#146)
+#
+# 이 테스트가 없어서 `load_config(ev_share=...)` 가 기회충전 레이어를 조용히
+# 날리고 있었다. "보급률 하나만 바꿨다" 고 믿은 실험이 실은 두 축을 움직였고,
+# 추석 config 에서 같은 10% 인데 충전 필요 대수가 4,958 ↔ 2,138 로 갈렸다.
+# ---------------------------------------------------------------------------
+
+
+def test_as_dict_round_trips_through_the_parser() -> None:
+    """as_dict 는 parse_layers 의 역함수여야 한다 — 아니면 되돌릴 때 값이 샌다."""
+    from evdt.config import _Errors  # type: ignore[attr-defined]
+    from evdt.demand_layers import as_dict, parse_layers
+
+    before = (EvAdoption(0.25), OpportunityCharge(prob=0.2, soc_margin=0.4),
+              LongDistance(share=0.1, min_trip_km=250.0))
+    errors = _Errors("test")
+    after = parse_layers([as_dict(layer) for layer in before], errors)
+
+    assert not errors.items, errors.items
+    assert after == before
+
+
+def test_replace_kind_keeps_the_other_layers() -> None:
+    from evdt.demand_layers import replace_kind
+
+    layers = (EvAdoption(0.1), OpportunityCharge(prob=0.2, soc_margin=0.5))
+    out = replace_kind(layers, {"kind": "ev_adoption", "ev_share": 0.4})
+
+    assert out[0] == {"kind": "ev_adoption", "ev_share": 0.4}
+    assert out[1] == {"kind": "opportunity_charge", "prob": 0.2, "soc_margin": 0.5}
+
+
+def test_replace_kind_appends_when_the_kind_is_absent() -> None:
+    from evdt.demand_layers import replace_kind
+
+    out = replace_kind((OpportunityCharge(prob=0.2),),
+                       {"kind": "ev_adoption", "ev_share": 0.4})
+
+    assert [d["kind"] for d in out] == ["opportunity_charge", "ev_adoption"]
+
+
+def test_replace_kind_keeps_the_original_position() -> None:
+    """자리가 흔들리면 tag() 가 달라지고, 같은 세계가 다른 run_id 를 갖는다."""
+    from evdt.demand_layers import replace_kind
+
+    layers = (OpportunityCharge(prob=0.2), EvAdoption(0.1))
+    out = replace_kind(layers, {"kind": "ev_adoption", "ev_share": 0.4})
+
+    assert [d["kind"] for d in out] == ["opportunity_charge", "ev_adoption"]
+
+
+def test_ev_share_override_does_not_drop_opportunity_charge(tmp_path) -> None:
+    """러너 손잡이 쪽 회귀 테스트 — 여기가 실제로 깨져 있던 자리다."""
+    from evdt.runner import load_config
+
+    raw = yaml.safe_load(
+        (CONFIG_DIR / "scenario_seollal_down.yaml").read_text(encoding="utf-8"))
+    raw["demand"]["layers"] = [{"kind": "ev_adoption", "ev_share": 0.1},
+                               {"kind": "opportunity_charge", "prob": 0.2}]
+    (tmp_path / "scenario.yaml").write_text(
+        yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    cfg = load_config("scenario.yaml", ev_share=0.4, root=tmp_path)
+
+    assert cfg.demand.layers == (EvAdoption(0.4), OpportunityCharge(prob=0.2))
+
+
+def test_the_layerless_label_does_not_name_a_period(_=None) -> None:
+    """레이어가 없을 때의 부제에 **기간 이름이 들어가면 안 된다** (#147).
+
+    예전 값은 "2026 설 재현 (가정 레이어 없음)" 이었다. 기간은 `demand_label` 이
+    앞에 이미 붙이므로, 추석 config 가 "2026 추석 연휴 … · **2026 설 재현**" 으로
+    찍혔다. 기간마다 특수분기를 다는 대신 여기 한 줄을 고친다.
+    """
+    from evdt.demand_layers import MEASURED_ONLY
+
+    for name in ("설", "추석", "2026", "seollal", "chuseok"):
+        assert name not in MEASURED_ONLY, f"{name!r} 이 들어 있다: {MEASURED_ONLY!r}"
+
+
+def test_a_chuseok_config_without_layers_is_not_called_seollal() -> None:
+    from evdt.config import ScenarioConfig
+    from evdt.paths import CONFIG_DIR
+
+    raw = yaml.safe_load(
+        (CONFIG_DIR / "scenario_seollal_down.yaml").read_text(encoding="utf-8"))
+    raw["demand"] = {**raw["demand"], "period": "chuseok2026", "layers": []}
+    cfg = ScenarioConfig.from_dict(raw, source="test")
+
+    assert "추석" in cfg.demand_label
+    assert "설" not in cfg.demand_label

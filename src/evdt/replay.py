@@ -19,8 +19,7 @@
 ```bash
 python scripts/fetch_traffic.py --start 2026-09-23 --end 2026-10-02 --label chuseok2026
 python scripts/build_traffic.py
-python scripts/build_replay.py --period chuseok2026 --direction DOWN
-python scripts/build_replay.py --period chuseok2026 --direction UP
+python scripts/build_chuseok_demand.py        # 추석은 전용 빌더를 쓴다 (#146)
 ```
 
 그 다음 시나리오 config 에서
@@ -28,9 +27,9 @@ python scripts/build_replay.py --period chuseok2026 --direction UP
 ```yaml
 demand:
   period: chuseok2026
-  volume_profile:     data/processed/volume_gyeongbu_down_chuseok.csv
-  through_profile:    data/processed/through_gyeongbu_down_chuseok.csv
-  entry_exit_profile: data/processed/entry_exit_gyeongbu_down_chuseok.csv
+  volume_profile:     data/processed/issue146_chuseok/2026-09-26/DOWN/volume.csv
+  through_profile:    data/processed/issue146_chuseok/2026-09-26/DOWN/through.csv
+  entry_exit_profile: data/processed/issue146_chuseok/2026-09-26/DOWN/entry_exit.csv
 ```
 
 `period` 는 교통량 정리본(`traffic_gyeongbu.parquet`)의 `period` 열과 같아야 한다.
@@ -86,6 +85,12 @@ PERIODS: dict[str, ReplayPeriod] = {
         "자료가 포털에 올라오면 fetch_traffic.py → build_replay.py 로 갈아끼운다",
     ),
     "base202603": ReplayPeriod("base202603", "평시 2026-03", "대조군"),
+    "quiet202603": ReplayPeriod(
+        "quiet202603", "2026 평시 3/2~3/11",
+        "경부선 VDS 구간 통과량 기준 2026년에 가장 한산한 10일 (#178). 대표일 3/6(금). "
+        "상행 진입 32,941대 — 추석 9/25(50,204대)의 66% 다. 다만 피크 시각 통과량은 "
+        "4,260 대 4,645대/h 로 8% 차이뿐이다 — 평시는 출근 첨두, 명절은 넓은 한낮 고원",
+    ),
 }
 
 

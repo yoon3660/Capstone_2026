@@ -27,12 +27,17 @@ import yaml
 
 from evdt.demand_layers import Layer, parse_layers
 from evdt.demand_layers import label as layer_label
+from evdt.engine.patience import PATIENCE_KINDS
 from evdt.replay import describe as describe_period
 
 # run.stage 의 허용값 (schema.sql 의 CHECK 와 반드시 일치해야 한다)
 VALID_STAGES: tuple[str, ...] = (
     "UE", "S0", "S1", "S2", "S3", "S4",
     "MEC", "PAPER", "PERFECT_ROLLING",
+    # 천장 포락선 (#168 2/2). `PERFECT_ROLLING` 이 **S2 구조**라서 S3·S4 가
+    # 그걸 넘는 일이 생긴다 — 천장이 아니라 이름이 틀린 것이다. 그래서 구조마다
+    # 완전한 미래를 주고, 시드마다 **가장 싼 값**을 천장으로 쓴다.
+    "PERFECT_S3", "PERFECT_S4",
     # S3 의 그룹을 **전수 열거**한 진단 런 (#143). 같은 S3Policy 를 쓰지만 run_id 가
     # 갈라져야 S3 를 덮어쓰지 않는다 — PERFECT_ROLLING 이 S2Policy 를 쓰면서 따로
     # 스테이지를 받은 것과 **같은 이유**다 (runner.py 의 그 주석 참조)
@@ -239,8 +244,36 @@ class DemandConfig:
     #: 휴게소 계획이 전부 이보다 비싸면 차는 코리도를 벗어난다 → KPI `n_escaped`.
     #: 0 이면 이탈 선택지가 없다. ⚠ 120분은 잠정값, 근거는 #64
     escape_cost_min: float = 0.0
-    #: 이탈 비용의 산포 (로그정규 sigma) (#78). 0 이면 전원이 같은 값을 쓴다.
+    #: 이탈(우회) 비용의 산포 — 로그정규 sigma (#78). 0 이면 전원이 같은 값을 쓴다.
+    #:
+    #: ★ **인내와 각자 할 일이 따로 있다** (#147 후속, 2026-11-11). 전에는 여기에
+    #:   "patience_kind 로 대체되는 중" 이라고 적혀 있었는데 틀렸다. 이 칸은
+    #:   **지리**(IC 로 빠지는 데 몇 분 걸리나)의 산포이고, `patience_*` 는
+    #:   **선호**(얼마나 참나)의 모양이다. 그리고 이 산포는 UE 수렴에 필요하다 —
+    #:   0 이면 "나갈까 말까" 경계에 질량이 몰려 집단이 뒤집히며 진동한다
+    #:   (escape_cost_min 60 에서 20시드 중 10개가 수렴 실패).
     escape_cost_sigma: float = 0.0
+    #: 인내 분포의 가족 (#146) — point · lognormal · weibull · exponential · uniform.
+    #: 중앙값은 `patience_median_min` (없으면 `escape_cost_min`). `engine/patience.py` 참조
+    patience_kind: str = "point"
+    #: 인내의 중앙값(분) (#147 후속). 0 이면 `escape_cost_min` 을 쓴다 — **그게
+    #: 지금까지의 동작**이고, 둘을 가르지 않은 config 는 비트 단위로 그대로 돈다.
+    #:
+    #: ★ 왜 갈라야 하나: 고정 120분일 때는 두 해석이 우연히 맞았다 ("IC 로 빠져
+    #:   시내에서 충전하고 오면 120분이니, 줄이 그보다 비싸면 나간다"). 인내를
+    #:   **분포**로 바꾸면 깨진다 — "인내 9분인 차 = 우회도 9분인 차" 가 되어
+    #:   조급한 차에게 **공짜 탈출구**가 열린다. weibull:0.7 에서 S0 가 수요의
+    #:   18.9% 를 잃었고, 총비용이 51% 떨어진 것은 엔진이 좋아진 게 아니라
+    #:   **문제가 작아진 것**이었다.
+    patience_median_min: float = 0.0
+    #: 가족별 모양 모수. lognormal σ · weibull k · uniform 반폭비율. exponential 은 안 쓴다
+    patience_shape: float = 0.0
+    #: 줄을 서 있다가 인내가 끝나면 **떠나는가** (#147). 기본은 꺼짐.
+    #:
+    #: 끄면 지금까지와 같다 — 고를 때 한 번 재고(balk), 일단 도착하면 줄이 아무리
+    #: 길어도 끝까지 기다린다. 설 S0 에서 **372.5분**을 기다린 차가 있었다.
+    #: 켜면 물리가 바뀌므로 저장된 run 과 비교할 수 없다 (`run_params` 가 막는다).
+    renege: bool = False
 
     #: 시간대별 EV 대수를 생성하는 방법 (#53)
     #:   fixed     기대값을 반올림하는 기존 방식
@@ -381,6 +414,30 @@ class PolicyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SupplyConfig:
+    """충전기 **증설** 실험 (#8-2 증설 랭킹). 기본은 "DB 그대로" 다.
+
+        supply:
+          charger_delta: {gyeongbu_up_a00069: 3}
+          charger_delta_kw: 100.0
+
+    왜 config 에 두는가 — `run_once` 의 인자로 받으면 **run_id 에 안 들어간다.**
+    run_id 는 (시나리오, 스테이지, 시드, 참여율) 뿐이라, 충전기를 바꿔 돌려도
+    이름이 같아서 기존 run 을 조용히 덮어쓴다 (#123 과 같은 고장). config 에
+    있으면 `scenario` 테이블과 `runs/<run_id>/config.yaml` 에 그대로 남고,
+    `runner.with_charger_delta` 가 scenario_id 에 꼬리표를 붙인다.
+
+    증설분은 **휴게소마다 같은 사양**이어야 한다 — 그래야 "안성에 1대 vs 칠곡에
+    3대" 가 배치의 비교가 된다. 사양이 다르면 출력을 비교하는 셈이 된다.
+    """
+
+    #: 휴게소 id → 더 놓을 대수. 빈 사전이면 DB 그대로다
+    charger_delta: dict[str, int] = field(default_factory=dict)
+    #: 더 놓는 충전기의 출력 (kW). 이동형 급속 충전기를 100 kW 로 둔다
+    charger_delta_kw: float = 100.0
+
+
+@dataclass(frozen=True, slots=True)
 class QueueConfig:
     discipline: str
     charger_select: str
@@ -421,6 +478,9 @@ class ScenarioConfig:
     raw_yaml: str
     config_hash: str
 
+    #: 충전기 증설 실험. 기본은 "DB 그대로" — 기존 config 는 한 줄도 안 바뀐다
+    supply: SupplyConfig = field(default_factory=SupplyConfig)
+
     # -- 생성 ---------------------------------------------------------------
     @classmethod
     def from_yaml(cls, path: str | Path) -> ScenarioConfig:
@@ -448,10 +508,13 @@ class ScenarioConfig:
         그림만 보고도 재현인지 가정인지 알 수 있어야 한다.
         """
 
-        layers = layer_label(self.demand.layers)
-        if self.demand.period == "chuseok2026" and not self.demand.layers:
-            layers = "추가 수요 레이어 없음"
-        return f"{describe_period(self.demand.period)} · {layers}"
+        # ★ 기간별 특수분기를 두지 않는다. #159 는 `period == "chuseok2026"` 일 때
+        #   "추가 수요 레이어 없음" 으로 덮었는데, 그건 증상이었다 — 뿌리는
+        #   `MEASURED_ONLY` 에 "2026 설 재현" 이 박혀 있던 것이고, 그래서 레이어
+        #   없는 **아무 기간**이나 "설 재현" 으로 찍혔다 (base202603·base202609·
+        #   seollal2027 도 똑같이 틀렸다). 기간은 `describe_period` 가 앞에 이미
+        #   붙이므로 부제에서 기간 이름을 뺐다 (`demand_layers.py:39`).
+        return f"{describe_period(self.demand.period)} · {layer_label(self.demand.layers)}"
 
     def variant(self, tag: str, overrides: dict[str, Any]) -> ScenarioConfig:
         """이 시나리오에서 몇 개 값만 바꾼 실험. scenario_id 뒤에 __<tag> 가 붙는다.
@@ -544,6 +607,27 @@ class ScenarioConfig:
             d.get("escape_cost_min", 0.0), "demand.escape_cost_min", lo=0.0)
         escape_cost_sigma = e.number(
             d.get("escape_cost_sigma", 0.0), "demand.escape_cost_sigma", lo=0.0)
+        patience_kind = str(d.get("patience_kind", "point"))
+        if patience_kind not in PATIENCE_KINDS:
+            e.add("demand.patience_kind",
+                  f"{list(PATIENCE_KINDS)} 중 하나여야 한다 (받은 값: {patience_kind!r})")
+        patience_shape = e.number(
+            d.get("patience_shape", 0.0), "demand.patience_shape", lo=0.0)
+        patience_median_min = e.number(
+            d.get("patience_median_min", 0.0), "demand.patience_median_min", lo=0.0)
+        if patience_median_min and not escape_cost_min:
+            e.add("demand.patience_median_min",
+                  "이탈 비용이 0 이면 나갈 길이 없어 인내를 따로 둘 뜻이 없다 — "
+                  "escape_cost_min 을 먼저 줄 것")
+        renege = bool(d.get("renege", False))
+        if renege and not escape_cost_min:
+            e.add("demand.renege",
+                  "이탈 비용이 0 이면 인내도 0 이라 전원이 즉시 포기한다 — "
+                  "escape_cost_min 을 먼저 줄 것")
+        if patience_kind == "weibull" and not patience_shape:
+            e.add("demand.patience_shape", "와이블은 shape(k) 가 0 보다 커야 한다")
+        if patience_kind == "uniform" and not 0.0 < float(patience_shape or 0.0) <= 1.0:
+            e.add("demand.patience_shape", "균등분포의 반폭 비율은 0<h≤1 이어야 한다")
         travel_time = str(d.get("travel_time", "fixed"))
         if travel_time not in TRAVEL_TIME_MODES:
             e.add("demand.travel_time",
@@ -648,6 +732,29 @@ class ScenarioConfig:
                 f"(받은 값: {participation})",
             )
 
+        # supply — 충전기 증설 실험. 없으면 "DB 그대로" ------------------------
+        sup = data.get("supply") or {}
+        if not isinstance(sup, dict):
+            e.add("supply", "매핑이어야 한다")
+            sup = {}
+        for key in sup:
+            if key not in {"charger_delta", "charger_delta_kw"}:
+                e.add(f"supply.{key}", "알 수 없는 키다 (오타인지 확인)")
+        raw_delta = sup.get("charger_delta") or {}
+        if not isinstance(raw_delta, dict):
+            e.add("supply.charger_delta", "휴게소 id → 대수 의 매핑이어야 한다")
+            raw_delta = {}
+        charger_delta: dict[str, int] = {}
+        for sid, n in raw_delta.items():
+            if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+                e.add(f"supply.charger_delta.{sid}",
+                      f"1 이상의 정수여야 한다: {n!r} (대수를 줄이는 실험은 "
+                      "없는 충전기로 대기를 계산하게 되므로 막는다)")
+                continue
+            charger_delta[str(sid)] = n
+        charger_delta_kw = e.number(sup.get("charger_delta_kw", 100.0),
+                                    "supply.charger_delta_kw", lo=1.0)
+
         # queue ------------------------------------------------------------
         q = data.get("queue") or {}
         if not isinstance(q, dict):
@@ -682,6 +789,7 @@ class ScenarioConfig:
         known_top = {
             "scenario_id", "label", "corridor_id", "direction", "day_type",
             "time", "demand", "vehicles", "environment", "policy", "queue", "output",
+            "supply",
         }
         for key in data:
             if key not in known_top:
@@ -712,6 +820,10 @@ class ScenarioConfig:
                 travel_time=travel_time,
                 escape_cost_min=escape_cost_min,           # type: ignore[arg-type]
                 escape_cost_sigma=escape_cost_sigma,       # type: ignore[arg-type]
+                patience_kind=patience_kind,
+                patience_shape=patience_shape,             # type: ignore[arg-type]
+                patience_median_min=patience_median_min,    # type: ignore[arg-type]
+                renege=renege,
                 layers=layers,
                 beta_binomial_concentration=beta_binomial_concentration,   # type: ignore[arg-type]
                 poisson_lognormal_sigma=poisson_lognormal_sigma,           # type: ignore[arg-type]
@@ -730,6 +842,8 @@ class ScenarioConfig:
             queue=QueueConfig(discipline, charger_select), # type: ignore[arg-type]
             output=OutputConfig(write_snapshots, snapshot_every_min, ctm_dt_min,  # type: ignore[arg-type]
                                 ctm_warmup_min),  # type: ignore[arg-type]
+            supply=SupplyConfig(charger_delta=charger_delta,
+                                charger_delta_kw=charger_delta_kw),  # type: ignore[arg-type]
             source_path=source_path,
             raw_yaml=raw_yaml,
             config_hash=hashlib.sha256(raw_yaml.encode("utf-8")).hexdigest()[:16],

@@ -172,6 +172,10 @@ class UEResult:
                 "escape_cost_min": escape_cost_of(trip, escape_cost_min),
                 "reason": "balked" if best else "no_plan",
                 "best_station_id": best.stops[0].station_id if best else "",
+                # ⚠ UE 에는 **포기가 없다** (#147). 하루 전체 계획을 한 번에 고르므로
+                #   "줄을 서 있다가 인내가 끝나는" 순간이 존재하지 않는다. 0 이
+                #   맞다 — 칸만 맞춰 둬야 Δt 정책과 한 표로 본다
+                "waited_min": 0.0,
             })
 
         return rows

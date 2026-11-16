@@ -31,6 +31,21 @@ demand:
   cruise_speed_kmh: 80.0
   escape_cost_min: 120.0
   escape_cost_sigma: 0.0
+  # ★ **포기는 꺼 둔다 — 이 config 의 용도 때문이다** (2026-11-13 명시).
+  #
+  #   #168 MNL 보정·검증용이다. 여기서 재는 것은 **휴게소 분배(TVD)** 이고,
+  #   포기를 켜면 줄에서 차가 빠져 분배 자체가 달라진다. 그러면 "MNL 이 분배를
+  #   더 잘 맞추나" 와 "포기가 분배를 바꾸나" 가 섞인다.
+  #
+  #   ⚠ **대가를 적어 둔다.** 포기가 꺼지면 "이탈 기준 120분" 이라고 선언한
+  #     모형에서 그보다 오래 기다리는 차가 생긴다 (설 상행 S0 에서 372.5분).
+  #     그 혼란 요인은 바닥(S0)에 가장 많이 얹히므로, **이 config 의 run 으로
+  #     사다리 격차를 재면 안 된다.** 엔진 비교는 `scenario_chuseok_up_congested`
+  #     (포기 켬 · 인내 U(60,80)) 쪽에서 한다.
+  #
+  #   값을 바꾸지 않았다 — 원래 기본값(꺼짐)을 **적었을 뿐**이다. 빠뜨린 것과
+  #   일부러 끈 것을 글로 가른다 (`test_every_scenario_states_its_renege_choice`).
+  renege: false
   travel_time: fixed
 vehicles:
   seed: 7

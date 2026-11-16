@@ -28,21 +28,26 @@
 > 없는 프레임까지 평균에 넣어 값이 희석된다. 발표에서 *"평균 몇 분 기다렸나"* 로
 > 말할 숫자는 이쪽이다.
 
-## 이탈은 **balked 만** 휴게소에 붙인다
+## 이탈 중 **휴게소에 붙일 수 있는 것만** 아래 막대로 내린다
 
-    balked    줄이 길어서 나갔다 — `best_station_id` 가 있다 (남았다면 갔을 곳)
+    balked    줄을 보고 서지도 않고 나갔다 — `best_station_id` = 남았다면 갔을 곳
+    reneged   줄에 섰다가 인내 시간을 넘겨 포기했다 — `best_station_id` = 섰던 곳
     no_plan   닿는 휴게소가 아예 없었다 — **휴게소가 없다.** 코리도 전체 숫자다
 
-`no_plan` 을 어느 휴게소에 붙이면 **그 휴게소가 밀어낸 것처럼 보인다.** 그건 충전기
-간격의 문제이고 엔진이 못 고치는 몫이다 (`docs/charger_gaps.md`). 그래서 패널 제목에
-따로 적는다.
+앞의 둘은 **그 휴게소가 밀어낸 차**다. `no_plan` 을 어느 휴게소에 붙이면 그
+휴게소가 밀어낸 것처럼 보이는데, 그건 충전기 간격의 문제이고 엔진이 못 고치는
+몫이다 (`docs/charger_gaps.md`). 그래서 패널 제목에 따로 적는다.
+
+> **추석 혼잡 무대에서는 `balked` 가 전 칸 0 대다.** 대기가 이탈 비용(120분)에
+> 못 미쳐 아무도 "보고 바로" 나가지 않는다. 밀려난 차는 전부 `reneged` 다
+> (S0 에서 39.1대). 그래서 `balked` 만 그리면 아래 막대가 통째로 빈다.
 
 ## ★ 숫자와 그림이 어긋나면 **저장하지 않는다**
 
 `plot_ladder.py` 와 같은 방어다. 그리는 막대를 다시 합쳐서 `run_kpi` 와 대조한다.
 
-    휴게소별 balked 합  ==  n_escaped_balked
-    no_plan 수          ==  n_escaped − n_escaped_balked
+    휴게소별 아래막대 합  ==  n_escaped_balked + n_escaped_reneged
+    no_plan 수            ==  n_escaped − n_escaped_balked − n_escaped_reneged
 
 이 그림의 쓸모는 *"막대를 세 보라"* 는 것이다. 어긋난 채로 내놓으면 심사에서
 세는 순간 무너진다.
@@ -131,6 +136,52 @@ def collect(cfg, stages: list[str], seeds: list[int], s3_window: int):
     return {(st, s): ok[(st, s)] for st in stages for s in shared}, shared, kpi, dropped
 
 
+def mnl_panel(mnl_dir: Path, seeds: list[int]) -> tuple[pd.Series, pd.Series, float]:
+    """MNL 바닥 칸을 `run_mnl_world.py` 의 parquet 에서 읽는다.
+
+    MNL 은 사다리와 **다른 경로**로 돈다 (`run_mnl_world.py`). DB 에 run 행이
+    없어서 `make_run_id` 로는 못 찾는다. 충전 이벤트의 스키마는 사다리의
+    `charge_event` 와 `run_id` 열만 빼고 같으므로 나란히 놓을 수 있다.
+
+    ★ 검사는 여기서도 한다 — 휴게소에 붙인 이탈 합 + no_plan == 전체 이탈.
+      기준이 `run_kpi` 가 아니라 **같은 parquet 의 사유별 집계**다. 약한 검사지만,
+      휴게소 귀속에서 차가 새면 걸린다.
+    """
+
+    waits, pushed, noplan, used = [], [], 0.0, 0
+    for sd in seeds:
+        ce = mnl_dir / f"seed{sd}" / "MNL.parquet"
+        ee = mnl_dir / f"seed{sd}" / "MNL__escape.parquet"
+        if not ce.is_file():
+            continue
+        used += 1
+        c = pd.read_parquet(ce)
+        waits.append(c.groupby("station_id")["wait_min"].mean())
+        if not ee.is_file():
+            raise SystemExit(
+                f"[중단] {ee} 가 없다 — 이탈 이벤트를 저장하지 않은 옛 실행이다. "
+                "`run_mnl_world.py` 를 다시 돌려야 아래쪽 막대를 그릴 수 있다")
+        e = pd.read_parquet(ee)
+        if len(e):
+            at_station = e[e["reason"].isin(["balked", "reneged"])]
+            pushed.append(at_station.groupby("best_station_id").size())
+            noplan += float((e["reason"] == "no_plan").sum())
+            # 사유 셋 말고 다른 것이 들어오면 멈춘다 — 조용히 빠지면 막대가 샌다
+            unknown = set(e["reason"]) - {"balked", "reneged", "no_plan"}
+            if unknown:
+                raise SystemExit(f"[중단] 모르는 이탈 사유: {sorted(unknown)}")
+            if len(at_station) + (e["reason"] == "no_plan").sum() != len(e):
+                raise SystemExit("[중단] 사유별 합이 전체 이탈과 다르다")
+    if not used:
+        raise SystemExit(f"[중단] {mnl_dir} 에서 MNL parquet 를 못 찾았다")
+
+    w = pd.concat(waits, axis=1).sum(axis=1) / used
+    b = (pd.concat(pushed, axis=1).sum(axis=1) / used if pushed
+         else pd.Series(dtype=float))
+    print(f"  MNL 바닥 — 시드 {used}개 · {mnl_dir.name}")
+    return w, b, noplan / used
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -144,6 +195,10 @@ def main() -> int:
                     help="대기 상위 N 곳만 (0 이면 전부). 발표 슬라이드는 12 정도가 읽힌다")
     ap.add_argument("--no-ghost", action="store_true",
                     help="첫 칸의 실루엣을 뒤 칸에 겹치지 않는다")
+    ap.add_argument("--mnl-dir", default=None,
+                    help="MNL 바닥 칸을 맨 앞에 붙인다 — `run_mnl_world.py` 의 출력 폴더 "
+                         "(예: runs/mnl_world/chuseok_congested_floor/theta0p05_w1p0). "
+                         "MNL 은 DB 에 run 이 없어서 parquet 를 직접 읽는다")
     ap.add_argument("--out", default="docs/figures/station_bars.png")
     args = ap.parse_args()
 
@@ -185,9 +240,14 @@ def main() -> int:
     wait = con.sql(
         "SELECT run_id, station_id, AVG(wait_min) AS wait_min, COUNT(*) AS n_ev "
         "FROM charge_event GROUP BY 1, 2").df()
+    # ★ `balked` **와 `reneged`** 를 휴게소에 붙인다 (#147 이후). 둘 다
+    #   `best_station_id` 가 그 휴게소다 — balked 는 "갔다면 갔을 곳",
+    #   reneged 는 "실제로 줄 서 있던 곳". 어느 쪽이든 **그 휴게소가 밀어낸 차**다.
+    #   추석 혼잡 무대에서는 balked 가 **전 칸 0 대**다 (대기가 이탈 비용 120분에
+    #   못 미친다). reneged 를 빼면 아래쪽 막대가 통째로 비어 그림의 절반이 사라진다
     balked = con.sql(
         "SELECT run_id, best_station_id AS station_id, COUNT(*) AS balked "
-        "FROM escape_event WHERE reason = 'balked' GROUP BY 1, 2").df()
+        "FROM escape_event WHERE reason IN ('balked', 'reneged') GROUP BY 1, 2").df()
     noplan = con.sql(
         "SELECT run_id, COUNT(*) AS no_plan FROM escape_event "
         "WHERE reason = 'no_plan' GROUP BY 1").df().set_index("run_id")["no_plan"]
@@ -201,15 +261,31 @@ def main() -> int:
              / len(shared))
         npl = float(noplan.reindex(rids).fillna(0).sum() / len(shared))
 
-        # ★ 그리는 막대를 **다시 합쳐서** run_kpi 와 대조한다
-        rec_b = float(kpi.loc[rids, "n_escaped_balked"].mean())
-        rec_np = float((kpi.loc[rids, "n_escaped"] - kpi.loc[rids, "n_escaped_balked"]).mean())
+        # ★ 그리는 막대를 **다시 합쳐서** run_kpi 와 대조한다.
+        #   ⚠ `n_escaped_reneged` 를 빼먹으면 안 된다 — #147 로 이탈 사유가
+        #     balked/no_plan 둘에서 **셋**으로 늘었다. 옛 식
+        #     (`n_escaped − n_escaped_balked`) 은 포기한 차를 no_plan 으로
+        #     세어서, 추석 무대에서 58.0 ≠ 18.9 로 걸렸다 (2026-11-14)
+        rec_b = float((kpi.loc[rids, "n_escaped_balked"]
+                       + kpi.loc[rids, "n_escaped_reneged"]).mean())
+        rec_np = float((kpi.loc[rids, "n_escaped"]
+                        - kpi.loc[rids, "n_escaped_balked"]
+                        - kpi.loc[rids, "n_escaped_reneged"]).mean())
         if abs(b.sum() - rec_b) > 0.05:
             mismatch.append(f"{st}: 그림의 balked 합 {b.sum():.1f} ≠ 기록 {rec_b:.1f}")
         if abs(npl - rec_np) > 0.05:
             mismatch.append(f"{st}: 그림의 no_plan {npl:.1f} ≠ 기록 {rec_np:.1f}")
 
         panels.append((st, w, b, npl, float(kpi.loc[rids, "bottleneck_slots"].mean())))
+
+    # --- MNL 바닥 칸을 **맨 앞**에 붙인다 -----------------------------------
+    #     가로축은 첫 칸의 대기 내림차순으로 고정된다. MNL(= 실제 선택 경향)을
+    #     맨 앞에 두면 **현실의 쏠림 순서**가 축이 되고, 뒤 칸의 실루엣 비교가
+    #     "현실 대비 얼마나 깎였나" 로 읽힌다. 발표 §5-1 이 원하는 순서다
+    if args.mnl_dir:
+        mw, mb, mnp = mnl_panel(Path(args.mnl_dir), shared)
+        panels.insert(0, ("MNL", mw, mb, mnp, float("nan")))
+        stages = ["MNL", *stages]
 
     if mismatch:
         raise SystemExit(
@@ -294,12 +370,14 @@ def main() -> int:
 
         ax.bar(x, up, color=BAR_COLORS[min(i, len(BAR_COLORS) - 1)], width=0.74,
                label="평균 대기(분)")
-        ax.bar(x, dn, color=ESCAPE_COLOR, width=0.74, label="밀어낸 차(대)")
+        ax.bar(x, dn, color=ESCAPE_COLOR, width=0.74, label="밀어낸 차(대) — 포기+발길질")
         ax.axhline(0, color="#44423e", lw=1.1)
 
         ax.set_title(
             f"{st}   평균 대기 {float(w.reindex(order).fillna(0).mean()):.1f}분 · "
-            f"밀어냄 {b.sum():.0f}대 · 병목 {btl:.0f}칸\n"
+            f"밀어냄 {b.sum():.0f}대 · "
+            # MNL 칸은 DB 에 run 이 없어 `bottleneck_slots` 가 없다 (nan)
+            + ("병목 —" if btl != btl else f"병목 {btl:.0f}칸") + "\n"
             f"(닿는 곳 없어 나간 차 {npl:.0f}대 — 휴게소에 안 붙인다)",
             fontsize=10, loc="left")
         ax.set_xticks(list(x))

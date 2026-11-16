@@ -64,7 +64,7 @@ from _bootstrap import ROOT  # noqa: E402,F401
 
 from evdt.io.run_registry import make_run_id  # noqa: E402
 from evdt.paths import default_db_path  # noqa: E402
-from evdt.runner import load_config, parse_seeds  # noqa: E402
+from evdt.runner import load_config, parse_seeds, social_cost_h  # noqa: E402
 
 #: 사다리 칸. S3·S4 는 아직 없다 — **빈칸이 남은 작업 목록이다**
 LADDER = ("S0", "S1", "S2", "S3", "S4")
@@ -145,7 +145,7 @@ def collect(cfg, seeds, done, wide, esc_min, s3_window=S3_WINDOW) -> tuple[pd.Da
                 "n_escaped": k["n_escaped"],
                 "dwell_total_h": k["dwell_total_h"],
                 "n_ev_charging": k["n_ev_charging"],
-                "total_h": k["dwell_total_h"] + k["n_escaped"] * esc_min / 60.0,
+                "total_h": social_cost_h(k),
                 "strength": done[rid].get("forecast_strength"),
             })
     return pd.DataFrame(rows), dropped

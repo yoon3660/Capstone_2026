@@ -168,7 +168,24 @@ def migrate_stage_check(conn: sqlite3.Connection) -> bool:
     그래서 **그 테이블의 DDL 을 읽어 와서 스테이지 목록만 바꿔 끼운다.** 칸·기본값·
     CHECK·UNIQUE 가 전부 그대로 따라오고, 나중에 칸이 더 생겨도 이 함수는 그대로
     맞는다.
+
+    ## ★ 외래키가 켜져 있으면 **거절한다** (2026-11-13)
+
+    위 1번은 전부터 적혀 있었지만 **지키라고만 하고 막지는 않았다.** 그래서
+    `init_db` 를 거치지 않고 이 함수를 바로 부르면 `run` 을 지우는 순간
+    `run_kpi` 가 CASCADE 로 **통째로 날아간다.** 실제로 그렇게 884개 run 의
+    KPI 를 잃었다 (raw parquet 과 내보낸 CSV 는 남아 복구는 됐다).
+
+    주석은 사람이 읽어야 지켜지고, 이 검사는 안 읽어도 지켜진다.
     """
+
+    if conn.execute("PRAGMA foreign_keys").fetchone()[0]:
+        raise SchemaError(
+            "`migrate_stage_check` 는 외래키를 **끈 채로** 불러야 한다 — "
+            "`run` 을 다시 만들 때 `run_kpi` 가 CASCADE 로 같이 지워진다. "
+            "직접 부르지 말고 `init_db(path)` 를 쓸 것 "
+            "(꼭 직접 불러야 하면 `PRAGMA foreign_keys = OFF` 를 "
+            "**트랜잭션 밖에서** 먼저 실행할 것)")
 
     sql = _table_sql(conn, "run")
     if not sql:

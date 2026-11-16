@@ -38,7 +38,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from evdt.world.charging import CurveSegment, charge_time_min
@@ -51,6 +51,11 @@ class Charger:
     charger_id: str
     power_kw: float
     available_from_min: float = 0.0
+
+
+#: 인내와 대기를 견줄 때의 허용 오차(분) (#147). 부동소수 때문에 **정확히 같은**
+#: 값에서 포기하는 것을 막는다 — 120분 인내에 120.0000000001분 대기는 참는다.
+WAIT_EPS = 1e-9
 
 
 @dataclass(frozen=True)
@@ -285,3 +290,84 @@ def chargers_after(
     return tuple(
         replace(c, available_from_min=free_at_min[c.charger_id]) for c in chargers
     )
+
+
+# ---------------------------------------------------------------------------
+# 기다리다 포기한다 (renege) — #147
+# ---------------------------------------------------------------------------
+#
+# 지금까지 이 모형에는 **나갈 길이 없었다.** 고를 때 한 번 재고(balk), 일단
+# 도착하면 줄이 아무리 길어도 끝까지 기다렸다. 설 S0 에서 **372.5분**(6.2시간)을
+# 기다린 차가 있다 — 이탈 기준이 120분이라고 선언한 모형에서.
+#
+# 그게 사다리를 오염시킨다. 인내(120분)를 넘겨 기다린 시간이
+#
+#     S0  561.8h       S1  99.5h       S2  21.1h       S3  39.5h       S4  34.9h
+#
+# 이고, S0−S2 격차 884.3h 중 540.7h 가 **현실에 없는 기제**에서 온다. 바닥이
+# 더 당하는 이유는 발길질 판단이 **예상** 대기로 이뤄지는데 S0 의 예상("지금
+# 화면")이 가장 많이 틀리기 때문이다.
+#
+# ## 해석적 큐에서 어떻게 재현하나
+#
+# 이 큐는 시간을 밟지 않는다 — 도착하면 `assign` 이 start/end 를 바로 확정한다.
+# 그래서 "기다리는 상태" 가 없고, 기다리다 떠나는 것을 흉내 낼 자리도 없어 보인다.
+#
+# **그런데 그래서 오히려 정확하게 된다.** 배정 순간에 `wait_min` 이 이미 확정되므로
+#
+#     1. assign
+#     2. wait_min > 인내 인 차를 찾는다
+#     3. 없으면 끝
+#     4. **인내가 가장 먼저 끝나는** 차 하나를 뺀다 (min of arrival_min + 인내)
+#        ← 실제로 그 차가 제일 먼저 떠나고, 그래야 뒤차 줄이 올바르게 짧아진다
+#     5. 나머지를 다시 assign, 2 로
+#
+# 한 번에 다 빼면 **너무 많이 뺀다** — 앞차가 빠지면 뒤차의 대기가 줄어 참을 수
+# 있게 되는 경우가 있다. 하나씩 빼는 것이 근사가 아니라 **정확**하다.
+#
+# 차를 빼면 남은 차의 대기는 **줄어들기만** 하므로 (4)가 반복될수록 후보가
+# 줄어들고 반드시 끝난다.
+#
+# ## 인내는 이탈 비용과 **같은 값**이다
+#
+# `escape_cost_min` 은 (a) 얼마나 참나 **임계값**이자 (b) 나갔을 때 치르는
+# **비용**이다. 한 해석에서 같은 양이다 — *"IC 로 빠져 시내에서 충전하고 오면
+# 120분. 휴게소가 그보다 비싸면 나간다."* 그래서 발길질과 포기가 **같은 추출**을
+# 쓴다. 따로 뽑으면 "100분 줄은 받아들였는데 300분은 참는" 차가 생긴다.
+
+
+def assign_with_renege(
+    arrivals: Sequence[Arrival],
+    chargers: Sequence[Charger],
+    patience_min: Mapping[str, float],
+) -> tuple[tuple[Assignment, ...], tuple[str, ...]]:
+    """참을성 있는 차만 배정한다. 반환은 `(배정, 포기한 ev_id)`.
+
+    `patience_min` 에 없는 차는 **포기하지 않는다** (무한 인내). 조용히 0 으로
+    두면 전원이 즉시 포기하므로, 없는 것과 0 은 반드시 달라야 한다.
+
+    포기한 차의 순서는 **실제로 떠난 순서**다 (`arrival_min + 인내` 오름차순).
+    """
+
+    staying = list(arrival_order(arrivals))
+    reneged: list[str] = []
+
+    while True:
+        assignments = assign(staying, chargers)
+        waits = {a.ev_id: a.wait_min for a in assignments}
+
+        # 못 참는 차들 — 그중 **가장 먼저 인내가 끝나는** 한 대만 뺀다
+        impatient = [
+            (float(a.arrival_min) + float(patience_min[a.ev_id]), a.ev_id)
+            for a in assignments
+            if a.ev_id in patience_min
+            and waits[a.ev_id] > float(patience_min[a.ev_id]) + WAIT_EPS
+        ]
+
+        if not impatient:
+            return assignments, tuple(reneged)
+
+        impatient.sort()
+        gone = impatient[0][1]
+        reneged.append(gone)
+        staying = [a for a in staying if a.ev_id != gone]

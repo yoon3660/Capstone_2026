@@ -88,13 +88,23 @@ def main() -> int:
     ap.add_argument("--raw", type=Path, required=True)
     ap.add_argument("--out", type=Path, default=ROOT / f"data/processed/issue178_{PERIOD}")
     ap.add_argument("--skip-ctm", action="store_true")
+    # ★ 날짜를 좁힐 수 있게 한다 (2026-11-16). 원본 VDS 덤프가 기간의 일부만
+    #   담고 있을 수 있다 — `ex_vds_base202603_...` 는 3/6~3/15 라 3/2~3/5 가 없고,
+    #   그대로 돌리면 "DOWN quiet202603 2026-03-02 에 쓸 수 있는 콘존이 없다" 로
+    #   멈춘다. 대표일(3/6) 하나만 필요할 때도 쓴다
+    ap.add_argument("--days", nargs=2, metavar=("시작", "끝"), default=None,
+                    help="만들 날짜 범위 (YYYY-MM-DD YYYY-MM-DD). 기본 3/2~3/11")
     args = ap.parse_args()
+    quiet_days = (pd.date_range(args.days[0], args.days[1]) if args.days else DAYS)
+    if args.days:
+        print(f"  ★ 날짜를 좁힌다 — {quiet_days[0]:%Y-%m-%d} ~ {quiet_days[-1]:%Y-%m-%d} "
+              f"({len(quiet_days)}일, 기본은 {len(DAYS)}일)")
     args.out.mkdir(parents=True, exist_ok=True)
     processed = ROOT / "data/processed"
     pos = positions(processed)
     length = GyeongbuRoute.load().length_km
 
-    vol, spd = tidy(args.raw, pos, PERIOD, DAYS, check_daily=True)
+    vol, spd = tidy(args.raw, pos, PERIOD, quiet_days, check_daily=True)
     vol.to_parquet(args.out / "traffic_gyeongbu_quiet.parquet", index=False)
     spd.to_parquet(args.out / "speed_gyeongbu_quiet.parquet", index=False)
     traffic.missing_summary(vol, "volume_veh").to_csv(args.out / "missing_summary.csv", index=False)
@@ -108,7 +118,7 @@ def main() -> int:
     comparison, wape, ctm = [], [], []
     for direction in DIRECTIONS:
         cfg = load_config(ROOT / f"config/scenario_seollal_{direction.lower()}.yaml")
-        for day in DAYS:
+        for day in quiet_days:
             ramps, head, points = vds_profiles(vol, PERIOD, direction, day)
             base = hazard_od(points, ramps, length)
             check_od(base, points, length)

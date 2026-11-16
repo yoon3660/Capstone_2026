@@ -185,6 +185,22 @@ def audit_vds(a: Audit) -> None:
     s = pd.read_parquet(DATA_PROCESSED_DIR / "speed_gyeongbu.parquet")
     key = ["period", "date", "hour", "direction", "conzone_id"]
 
+    # ★ **선언한 기간만 본다** (2026-11-12). `EXPECT` 의 수치는 #134 감사가
+    #   2026-10-14 에 `base202603` · `seollal2026` 두 기간에 대해 **측정해서
+    #   문서에 적은 값**이다 (`validation_report.md` §3.1, 63,360×2 ·
+    #   결측 54,523/8,825/12). 그 뒤 `chuseok2026` · `base202609` 를 적재하자
+    #   총계가 112,848 / 112,128 로 바뀌어 전부 어긋났다.
+    #
+    #   그때 고를 길이 둘이었다. 문서의 숫자를 새 총계로 고치면 **날짜가 박힌
+    #   감사 기록을 위조**하는 것이 된다. 그래서 감사가 자기 범위를 지키게 한다 —
+    #   `vds_breakdown` 이 이미 어느 기간을 검사하는지 선언해 두었다.
+    #
+    #   새 기간의 적재 검증은 `load_issue145_csv.py` 가 따로 한다
+    #   (콘존 기하 최대차 0.0e+00 km · 결측률 보고).
+    scoped = {p for p, _ in EXPECT["vds_breakdown"]}
+    t = t[t["period"].isin(scoped)]
+    s = s[s["period"].isin(scoped)]
+
     a.check("VDS traffic 행", len(t), EXPECT["vds_rows_each"])
     a.check("VDS speed 행", len(s), EXPECT["vds_rows_each"])
     a.check("VDS traffic 중복 키", int(t.duplicated(key).sum()), 0)

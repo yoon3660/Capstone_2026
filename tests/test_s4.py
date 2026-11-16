@@ -315,7 +315,9 @@ def test_only_s4_may_take_a_lead():
 
     assert "s4_lead_min" in inspect.signature(run_once).parameters
     src = inspect.getsource(run_once)
-    assert 's4_lead_min is not None and cfg.policy.stage != "S4"' in src, (
+    # ★ `PERFECT_S4` 도 받는다 (#168 2/2 천장 포락선) — **S4 구조**에 완전한
+    #   미래를 준 칸이라 리드타임이 같은 뜻을 가진다. 그 둘 말고는 막아야 한다
+    assert 's4_lead_min is not None and cfg.policy.stage not in ("S4", "PERFECT_S4")' in src, (
         "S4 전용 가드가 없다 — 다른 칸이 조용히 리드를 받는다")
 
 

@@ -30,7 +30,7 @@ IO 를 하지 않는다
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import groupby
 
@@ -43,6 +43,7 @@ from evdt.world.queue_rule import (
     Assignment,
     Charger,
     assign,
+    assign_with_renege,
     chargers_after,
     wait_if_arriving_now,
 )
@@ -158,6 +159,27 @@ class StationQueue:
         `assign` 한 결과와 달라지고 — 조용히 달라진다. 그래서 멈춘다.
         """
 
+        assignments, _ = self._settle(arrivals, None)
+        return assignments
+
+    def admit_patient(
+        self, arrivals: Sequence[Arrival], patience_min: Mapping[str, float],
+    ) -> tuple[tuple[Assignment, ...], tuple[str, ...]]:
+        """인내를 넘겨 기다려야 하는 차는 **포기한다** (#147). `(배정, 포기한 ev_id)`.
+
+        `admit` 과 **같은 검사**를 거친다 — 도착이 거꾸로 들어오면 여기서도 멈춘다.
+        `patience_min` 이 비어 있으면 `admit` 과 **비트 단위로 같다**.
+
+        인내에 없는 차는 포기하지 않는다. 조용한 0 과 "값 없음" 은 다르다.
+        """
+
+        return self._settle(arrivals, patience_min)
+
+    def _settle(
+        self, arrivals: Sequence[Arrival], patience_min: Mapping[str, float] | None,
+    ) -> tuple[tuple[Assignment, ...], tuple[str, ...]]:
+        """`admit` 과 `admit_patient` 의 공통 본문. 검사를 한 곳에만 둔다."""
+
         if arrivals:
             earliest = min(float(a.arrival_min) for a in arrivals)
             if earliest < self._last_admit_min - 1e-9:
@@ -169,10 +191,17 @@ class StationQueue:
             self._last_admit_min = max(
                 self._last_admit_min, max(float(a.arrival_min) for a in arrivals))
 
-        assignments = assign(arrivals, self.chargers)
+        if patience_min:
+            assignments, reneged = assign_with_renege(
+                arrivals, self.chargers, patience_min)
+        else:
+            assignments, reneged = assign(arrivals, self.chargers), ()
+
+        # ★ 포기한 차는 충전기를 **잡지 않는다.** `chargers_after` 는 남은 배정만
+        #   보므로 그 차가 쓰려던 시간이 뒤차에게 돌아간다 — 그게 포기의 효과다
         self.chargers = chargers_after(self.chargers, assignments)
         self._active.extend(assignments)
-        return assignments
+        return assignments, reneged
 
     def counts(self, now_min: float) -> tuple[int, int]:
         """(충전 중, 줄 서 있는) 대수. 끝난 배정은 여기서 버린다.

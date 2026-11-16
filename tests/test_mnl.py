@@ -462,3 +462,287 @@ def test_oracle_forecast_shows_past_non_participants_only():
         "np_late", "p_late"]
     assert fc.arrivals_between("B", after_min=0.0, before_min=10.0) == ()
     assert fc.round_no == inner.round_no                              # 나머지는 위임
+
+
+# ---------------------------------------------------------------------------
+# T2 — 지각 충전 출력 (`power_stat`)
+# ---------------------------------------------------------------------------
+
+
+def _mixed(sid: str, specs: list[tuple[float, int]]) -> StationSpec:
+    """출력이 섞인 휴게소 — `max` 와 `mean` 이 달라지는 자리."""
+
+    return StationSpec(
+        station_id=sid, lat=36.0, lon=127.0,
+        chargers=expand_chargers([
+            {"charger_id": f"{sid}_{kw:.0f}", "power_kw": kw, "n_units": n}
+            for kw, n in specs]),
+    )
+
+
+def test_power_stat_max_is_the_old_behaviour() -> None:
+    """★ 되돌림이 없어야 한다 — `max` 가 기본이고, 전과 **한 글자도 다르지 않다**.
+
+    기존 측정값(설 격자·추석 바닥)이 전부 `max` 로 재어졌다. 기본값이 바뀌면
+    그 값들과 새 값을 나란히 놓을 수 없다.
+    """
+
+    assert MnlSettings().power_stat == "max"
+    stations = [_mixed("A", [(100.0, 1), (350.0, 3)]), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    old = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1)))
+    new = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(),
+                         mnl=MnlSettings(theta=0.05, seed=1, power_stat="max")))
+    assert _key(old) == _key(new)
+
+
+def test_perceived_power_follows_the_statistic() -> None:
+    """`charger_powers_kw` 는 **개별 충전기** 목록이라 mean 이 대수 가중이다."""
+
+    powers = (100.0, 350.0, 350.0, 350.0)          # 1x100 + 3x350
+    assert MnlSettings(power_stat="max").perceived_kw(powers) == 350.0
+    assert MnlSettings(power_stat="min").perceived_kw(powers) == 100.0
+    assert MnlSettings(power_stat="mean").perceived_kw(powers) == pytest.approx(287.5)
+    assert MnlSettings(power_stat="p50").perceived_kw(powers) == 350.0
+
+
+def test_mean_changes_the_choice_when_powers_are_mixed() -> None:
+    """출력이 섞인 휴게소에서 `mean` 은 `max` 와 **다른 선택**을 낸다.
+
+    섞이지 않았으면 (모든 충전기가 같은 출력) 둘이 같아야 한다 — 그래야
+    "손잡이가 엉뚱한 데서 작동한다" 는 걱정이 없다.
+    """
+
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(40)
+
+    # ★ 출력을 차량 `vmax_kw`(200) **아래로** 둔다. 위로 두면 둘 다 차량 한도에
+    #   걸려서 같은 충전 시간이 나오고, 손잡이가 작동하는지 알 수 없다.
+    #   실제 선단도 최대 250 kW 라 350/360 kW 충전기에서는 이 손잡이가 거의
+    #   안 먹는다 (`MnlSettings.power_stat` 의 설명 참조)
+    #   그리고 **순위가 뒤집히도록** 격차를 크게 둔다. max 190 vs mean 110 이면
+    #   A 의 지각 충전시간이 B(150kW)보다 빨랐다가 느려진다
+    mixed = [_mixed("A", [(30.0, 1), (190.0, 1)]), _spec("B", 150.0)]
+    a = _run(fleet, mixed, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="max")))
+    b = _run(fleet, mixed, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="mean")))
+    assert _key(a) != _key(b), "출력이 섞였는데 지각 출력을 바꿔도 선택이 같다"
+
+    flat = [_mixed("A", [(190.0, 2)]), _spec("B", 150.0)]
+    c = _run(fleet, flat, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="max")))
+    d = _run(fleet, flat, offsets,
+             MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, power_stat="mean")))
+    assert _key(c) == _key(d), "출력이 다 같은데 max 와 mean 이 다른 결과를 낸다"
+
+
+def test_the_escape_rule_still_uses_the_real_fastest_charger() -> None:
+    """★ 지각 출력은 **선택의 비용**에만 들어간다.
+
+    이탈 판정(`escape_mode="s0"`)은 "S0 와 같은 판정" 이어야 한다. 거기에
+    지각 출력을 넣으면 S0 와 MNL 의 이탈이 달라져서, 이탈 수 맞춤(기준 2)이
+    선택 모형 탓인지 지각 출력 탓인지 못 가른다.
+    """
+
+    import inspect
+
+    from evdt.engine import mnl as m
+
+    src = inspect.getsource(m.MnlPolicy)
+    assert "s0_best = min(s0_best, st.wait_min + charge_min)" in src, (
+        "`s0_best` 가 지각 출력을 쓰고 있다 — 이탈 판정은 실제 최고 출력으로 한다")
+    assert "perceived_min" in src
+
+
+def test_an_unknown_power_stat_is_refused() -> None:
+    with pytest.raises(ValueError, match="power_stat"):
+        MnlSettings(power_stat="median")
+
+
+# ---------------------------------------------------------------------------
+# T5 — 휴게소 고정효과 (ASC)
+# ---------------------------------------------------------------------------
+
+
+def test_no_asc_is_the_old_behaviour() -> None:
+    """★ 되돌림이 없어야 한다 — 기본은 빈 사전이고 전과 한 글자도 다르지 않다."""
+
+    assert MnlSettings().asc == {}
+    stations = [_spec("A", 200.0), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    old = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1)))
+    new = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, asc={})))
+    assert _key(old) == _key(new)
+
+
+def test_a_positive_asc_pushes_cars_away() -> None:
+    """양수 ASC = "그만큼 더 멀게 느낀다" → 그 휴게소로 덜 간다."""
+
+    stations = [_spec("A", 200.0, n_units=5), _spec("B", 200.0, n_units=5)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(40)
+
+    def share_a(asc: dict) -> float:
+        r = _run(fleet, stations, offsets,
+                 MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1, asc=asc)))
+        n = [e for e in r.charge_events if e["station_id"] == "A"]
+        return len(n) / max(len(r.charge_events), 1)
+
+    base = share_a({})
+    away = share_a({"A": +30.0})
+    toward = share_a({"A": -30.0})
+
+    assert away < base < toward, (
+        f"ASC 가 방향대로 안 움직인다: +30 → {away:.3f} · 0 → {base:.3f} · "
+        f"-30 → {toward:.3f}")
+
+
+def test_adding_the_same_asc_everywhere_changes_nothing() -> None:
+    """★ **식별 문제** — argmin 이므로 전체에 같은 값을 더해도 선택이 같다.
+
+    그래서 적합기가 매 번 평균을 0 으로 맞춰야 한다. 안 그러면 값이 떠돌아
+    다니면서 "ASC 폭" 이 의미를 잃는다.
+    """
+
+    stations = [_spec("A", 200.0), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    a = _run(fleet, stations, offsets, MnlPolicy(
+        _settings(), mnl=MnlSettings(theta=0.05, seed=1, asc={"A": 5.0, "B": 5.0})))
+    b = _run(fleet, stations, offsets, MnlPolicy(
+        _settings(), mnl=MnlSettings(theta=0.05, seed=1, asc={"A": 0.0, "B": 0.0})))
+    assert _key(a) == _key(b)
+
+
+def test_asc_stays_out_of_the_escape_rule() -> None:
+    """★ ASC 는 **선택의 비용**에만 들어간다.
+
+    이탈 판정(`escape_mode="s0"`)에 ASC 가 섞이면, 이탈 수 맞춤(기준 2)이
+    ASC 탓인지 배정 탓인지 못 가른다. `power_stat` 과 같은 원칙이다.
+    """
+
+    import inspect
+
+    from evdt.engine import mnl as m
+
+    src = inspect.getsource(m.MnlPolicy)
+    assert "s0_best = min(s0_best, st.wait_min + charge_min)" in src, (
+        "`s0_best` 가 ASC 를 쓰고 있다 — 이탈 판정은 ASC 없는 비용으로 한다")
+    # ★ **혼잡이 없는 세계**에서 검사한다. ASC 를 줘도 이탈 수가 같아야 한다.
+    #
+    #   혼잡한 세계에서는 ASC 가 **간접적으로** 이탈을 바꾼다 — 고르는 곳이
+    #   바뀌면 줄이 바뀌고, 줄이 바뀌면 `s0_best` 가 바뀌기 때문이다. 그건
+    #   막을 수도 없고 막아서도 안 된다 (세계가 실제로 달라진 것이다).
+    #   처음에 혼잡한 세계로 검사했더니 이탈이 22 → 0 으로 바뀌었다.
+    #
+    #   그래서 충전기를 넉넉히 둬서 **줄이 안 서게** 만든다. 그러면 `s0_best`
+    #   는 충전시간만으로 정해지고 ASC 와 무관해야 한다.
+    roomy = [_spec("A", 100.0, n_units=30), _spec("B", 100.0, n_units=30)]
+    offsets = {"A": 100.0, "B": 150.0}
+    varied = _fleet(40, escape=22.0, socs=(0.30, 0.45, 0.60))
+    base = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1)),
+        escape_cost_min=22.0)
+    big = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1, asc={"A": 500.0})),
+        escape_cost_min=22.0)
+
+    assert max(e["wait_min"] for e in base.charge_events) == 0.0, (
+        "줄이 섰다 — 이 검사는 혼잡 없는 세계여야 한다")
+    assert len(base.escape_events) > 0, "이탈이 0 이면 검사가 무의미하다"
+    assert len(base.escape_events) == len(big.escape_events), (
+        f"혼잡 없는 세계인데 ASC 가 이탈 수를 바꿨다: "
+        f"{len(base.escape_events)} → {len(big.escape_events)} — "
+        "이탈 판정에 ASC 가 섞였다")
+    # 고르는 곳은 바뀌어야 한다 (손잡이가 작동한다는 확인)
+    a_base = sum(1 for e in base.charge_events if e["station_id"] == "A")
+    a_big = sum(1 for e in big.charge_events if e["station_id"] == "A")
+    assert a_big < a_base, f"ASC +500 인데 A 선택이 안 줄었다: {a_base} → {a_big}"
+
+
+# ---------------------------------------------------------------------------
+# N1 — 거리 항 (β_d)
+# ---------------------------------------------------------------------------
+
+
+def test_no_distance_term_is_the_old_behaviour() -> None:
+    """★ 되돌림이 없어야 한다 — 기본 0 이면 전과 한 글자도 다르지 않다."""
+
+    assert MnlSettings().beta_dist_min_per_km == 0.0
+    stations = [_spec("A", 200.0), _spec("B", 200.0)]
+    offsets = {"A": 100.0, "B": 150.0}
+    fleet = _fleet(30)
+
+    old = _run(fleet, stations, offsets,
+               MnlPolicy(_settings(), mnl=MnlSettings(theta=0.05, seed=1)))
+    new = _run(fleet, stations, offsets, MnlPolicy(
+        _settings(), mnl=MnlSettings(theta=0.05, seed=1, beta_dist_min_per_km=0.0)))
+    assert _key(old) == _key(new)
+
+
+def test_the_distance_term_moves_choices_along_the_corridor() -> None:
+    """β_d 의 **부호가 방향이다** — 양수면 앞 휴게소, 음수면 뒤 휴게소.
+
+    ★ 두 휴게소를 **같은 출력·같은 대수**로 둔다. 그래야 거리 말고는 고를
+      이유가 없어서 이 항만 재는 것이 된다.
+    """
+
+    stations = [_spec("A", 200.0, n_units=20), _spec("B", 200.0, n_units=20)]
+    offsets = {"A": 100.0, "B": 200.0}       # 100 km 차이
+    fleet = _fleet(40)
+
+    def share_near(beta: float) -> float:
+        r = _run(fleet, stations, offsets, MnlPolicy(
+            _settings(), mnl=MnlSettings(theta=0.05, seed=1,
+                                         beta_dist_min_per_km=beta)))
+        near = [e for e in r.charge_events if e["station_id"] == "A"]
+        return len(near) / max(len(r.charge_events), 1)
+
+    base = share_near(0.0)
+    prefer_near = share_near(+0.5)       # 100 km 멀어지면 50분 비싸다
+    prefer_far = share_near(-0.5)
+
+    assert prefer_far < base < prefer_near, (
+        f"β_d 가 방향대로 안 움직인다: -0.5 → {prefer_far:.3f} · "
+        f"0 → {base:.3f} · +0.5 → {prefer_near:.3f}")
+
+
+def test_the_distance_term_stays_out_of_the_escape_rule() -> None:
+    """★ 거리 항도 **선택의 비용**에만 들어간다 (ASC 와 같은 원칙).
+
+    섞이면 이탈 수의 변화가 β_d 탓인지 배정 탓인지 못 가른다. ASC 검사와
+    같은 이유로 **혼잡이 없는 세계**에서 본다 — 혼잡한 세계에서는 고르는 곳이
+    바뀌면 줄이 바뀌어 이탈이 간접적으로 움직인다.
+    """
+
+    roomy = [_spec("A", 100.0, n_units=30), _spec("B", 100.0, n_units=30)]
+    offsets = {"A": 100.0, "B": 150.0}
+    varied = _fleet(40, escape=22.0, socs=(0.30, 0.45, 0.60))
+    base = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1)),
+        escape_cost_min=22.0)
+    far = _run(varied, roomy, offsets, MnlPolicy(
+        _settings(22.0), mnl=MnlSettings(theta=0.05, seed=1,
+                                         beta_dist_min_per_km=-5.0)),
+        escape_cost_min=22.0)
+
+    assert max(e["wait_min"] for e in base.charge_events) == 0.0, (
+        "줄이 섰다 — 이 검사는 혼잡 없는 세계여야 한다")
+    assert len(base.escape_events) > 0, "이탈이 0 이면 검사가 무의미하다"
+    assert len(base.escape_events) == len(far.escape_events), (
+        f"혼잡 없는 세계인데 β_d 가 이탈 수를 바꿨다: "
+        f"{len(base.escape_events)} → {len(far.escape_events)} — "
+        "이탈 판정에 거리 항이 섞였다")
+    a_base = sum(1 for e in base.charge_events if e["station_id"] == "A")
+    a_far = sum(1 for e in far.charge_events if e["station_id"] == "A")
+    assert a_far < a_base, f"β_d 가 음수인데 가까운 A 선택이 안 줄었다: {a_base} → {a_far}"
