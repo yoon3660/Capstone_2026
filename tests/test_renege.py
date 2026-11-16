@@ -265,6 +265,18 @@ def test_the_logged_escape_cost_is_the_cars_own(tmp_path) -> None:
       분석이 조용히 다른 숫자를 냈다 (체류 5,641.8h → 3,773.8h).
       `test_no_test_writes_into_the_real_runs_dir` 가 이제 그걸 막는다.
     """
+
+    # ★ 이 검사는 **진짜 DB** (`evdt.db`) 의 노선·휴게소·충전기를 쓴다. CI 러너에는
+    #   없으므로 생략한다 (`test_issue134_audit.py` 와 같은 관용구). 로컬에서는 돈다
+    from pathlib import Path as _P
+
+    import pytest as _pytest
+
+    from evdt.paths import default_db_path as _dbp
+
+    if not _P(_dbp()).exists():
+        _pytest.skip("기본 DB 가 없어 생략 (python -m evdt.io.db init 으로 만든다)")
+
     import dataclasses
 
     import pandas as pd

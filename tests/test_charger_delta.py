@@ -134,6 +134,17 @@ def test_the_mnl_path_applies_the_addition_too() -> None:
 def test_the_delta_actually_changes_the_simulated_supply(tmp_path) -> None:
     """끝에서 끝까지 — 증설한 run 의 충전기 수가 실제로 늘어나는가."""
 
+    # ★ 이 검사는 **진짜 DB** (`evdt.db`) 의 노선·휴게소·충전기를 쓴다. CI 러너에는
+    #   없으므로 생략한다 (`test_issue134_audit.py` 와 같은 관용구). 로컬에서는 돈다
+    from pathlib import Path as _P
+
+    import pytest as _pytest
+
+    from evdt.paths import default_db_path as _dbp
+
+    if not _P(_dbp()).exists():
+        _pytest.skip("기본 DB 가 없어 생략 (python -m evdt.io.db init 으로 만든다)")
+
     import pandas as pd
 
     from evdt.runner import run_once
