@@ -1,0 +1,350 @@
+﻿check,got,expected,ok
+VDS stored vs recomputed left duplicate keys,0,0,True
+VDS stored vs recomputed right duplicate keys,0,0,True
+VDS stored vs recomputed left-only keys,0,0,True
+VDS stored vs recomputed right-only keys,0,0,True
+VDS volume vs speed left duplicate keys,0,0,True
+VDS volume vs speed right duplicate keys,0,0,True
+VDS volume vs speed left-only keys,0,0,True
+VDS volume vs speed right-only keys,0,0,True
+VDS stored rows match raw recomputation,True,True,True
+2026-03-02 DOWN ramps left duplicate keys,0,0,True
+2026-03-02 DOWN ramps right duplicate keys,0,0,True
+2026-03-02 DOWN ramps left-only keys,0,0,True
+2026-03-02 DOWN ramps right-only keys,0,0,True
+2026-03-02 DOWN ramp keys and values,True,True,True
+2026-03-02 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-02 DOWN volume recomputation,True,True,True
+2026-03-02 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-02 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-02 DOWN entry ledger left-only keys,0,0,True
+2026-03-02 DOWN entry ledger right-only keys,0,0,True
+2026-03-02 DOWN entry keys and values,True,True,True
+2026-03-02 DOWN entries (frozen),255391,255391,True
+2026-03-02 DOWN OD duplicate keys,0,0,True
+2026-03-02 DOWN OD conserves entries,True,True,True
+2026-03-03 DOWN ramps left duplicate keys,0,0,True
+2026-03-03 DOWN ramps right duplicate keys,0,0,True
+2026-03-03 DOWN ramps left-only keys,0,0,True
+2026-03-03 DOWN ramps right-only keys,0,0,True
+2026-03-03 DOWN ramp keys and values,True,True,True
+2026-03-03 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-03 DOWN volume recomputation,True,True,True
+2026-03-03 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-03 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-03 DOWN entry ledger left-only keys,0,0,True
+2026-03-03 DOWN entry ledger right-only keys,0,0,True
+2026-03-03 DOWN entry keys and values,True,True,True
+2026-03-03 DOWN entries (frozen),309550,309550,True
+2026-03-03 DOWN OD duplicate keys,0,0,True
+2026-03-03 DOWN OD conserves entries,True,True,True
+2026-03-04 DOWN ramps left duplicate keys,0,0,True
+2026-03-04 DOWN ramps right duplicate keys,0,0,True
+2026-03-04 DOWN ramps left-only keys,0,0,True
+2026-03-04 DOWN ramps right-only keys,0,0,True
+2026-03-04 DOWN ramp keys and values,True,True,True
+2026-03-04 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-04 DOWN volume recomputation,True,True,True
+2026-03-04 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-04 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-04 DOWN entry ledger left-only keys,0,0,True
+2026-03-04 DOWN entry ledger right-only keys,0,0,True
+2026-03-04 DOWN entry keys and values,True,True,True
+2026-03-04 DOWN entries (frozen),318576,318576,True
+2026-03-04 DOWN OD duplicate keys,0,0,True
+2026-03-04 DOWN OD conserves entries,True,True,True
+2026-03-05 DOWN ramps left duplicate keys,0,0,True
+2026-03-05 DOWN ramps right duplicate keys,0,0,True
+2026-03-05 DOWN ramps left-only keys,0,0,True
+2026-03-05 DOWN ramps right-only keys,0,0,True
+2026-03-05 DOWN ramp keys and values,True,True,True
+2026-03-05 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-05 DOWN volume recomputation,True,True,True
+2026-03-05 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-05 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-05 DOWN entry ledger left-only keys,0,0,True
+2026-03-05 DOWN entry ledger right-only keys,0,0,True
+2026-03-05 DOWN entry keys and values,True,True,True
+2026-03-05 DOWN entries (frozen),312116,312116,True
+2026-03-05 DOWN OD duplicate keys,0,0,True
+2026-03-05 DOWN OD conserves entries,True,True,True
+2026-03-06 DOWN ramps left duplicate keys,0,0,True
+2026-03-06 DOWN ramps right duplicate keys,0,0,True
+2026-03-06 DOWN ramps left-only keys,0,0,True
+2026-03-06 DOWN ramps right-only keys,0,0,True
+2026-03-06 DOWN ramp keys and values,True,True,True
+2026-03-06 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-06 DOWN volume recomputation,True,True,True
+2026-03-06 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-06 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-06 DOWN entry ledger left-only keys,0,0,True
+2026-03-06 DOWN entry ledger right-only keys,0,0,True
+2026-03-06 DOWN entry keys and values,True,True,True
+2026-03-06 DOWN entries (frozen),339614,339614,True
+2026-03-06 DOWN OD duplicate keys,0,0,True
+2026-03-06 DOWN OD conserves entries,True,True,True
+2026-03-07 DOWN ramps left duplicate keys,0,0,True
+2026-03-07 DOWN ramps right duplicate keys,0,0,True
+2026-03-07 DOWN ramps left-only keys,0,0,True
+2026-03-07 DOWN ramps right-only keys,0,0,True
+2026-03-07 DOWN ramp keys and values,True,True,True
+2026-03-07 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-07 DOWN volume recomputation,True,True,True
+2026-03-07 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-07 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-07 DOWN entry ledger left-only keys,0,0,True
+2026-03-07 DOWN entry ledger right-only keys,0,0,True
+2026-03-07 DOWN entry keys and values,True,True,True
+2026-03-07 DOWN entries (frozen),304896,304896,True
+2026-03-07 DOWN OD duplicate keys,0,0,True
+2026-03-07 DOWN OD conserves entries,True,True,True
+2026-03-08 DOWN ramps left duplicate keys,0,0,True
+2026-03-08 DOWN ramps right duplicate keys,0,0,True
+2026-03-08 DOWN ramps left-only keys,0,0,True
+2026-03-08 DOWN ramps right-only keys,0,0,True
+2026-03-08 DOWN ramp keys and values,True,True,True
+2026-03-08 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-08 DOWN volume recomputation,True,True,True
+2026-03-08 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-08 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-08 DOWN entry ledger left-only keys,0,0,True
+2026-03-08 DOWN entry ledger right-only keys,0,0,True
+2026-03-08 DOWN entry keys and values,True,True,True
+2026-03-08 DOWN entries (frozen),259393,259393,True
+2026-03-08 DOWN OD duplicate keys,0,0,True
+2026-03-08 DOWN OD conserves entries,True,True,True
+2026-03-09 DOWN ramps left duplicate keys,0,0,True
+2026-03-09 DOWN ramps right duplicate keys,0,0,True
+2026-03-09 DOWN ramps left-only keys,0,0,True
+2026-03-09 DOWN ramps right-only keys,0,0,True
+2026-03-09 DOWN ramp keys and values,True,True,True
+2026-03-09 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-09 DOWN volume recomputation,True,True,True
+2026-03-09 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-09 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-09 DOWN entry ledger left-only keys,0,0,True
+2026-03-09 DOWN entry ledger right-only keys,0,0,True
+2026-03-09 DOWN entry keys and values,True,True,True
+2026-03-09 DOWN entries (frozen),319983,319983,True
+2026-03-09 DOWN OD duplicate keys,0,0,True
+2026-03-09 DOWN OD conserves entries,True,True,True
+2026-03-10 DOWN ramps left duplicate keys,0,0,True
+2026-03-10 DOWN ramps right duplicate keys,0,0,True
+2026-03-10 DOWN ramps left-only keys,0,0,True
+2026-03-10 DOWN ramps right-only keys,0,0,True
+2026-03-10 DOWN ramp keys and values,True,True,True
+2026-03-10 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-10 DOWN volume recomputation,True,True,True
+2026-03-10 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-10 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-10 DOWN entry ledger left-only keys,0,0,True
+2026-03-10 DOWN entry ledger right-only keys,0,0,True
+2026-03-10 DOWN entry keys and values,True,True,True
+2026-03-10 DOWN entries (frozen),312698,312698,True
+2026-03-10 DOWN OD duplicate keys,0,0,True
+2026-03-10 DOWN OD conserves entries,True,True,True
+2026-03-11 DOWN ramps left duplicate keys,0,0,True
+2026-03-11 DOWN ramps right duplicate keys,0,0,True
+2026-03-11 DOWN ramps left-only keys,0,0,True
+2026-03-11 DOWN ramps right-only keys,0,0,True
+2026-03-11 DOWN ramp keys and values,True,True,True
+2026-03-11 DOWN volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-11 DOWN volume recomputation,True,True,True
+2026-03-11 DOWN entry ledger left duplicate keys,0,0,True
+2026-03-11 DOWN entry ledger right duplicate keys,0,0,True
+2026-03-11 DOWN entry ledger left-only keys,0,0,True
+2026-03-11 DOWN entry ledger right-only keys,0,0,True
+2026-03-11 DOWN entry keys and values,True,True,True
+2026-03-11 DOWN entries (frozen),314327,314327,True
+2026-03-11 DOWN OD duplicate keys,0,0,True
+2026-03-11 DOWN OD conserves entries,True,True,True
+2026-03-02 UP ramps left duplicate keys,0,0,True
+2026-03-02 UP ramps right duplicate keys,0,0,True
+2026-03-02 UP ramps left-only keys,0,0,True
+2026-03-02 UP ramps right-only keys,0,0,True
+2026-03-02 UP ramp keys and values,True,True,True
+2026-03-02 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-02 UP volume recomputation,True,True,True
+2026-03-02 UP entry ledger left duplicate keys,0,0,True
+2026-03-02 UP entry ledger right duplicate keys,0,0,True
+2026-03-02 UP entry ledger left-only keys,0,0,True
+2026-03-02 UP entry ledger right-only keys,0,0,True
+2026-03-02 UP entry keys and values,True,True,True
+2026-03-02 UP entries (frozen),285291,285291,True
+2026-03-02 UP OD duplicate keys,0,0,True
+2026-03-02 UP OD conserves entries,True,True,True
+2026-03-03 UP ramps left duplicate keys,0,0,True
+2026-03-03 UP ramps right duplicate keys,0,0,True
+2026-03-03 UP ramps left-only keys,0,0,True
+2026-03-03 UP ramps right-only keys,0,0,True
+2026-03-03 UP ramp keys and values,True,True,True
+2026-03-03 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-03 UP volume recomputation,True,True,True
+2026-03-03 UP entry ledger left duplicate keys,0,0,True
+2026-03-03 UP entry ledger right duplicate keys,0,0,True
+2026-03-03 UP entry ledger left-only keys,0,0,True
+2026-03-03 UP entry ledger right-only keys,0,0,True
+2026-03-03 UP entry keys and values,True,True,True
+2026-03-03 UP entries (frozen),290592,290592,True
+2026-03-03 UP OD duplicate keys,0,0,True
+2026-03-03 UP OD conserves entries,True,True,True
+2026-03-04 UP ramps left duplicate keys,0,0,True
+2026-03-04 UP ramps right duplicate keys,0,0,True
+2026-03-04 UP ramps left-only keys,0,0,True
+2026-03-04 UP ramps right-only keys,0,0,True
+2026-03-04 UP ramp keys and values,True,True,True
+2026-03-04 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-04 UP volume recomputation,True,True,True
+2026-03-04 UP entry ledger left duplicate keys,0,0,True
+2026-03-04 UP entry ledger right duplicate keys,0,0,True
+2026-03-04 UP entry ledger left-only keys,0,0,True
+2026-03-04 UP entry ledger right-only keys,0,0,True
+2026-03-04 UP entry keys and values,True,True,True
+2026-03-04 UP entries (frozen),296973,296973,True
+2026-03-04 UP OD duplicate keys,0,0,True
+2026-03-04 UP OD conserves entries,True,True,True
+2026-03-05 UP ramps left duplicate keys,0,0,True
+2026-03-05 UP ramps right duplicate keys,0,0,True
+2026-03-05 UP ramps left-only keys,0,0,True
+2026-03-05 UP ramps right-only keys,0,0,True
+2026-03-05 UP ramp keys and values,True,True,True
+2026-03-05 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-05 UP volume recomputation,True,True,True
+2026-03-05 UP entry ledger left duplicate keys,0,0,True
+2026-03-05 UP entry ledger right duplicate keys,0,0,True
+2026-03-05 UP entry ledger left-only keys,0,0,True
+2026-03-05 UP entry ledger right-only keys,0,0,True
+2026-03-05 UP entry keys and values,True,True,True
+2026-03-05 UP entries (frozen),300068,300068,True
+2026-03-05 UP OD duplicate keys,0,0,True
+2026-03-05 UP OD conserves entries,True,True,True
+2026-03-06 UP ramps left duplicate keys,0,0,True
+2026-03-06 UP ramps right duplicate keys,0,0,True
+2026-03-06 UP ramps left-only keys,0,0,True
+2026-03-06 UP ramps right-only keys,0,0,True
+2026-03-06 UP ramp keys and values,True,True,True
+2026-03-06 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-06 UP volume recomputation,True,True,True
+2026-03-06 UP entry ledger left duplicate keys,0,0,True
+2026-03-06 UP entry ledger right duplicate keys,0,0,True
+2026-03-06 UP entry ledger left-only keys,0,0,True
+2026-03-06 UP entry ledger right-only keys,0,0,True
+2026-03-06 UP entry keys and values,True,True,True
+2026-03-06 UP entries (frozen),306813,306813,True
+2026-03-06 UP OD duplicate keys,0,0,True
+2026-03-06 UP OD conserves entries,True,True,True
+2026-03-07 UP ramps left duplicate keys,0,0,True
+2026-03-07 UP ramps right duplicate keys,0,0,True
+2026-03-07 UP ramps left-only keys,0,0,True
+2026-03-07 UP ramps right-only keys,0,0,True
+2026-03-07 UP ramp keys and values,True,True,True
+2026-03-07 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-07 UP volume recomputation,True,True,True
+2026-03-07 UP entry ledger left duplicate keys,0,0,True
+2026-03-07 UP entry ledger right duplicate keys,0,0,True
+2026-03-07 UP entry ledger left-only keys,0,0,True
+2026-03-07 UP entry ledger right-only keys,0,0,True
+2026-03-07 UP entry keys and values,True,True,True
+2026-03-07 UP entries (frozen),269602,269602,True
+2026-03-07 UP OD duplicate keys,0,0,True
+2026-03-07 UP OD conserves entries,True,True,True
+2026-03-08 UP ramps left duplicate keys,0,0,True
+2026-03-08 UP ramps right duplicate keys,0,0,True
+2026-03-08 UP ramps left-only keys,0,0,True
+2026-03-08 UP ramps right-only keys,0,0,True
+2026-03-08 UP ramp keys and values,True,True,True
+2026-03-08 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-08 UP volume recomputation,True,True,True
+2026-03-08 UP entry ledger left duplicate keys,0,0,True
+2026-03-08 UP entry ledger right duplicate keys,0,0,True
+2026-03-08 UP entry ledger left-only keys,0,0,True
+2026-03-08 UP entry ledger right-only keys,0,0,True
+2026-03-08 UP entry keys and values,True,True,True
+2026-03-08 UP entries (frozen),251487,251487,True
+2026-03-08 UP OD duplicate keys,0,0,True
+2026-03-08 UP OD conserves entries,True,True,True
+2026-03-09 UP ramps left duplicate keys,0,0,True
+2026-03-09 UP ramps right duplicate keys,0,0,True
+2026-03-09 UP ramps left-only keys,0,0,True
+2026-03-09 UP ramps right-only keys,0,0,True
+2026-03-09 UP ramp keys and values,True,True,True
+2026-03-09 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-09 UP volume recomputation,True,True,True
+2026-03-09 UP entry ledger left duplicate keys,0,0,True
+2026-03-09 UP entry ledger right duplicate keys,0,0,True
+2026-03-09 UP entry ledger left-only keys,0,0,True
+2026-03-09 UP entry ledger right-only keys,0,0,True
+2026-03-09 UP entry keys and values,True,True,True
+2026-03-09 UP entries (frozen),300101,300101,True
+2026-03-09 UP OD duplicate keys,0,0,True
+2026-03-09 UP OD conserves entries,True,True,True
+2026-03-10 UP ramps left duplicate keys,0,0,True
+2026-03-10 UP ramps right duplicate keys,0,0,True
+2026-03-10 UP ramps left-only keys,0,0,True
+2026-03-10 UP ramps right-only keys,0,0,True
+2026-03-10 UP ramp keys and values,True,True,True
+2026-03-10 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-10 UP volume recomputation,True,True,True
+2026-03-10 UP entry ledger left duplicate keys,0,0,True
+2026-03-10 UP entry ledger right duplicate keys,0,0,True
+2026-03-10 UP entry ledger left-only keys,0,0,True
+2026-03-10 UP entry ledger right-only keys,0,0,True
+2026-03-10 UP entry keys and values,True,True,True
+2026-03-10 UP entries (frozen),294674,294674,True
+2026-03-10 UP OD duplicate keys,0,0,True
+2026-03-10 UP OD conserves entries,True,True,True
+2026-03-11 UP ramps left duplicate keys,0,0,True
+2026-03-11 UP ramps right duplicate keys,0,0,True
+2026-03-11 UP ramps left-only keys,0,0,True
+2026-03-11 UP ramps right-only keys,0,0,True
+2026-03-11 UP ramp keys and values,True,True,True
+2026-03-11 UP volume hours,"[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]","[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]",True
+2026-03-11 UP volume recomputation,True,True,True
+2026-03-11 UP entry ledger left duplicate keys,0,0,True
+2026-03-11 UP entry ledger right duplicate keys,0,0,True
+2026-03-11 UP entry ledger left-only keys,0,0,True
+2026-03-11 UP entry ledger right-only keys,0,0,True
+2026-03-11 UP entry keys and values,True,True,True
+2026-03-11 UP entries (frozen),300784,300784,True
+2026-03-11 UP OD duplicate keys,0,0,True
+2026-03-11 UP OD conserves entries,True,True,True
+KMA sample errors,0,0,True
+2026-03-02 KMA sample size,16,16,True
+2026-03-02 KMA mean,7.00625,7.00625,True
+2026-03-03 KMA sample size,16,16,True
+2026-03-03 KMA mean,7.00625,7.00625,True
+2026-03-04 KMA sample size,16,16,True
+2026-03-04 KMA mean,7.29375,7.29375,True
+2026-03-05 KMA sample size,16,16,True
+2026-03-05 KMA mean,7.59375,7.59375,True
+2026-03-06 KMA sample size,16,16,True
+2026-03-06 KMA mean,5.33125,5.33125,True
+2026-03-07 KMA sample size,16,16,True
+2026-03-07 KMA mean,2.76875,2.76875,True
+2026-03-08 KMA sample size,16,16,True
+2026-03-08 KMA mean,3.43125,3.43125,True
+2026-03-09 KMA sample size,16,16,True
+2026-03-09 KMA mean,4.8875,4.8875,True
+2026-03-10 KMA sample size,16,16,True
+2026-03-10 KMA mean,4.98125,4.98125,True
+2026-03-11 KMA sample size,16,16,True
+2026-03-11 KMA mean,5.86875,5.86875,True
+DOWN observed starts,4299,4299,True
+UP observed starts,6674,6674,True
+observed sites,29,29,True
+observed hour keys duplicate,0,0,True
+conzone stored vs portal+IC left duplicate keys,0,0,True
+conzone stored vs portal+IC right duplicate keys,0,0,True
+conzone stored vs portal+IC left-only keys,0,0,True
+conzone stored vs portal+IC right-only keys,0,0,True
+conzone endpoint differences above 1 m,0,0,True
+DB station missing official rest key,0,0,True
+official rest keys outside charging DB,"['A00088', 'A00230']","['A00088', 'A00230']",True
+station lat/lon differences above 1e-6 degrees,0,0,True
+station offset differences above 1 m,0,0,True
+DOWN DB length within 1 m,True,True,True
+DOWN DB cells,396,396,True
+DOWN DB stations,19,19,True
+UP DB length within 1 m,True,True,True
+UP DB cells,396,396,True
+UP DB stations,16,16,True
