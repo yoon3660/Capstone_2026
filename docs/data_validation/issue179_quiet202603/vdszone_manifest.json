@@ -1,0 +1,151 @@
+{
+ "issue": 179,
+ "script": "scripts/fetch_vdszone_179.py",
+ "label": "quiet202603",
+ "start": "2026-03-02",
+ "end": "2026-03-11",
+ "source": "https://data.ex.co.kr/visual/vdszone (주요노선 구간별 교통량)",
+ "fetched_at": "2026-11-16T20:24:39+09:00",
+ "records": [
+  {
+   "date": "2026-03-02",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260302",
+   "page_bytes": 3258691,
+   "page_sha256": "d6672be1abc1d66d470241a4277d80d87f211edb74baa3efa32e344fc804bbc4",
+   "json_file": "vdszone_20260302.json",
+   "json_sha256": "6e6f5f92052b833329c7d9423b1feae6d2b6abba23d8dffbbf5571c1b3e98ef6",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-03",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260303",
+   "page_bytes": 3258588,
+   "page_sha256": "6b2dbe76ad60136b2e48a11f6b6f8740c7ff8985cf48fae3b6ce8ae2a2ebde32",
+   "json_file": "vdszone_20260303.json",
+   "json_sha256": "006de74d0bb6838ed945973f46c853268b372548c2364079a58bcdb5df4e971d",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-04",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260304",
+   "page_bytes": 3258917,
+   "page_sha256": "8e50ebdfc3dec4719e56db0fb19a2f9f749a5af64b627d8cda31435608a26860",
+   "json_file": "vdszone_20260304.json",
+   "json_sha256": "ecabfee38afd90c33ea3ad83b61256d647fc5326104333ac6f9e35060911a07a",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-05",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260305",
+   "page_bytes": 3258744,
+   "page_sha256": "df7124624ccaf28b17ed1577793a15a44f11ca32759ff5622c48c502d738c9e0",
+   "json_file": "vdszone_20260305.json",
+   "json_sha256": "f0ea286b3821865c8ec7dcf8175079a787aa48719cb2366b278606280cb1e8c7",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-06",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260306",
+   "page_bytes": 3259380,
+   "page_sha256": "7dd8c17435099e99eae0dd022ff413d6e387f80665043f0ecde18a44ece7f808",
+   "json_file": "vdszone_20260306.json",
+   "json_sha256": "4485fe4d7569e209c050c4c1ef0746d40a9b3c76d24fc9905f53ac057d4cc812",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-07",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260307",
+   "page_bytes": 3260904,
+   "page_sha256": "c3bd2b17a0a9426757234d4709e17b0140cab5286d5103ccb5e8c994868bc0be",
+   "json_file": "vdszone_20260307.json",
+   "json_sha256": "020482e4e001b7de0f7220f695227ad88a5f038f5ec2fb46f4c12552fc233c53",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-08",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260308",
+   "page_bytes": 3261346,
+   "page_sha256": "9802a7c0555afda64fdeab8af99239af3c0ba698f7c0e3b91424618db643f810",
+   "json_file": "vdszone_20260308.json",
+   "json_sha256": "5d94852c9a8f2e24595c5fada1e1ec8b93d63763600b1e6c451942d527e376a4",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-09",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260309",
+   "page_bytes": 3258002,
+   "page_sha256": "4cc23d6776d3e120f96d7fbd71d94f3de5c82e20ebb87f327f5b556337361cc9",
+   "json_file": "vdszone_20260309.json",
+   "json_sha256": "a71cfe6485a207568da19e74b61e472eaadde4c6c07edb287ac43edac8314884",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-10",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260310",
+   "page_bytes": 3258562,
+   "page_sha256": "d621b7b33d5a3c005f8f8491495f37edac9b17f1da56685631aca97042b677e4",
+   "json_file": "vdszone_20260310.json",
+   "json_sha256": "0ec0ce01d8c8b0691cfd081fb9a6ac40e803bba1dc4f0ae31996cd20ea5883d9",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  },
+  {
+   "date": "2026-03-11",
+   "url": "https://data.ex.co.kr/visual/vdszone?date=20260311",
+   "page_bytes": 3258487,
+   "page_sha256": "03fb3e6cf6ac40a3b768cb506dbfcda8b772b827cffe59ca7d04febdc47225a5",
+   "json_file": "vdszone_20260311.json",
+   "json_sha256": "4cd795ab3b1b6706638eed434cdfd386bb7265c83b0147b8d3072dc4a3a7f975",
+   "rows": {
+    "vdsEnd": 10200,
+    "conzoneStart": 1584,
+    "vdsStart": 10128,
+    "conzoneEnd": 1584
+   }
+  }
+ ]
+}
