@@ -62,3 +62,5 @@ desktop.ini
 
 # PR 본문 전달용 (저장소에 넣지 않는다)
 PR_*.txt
+# 돌릴 때 남기는 실행 로그 (결과는 runs/ 와 docs/ 에 있다)
+_*.log
