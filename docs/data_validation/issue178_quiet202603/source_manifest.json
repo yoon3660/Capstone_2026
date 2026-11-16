@@ -1,0 +1,41 @@
+{
+  "issue": 178,
+  "script": "scripts/issue178_observed_march.py",
+  "raw_xlsx": "data\\raw\\issue178_charging\\20260402 2026년3월 기후부 충전기 충전이력(상세내역).xlsx",
+  "raw_xlsx_bytes": 45657000,
+  "raw_xlsx_sha256": "d783ca513d6935cc834f7aaa3b97638a7d3e1563b363223a50b18a38917cdc23",
+  "window": [
+    "2026-03-02 00:00:00",
+    "2026-03-12 00:00:00"
+  ],
+  "window_rule": "start in [start, end)",
+  "original_rows_scanned": 571373,
+  "bad_time_rows": 0,
+  "start_month_counts": {
+    "202603": 571373
+  },
+  "sessions_overlapping": 10986,
+  "starts_in_window": 10973,
+  "carry_in_sessions": 13,
+  "starts_by_direction": {
+    "DOWN": 4299,
+    "UP": 6674
+  },
+  "observed_sites": 29,
+  "unobserved_sites": [
+    "망향휴게소 DOWN",
+    "죽암휴게소 DOWN",
+    "황간휴게소 DOWN",
+    "경주휴게소 DOWN",
+    "칠곡휴게소 UP",
+    "옥천휴게소 UP"
+  ],
+  "duplicates_exact": 0,
+  "zero_energy": 0,
+  "missing_energy": 0,
+  "elapsed_over_120min": 12,
+  "reported_vs_elapsed_gap_over_1min": 1276,
+  "reported_vs_elapsed_gap_over_1min_share": 0.11628542786840426,
+  "scope": "환경부·기후부 충전기만 (민간 미포함). 총량 판정에 쓰지 않는다",
+  "created": "2026-11-16T19:46:30+09:00"
+}

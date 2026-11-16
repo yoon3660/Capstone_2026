@@ -1,0 +1,3 @@
+﻿period,obs_total,model_total,model_DOWN,model_UP,max_concurrent_model_max,max_concurrent_model_where,energy_kwh_mean,energy_kwh_p50,energy_kwh_p90,charge_min_mean,charge_min_p50,charge_min_p90,occupied_min_total
+quiet,10973,10973,4299,6674,8,DOWN 칠곡휴게소,21.862736717397247,20.23,39.41800000000001,27.178336219204713,27.366666666666667,40.6,298370.5
+seollal,11405,11405,4828,6577,8,DOWN 칠곡휴게소,22.093457255589655,20.49,39.54,27.117284816600904,26.666666666666668,40.65,308475.3666666667

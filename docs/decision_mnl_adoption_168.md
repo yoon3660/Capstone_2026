@@ -99,7 +99,7 @@ p (참여율) ── 엔진 정보(원장)와 천장 정보(Oracle)의 비대칭
 | **C. 보류** | SUE(모드 B)·ASC로 θ·w 근거를 먼저 만든다 | `ticket_mnl_extra_params.md` | 이번 스프린트 안에 결론이 없다 |
 | **D. 기각** | S0 바닥을 유지한다 | 없음 | "S0 바닥은 실측과 맞지 않는다"는 한계를 발표에 명시해야 한다 |
 
-**추천 (2026-11-12 확정): B + A.** 판정 (가)이고 조건 ②가 해결됐다. 바닥은 MNL(θ 0.05~0.1, w 1.0~1.5 범위)로, 천장은 완전예측-S2/S3/S4 포락선으로 둔다. J(p)는 present 방식으로 참여율 담당과 추진한다. 상세는 팀 보고 `docs/report_mnl_ceiling_168_team.md` §5.5에 있다.
+**추천 (2026-11-12 확정): B + A.** 판정 (가)이고 조건 ②가 해결됐다. 바닥은 MNL(θ 0.05~0.1, w 1.0~1.5 범위)로, 천장은 완전예측-S2/S3/S4 포락선으로 둔다. J(p)는 present 방식으로 참여율 담당과 추진한다. 상세는 팀 보고 `docs/report_mnl_ceiling_168_team.md` §5.1~5.4에 있다(실험별 판정 규칙과 실제 결과).
 
 ## 6. 이번 실행 결과 (설 상행 adoption, 이탈은 S0 규칙)
 
@@ -134,3 +134,4 @@ p (참여율) ── 엔진 정보(원장)와 천장 정보(Oracle)의 비대칭
 - 천장 포락선·천장 검사: `docs/tickets/ticket_mnl_ceiling_2.md`
 - SUE·ASC·w: `docs/tickets/ticket_mnl_extra_params.md`
 - 참여율 연결부: `src/evdt/engine/participation.py`
+- 비참여자 정보 방식(`nonpart_info`) 설명·사용법: `docs/participation_nonpart_info.md`
