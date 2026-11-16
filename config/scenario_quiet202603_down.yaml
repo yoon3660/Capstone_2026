@@ -31,6 +31,14 @@ demand:
   cruise_speed_kmh: 80.0    # 휴게소 사이 주행 속도. Sprint 2 에 CTM 속도로 바뀐다
   escape_cost_min: 120.0
   escape_cost_sigma: 0.0
+  # 줄을 서 있다가 인내가 끝나면 떠난다 (#147). **설·추석 무대와 같은 값**이라야
+  # 사다리 격차를 두 무대에서 나란히 놓을 수 있다 — 끄면 "이탈 기준 120분" 이라고
+  # 선언한 모형에서 372분을 기다리는 차가 생기고, 그 혼란이 바닥에 얹혀 사다리를
+  # 부풀린다 (설 S0−S2 격차 884.3h 중 540.7h 가 그것이었다).
+  renege: true
+  patience_kind: uniform
+  patience_shape: 0.142857      # 반폭 비율 h — U(70×0.857, 70×1.143) = U(60, 80)
+  patience_median_min: 70.0     # 0 이면 escape_cost_min 을 쓴다 (= 가르지 않음)
   travel_time: fixed  # 설·추석과 같다. CTM 정체 재현율 기준 미달(평시는 실측 정체가 드묾)
 
 vehicles:
