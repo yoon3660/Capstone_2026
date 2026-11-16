@@ -539,6 +539,10 @@ def main() -> int:
     ap.add_argument("--strength", type=float, default=DEFAULT_STRENGTH,
                     help="S2~S4 관측 예측 강도 (이탈 맞춤 기본 0.30)")
     ap.add_argument("--s3-window", type=int, default=None)
+    ap.add_argument("--temp-c", type=float, default=None,
+                    help="기온(°C)을 덮어쓴다. **무대를 견줄 때 교통량 효과와 기온 효과를 "
+                         "가르는 데 쓴다** — 평시(3월 5.33°C)와 추석(9월 22.18°C)은 "
+                         "교통량만 다른 게 아니다. scenario_id 뒤에 __t<n> 이 붙는다")
     ap.add_argument("--beta-dist", type=float, default=0.0,
                     help="거리 항 β_d (분/km). 양수면 가까운 휴게소 선호, 음수면 먼 쪽. "
                          "**선택의 비용에만** 들어가고 이탈 판정은 안 건드린다. "
@@ -586,6 +590,14 @@ def main() -> int:
     if args.config is None or args.p is None:
         raise SystemExit("[중단] --config 와 --p 가 필요하다 (--merge 만 예외)")
     cfg0 = R.load_config(args.config)
+    if args.temp_c is not None:
+        # ★ 기온은 `cold_factor` 를 거쳐 **충전 속도**에 걸린다 — 세계를 바꾸는 일이라
+        #   `cfg.variant` 로 꼬리표를 붙인다 (#123). 5.33°C 에서 cold_factor 0.752 라
+        #   충전이 30% 느려지고, 그게 큐에서 증폭돼 대기가 80% 늘어난다
+        before = cfg0.environment.temp_c
+        cfg0 = cfg0.variant(f"t{args.temp_c:g}".replace(".", "p").replace("-", "m"),
+                            {"environment.temp_c": float(args.temp_c)})
+        print(f"  ★ 기온 {before:g} → {args.temp_c:g}°C · scenario_id {cfg0.scenario_id}")
     if args.ev_share is not None:
         # ★ `run_chuseok_ladder.py` 의 `--ev-share` 와 **글자 하나까지 같은 꼬리표**
         #   를 만들어야 한다 (`ev10`). 다르면 MNL 바닥과 사다리 칸이 서로 다른

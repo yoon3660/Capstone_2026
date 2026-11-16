@@ -139,6 +139,10 @@ def main() -> int:
                     help="EV 대수 생성 방식 (#53): fixed(기본) · poisson · binomial · "
                          "beta_binomial · poisson_lognormal. `variant` 로 돌리므로 "
                          "scenario_id 뒤에 __evc-<방식> 이 붙는다")
+    ap.add_argument("--temp-c", type=float, default=None,
+                    help="기온(°C)을 덮어쓴다. 무대를 견줄 때 **교통량 효과와 기온 효과를 "
+                         "가르는** 데 쓴다 — 평시(3월 5.33°C)와 추석(9월 22.18°C)은 "
+                         "교통량만 다른 게 아니다. scenario_id 뒤에 __t<n> 이 붙는다")
     ap.add_argument("--ev-share", type=float, default=None,
                     help="EV 보급 레이어의 비율을 덮어쓴다 (예: 0.10). "
                          "주면 scenario_id 뒤에 __ev<nn> 이 붙는다")
@@ -149,6 +153,15 @@ def main() -> int:
 
     _need_config(args.config)
     cfg = {st: load_config(args.config, stage=st) for st in args.stages}
+    if args.temp_c is not None:
+        # ★ 기온은 `cold_factor` 로 **충전 속도**에 걸린다 — 세계를 바꾸므로 꼬리표를
+        #   붙인다 (#123). 5.33°C 에서 cold_factor 0.752, 충전이 30% 느려지고 그것이
+        #   큐에서 증폭돼 대기가 80% 늘어난다
+        tag_t = f"t{args.temp_c:g}".replace(".", "p").replace("-", "m")
+        before_t = next(iter(cfg.values())).environment.temp_c
+        cfg = {st: c.variant(tag_t, {"environment.temp_c": float(args.temp_c)})
+               for st, c in cfg.items()}
+        print(f"  ★ 기온 {before_t:g} → {args.temp_c:g}°C")
     if args.ev_share is not None:
         if not 0.0 < args.ev_share <= 1.0:
             ap.error(f"--ev-share 는 (0, 1] 이어야 한다 (받은 값: {args.ev_share})")
